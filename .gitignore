@@ -1,0 +1,30 @@
+# Visual Studio 编译输出
+x64/
+Debug/
+Release/
+
+.vs/
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.obj
+*.lib
+*.exp
+
+# Visual Studio 用户配置
+*.user
+*.suo
+*.sln.docstates
+
+# Vulkan 编译缓存（保留源码即可）
+shaders/*.spv
+
+# Windows 系统文件
+Thumbs.db
+Desktop.ini
+
+# Git 相关
+.git/
+
+重建/
