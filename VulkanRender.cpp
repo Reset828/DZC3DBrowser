@@ -1,5 +1,4 @@
 ﻿#include "VulkanRender.h"
-#include <GLFW/glfw3.h>
 #include <iostream>
 #include <fstream>
 #include <set>
@@ -69,14 +68,19 @@ VulkanRender::~VulkanRender() {
 // ============================================================================
 
 // 初始化Vulkan渲染器
-bool VulkanRender::Initialize(const char* appName, uint32_t width, uint32_t height, VulkanWindow* pWindow) {
+bool VulkanRender::Initialize(const char* appName, uint32_t width, uint32_t height) {
     m_framebufferWidth = width;
     m_framebufferHeight = height;
-    m_pWindow = pWindow;
 
     // 按顺序创建Vulkan对象
-    if (!CreateInstance(appName)) return false;
-    if (m_enableValidationLayers && !SetupDebugMessenger()) return false;
+    // 如果外部已创建 Instance（Qt 窗口），跳过创建
+    if (m_instance == VK_NULL_HANDLE) {
+        if (!CreateInstance(appName)) return false;
+        m_externalInstance = false;
+    }
+    if (m_enableValidationLayers && m_debugMessenger == VK_NULL_HANDLE) {
+        if (!SetupDebugMessenger()) return false;
+    }
 
 
     if (!PickPhysicalDevice()) return false;
@@ -150,8 +154,10 @@ void VulkanRender::Shutdown() {
     }
 
 
-    // 销毁实例
-    vkDestroyInstance(m_instance, nullptr);
+    // 销毁实例（仅当由内部创建时）
+    if (!m_externalInstance) {
+        vkDestroyInstance(m_instance, nullptr);
+    }
 
     m_initialized = false;
 }
@@ -439,10 +445,9 @@ bool VulkanRender::CheckValidationLayerSupport() {
 
 // 获取所需扩展
 std::vector<const char*> VulkanRender::GetRequiredExtensions() {
-    uint32_t glfwExtensionCount = 0;
-    const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-    std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+    std::vector<const char*> extensions;
+    extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    extensions.push_back("VK_KHR_win32_surface");
 
     // 如果启用验证层，添加调试扩展
 #ifdef NDEBUG

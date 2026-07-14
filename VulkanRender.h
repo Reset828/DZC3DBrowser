@@ -1,14 +1,12 @@
 ﻿#ifndef __VULKAN_RENDER_H__
 #define __VULKAN_RENDER_H__
 
+
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <string>
 #include <cstdint>
 #include <cstring>
-
-// 前向声明
-class VulkanWindow;
 
 // 基础数学类型
 struct Vec2 { float x, y; };
@@ -59,7 +57,7 @@ public:
     };
 
     // 初始化和关闭
-    bool Initialize(const char* appName, uint32_t width, uint32_t height, VulkanWindow* pWindow);
+    bool Initialize(const char* appName, uint32_t width, uint32_t height);
     void Shutdown();
     bool IsInitialized() const { return m_initialized; }
 
@@ -99,6 +97,12 @@ public:
     VkPipelineLayout GetPipelineLayout() const;
     VkRenderPass GetRenderPass() const;
     VkPipeline GetPipeline(DrawTopology topology) const;
+
+    // 窗口表面设置
+    void SetSurface(VkSurfaceKHR surface) { m_surface = surface; }
+    void SetInstance(VkInstance instance) { m_instance = instance; m_externalInstance = true; }
+    void SetFramebufferSize(uint32_t width, uint32_t height) { m_framebufferWidth = width; m_framebufferHeight = height; }
+    void SetFramebufferResized(bool resized) { m_framebufferResized = resized; }
 
     // 静态工具函数
     static bool CheckValidationLayerSupport();        // 检查验证层支持
@@ -150,7 +154,6 @@ protected:
 
 protected:
     bool m_initialized = false;          // 是否已初始化
-    VulkanWindow* m_pWindow = nullptr;   // 关联的窗口
     uint32_t m_framebufferWidth = 800;   // 帧缓冲区宽度
     uint32_t m_framebufferHeight = 600;  // 帧缓冲区高度
 
@@ -194,6 +197,7 @@ protected:
     static const int MAX_FRAMES_IN_FLIGHT = 2;           // 最大飞行帧数（双缓冲）
 
     bool m_framebufferResized = false;  // 帧缓冲区是否已调整大小
+    bool m_externalInstance = false;    // Instance 由外部管理（Qt 窗口）
 
     // 验证层和设备扩展
     std::vector<const char*> m_validationLayers = {
