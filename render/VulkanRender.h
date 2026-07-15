@@ -54,14 +54,13 @@ public:
     // 初始化和关闭
     bool Initialize(const char* appName, uint32_t width, uint32_t height);
     virtual void Shutdown();
-    bool IsInitialized() const { return m_initialized; }
+    bool IsInitialized() const;
 
     // 停止新异步任务并等待所有进行中的任务完成，但不销毁 Vulkan 资源
     // 用于在 Shutdown() 之前安全清理外部 Vulkan 对象
     void Quiesce();
 
-    // 视口和清除颜色设置
-    void SetViewport(const Rect2D& rc);
+    //清除颜色设置
     void SetClearColor(float r, float g, float b, float a);
 
     // 帧渲染控制（虚函数，派生类可重写）
@@ -72,11 +71,8 @@ public:
     // 获取Vulkan对象
     VkDevice GetDevice() const;
     VkPhysicalDevice GetPhysicalDevice() const;
-    VkInstance GetInstance() const;
     VkCommandBuffer GetCurrentCommandBuffer() const;
-    uint32_t GetCurrentFrame() const;
-    uint32_t GetFramebufferWidth() const;
-    uint32_t GetFramebufferHeight() const;
+
 
     // 缓冲区操作
     VkBuffer CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties);
@@ -96,24 +92,22 @@ public:
     void SubmitAsync(QRunnable* task);
 
     // 是否正在关闭（阻止关闭过程中产生的异步回调创建新任务）
-    bool IsShuttingDown() const { return m_shuttingDown; }
+    bool IsShuttingDown() const;
 
-    // 获取管线布局和渲染通道
-    VkPipelineLayout GetPipelineLayout() const;
-    VkRenderPass GetRenderPass() const;
+    // 获取管线
     VkPipeline GetPipeline(DrawTopology topology) const;
 
     // 窗口表面设置
-    void SetSurface(VkSurfaceKHR surface) { m_surface = surface; }
-    void SetInstance(VkInstance instance) { m_instance = instance; m_externalInstance = true; }
-    void SetFramebufferSize(uint32_t width, uint32_t height) { m_framebufferWidth = width; m_framebufferHeight = height; }
-    void SetFramebufferResized(bool resized) { m_framebufferResized = resized; }
+    void SetSurface(VkSurfaceKHR surface);
+    void SetInstance(VkInstance instance);
+    void SetFramebufferSize(uint32_t width, uint32_t height);
+    void SetFramebufferResized(bool resized);
 
     // 相机控制（虚函数，派生类重写以实现 2D/3D 相机）
-    virtual void OnMouseDown(float nx, float ny, int button) { (void)nx; (void)ny; (void)button; }
-    virtual void OnMouseMove(float nx, float ny) { (void)nx; (void)ny; }
-    virtual void OnMouseUp(int button) { (void)button; }
-    virtual void OnMouseWheel(float delta) { (void)delta; }
+    virtual void OnMouseDown(float nx, float ny, int button);
+    virtual void OnMouseMove(float nx, float ny);
+    virtual void OnMouseUp(int button);
+    virtual void OnMouseWheel(float delta);
 
     // 静态工具函数
     static bool CheckValidationLayerSupport();        // 检查验证层支持
@@ -184,7 +178,6 @@ protected:
     uint32_t m_framebufferHeight = 600;  // 帧缓冲区高度
 
     Vec4 m_clearColor = { 0.1f, 0.1f, 0.12f, 1.0f };
-    Rect2D m_viewport = { 0, 0, 800, 600 };            // 视口区域
 
     // Vulkan核心对象
     VkInstance m_instance = VK_NULL_HANDLE;             // Vulkan实例

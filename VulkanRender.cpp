@@ -152,13 +152,7 @@ void VulkanRender::Shutdown() {
     m_initialized = false;
 }
 
-// ============================================================================
-// 视口和清除颜色
-// ============================================================================
 
-void VulkanRender::SetViewport(const Rect2D& rc) {
-    m_viewport = rc;
-}
 
 void VulkanRender::SetClearColor(float r, float g, float b, float a) {
     m_clearColor = { r, g, b, a };
@@ -1132,15 +1126,32 @@ void VulkanRender::SubmitAsync(QRunnable* task) {
     QThreadPool::globalInstance()->start(task);
 }
 
+bool VulkanRender::IsInitialized() const { return m_initialized; }
+
 VkDevice VulkanRender::GetDevice() const { return m_device; }
 VkPhysicalDevice VulkanRender::GetPhysicalDevice() const { return m_physicalDevice; }
-VkInstance VulkanRender::GetInstance() const { return m_instance; }
-VkCommandBuffer VulkanRender::GetCurrentCommandBuffer() const { return m_commandBuffers[m_currentFrame]; }
-uint32_t VulkanRender::GetCurrentFrame() const { return m_currentFrame; }
-uint32_t VulkanRender::GetFramebufferWidth() const { return m_framebufferWidth; }
-uint32_t VulkanRender::GetFramebufferHeight() const { return m_framebufferHeight; }
 
-// 获取管线布局和渲染通道
-VkPipelineLayout VulkanRender::GetPipelineLayout() const { return m_pipelineLayout; }
-VkRenderPass VulkanRender::GetRenderPass() const { return m_renderPass; }
-VkPipeline VulkanRender::GetPipeline(DrawTopology topology) const { return m_pipelines[topology]; }
+VkCommandBuffer VulkanRender::GetCurrentCommandBuffer() const { return m_commandBuffers[m_currentFrame]; }
+
+
+// 是否正在关闭（阻止关闭过程中产生的异步回调创建新任务）
+bool VulkanRender::IsShuttingDown() const { return m_shuttingDown; }
+
+VkPipeline VulkanRender::GetPipeline(DrawTopology topology) const {
+    if (topology >= 0 && topology < DT_COUNT) {
+        return m_pipelines[topology];
+    }
+    return VK_NULL_HANDLE;
+}
+
+
+// 窗口表面设置
+void VulkanRender::SetSurface(VkSurfaceKHR surface) { m_surface = surface; }
+void VulkanRender::SetInstance(VkInstance instance) { m_instance = instance; m_externalInstance = true; }
+void VulkanRender::SetFramebufferSize(uint32_t width, uint32_t height) { m_framebufferWidth = width; m_framebufferHeight = height; }
+void VulkanRender::SetFramebufferResized(bool resized) { m_framebufferResized = resized; }
+
+void VulkanRender::OnMouseDown(float nx, float ny, int button) { (void)nx; (void)ny; (void)button; }
+void VulkanRender::OnMouseMove(float nx, float ny) { (void)nx; (void)ny; }
+void VulkanRender::OnMouseUp(int button) { (void)button; }
+void VulkanRender::OnMouseWheel(float delta) { (void)delta; }

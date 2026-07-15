@@ -27,9 +27,6 @@
     <ClInclude Include="render\VulkanRender.h">
       <Filter>渲染器</Filter>
     </ClInclude>
-    <ClInclude Include="MainWindow.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
     <ClInclude Include="BufferUploadRunnable.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -53,6 +50,9 @@
     <QtMoc Include="QWindowVulkan.h">
       <Filter>头文件</Filter>
     </QtMoc>
+    <QtMoc Include="MainWindow.h">
+      <Filter>头文件</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="VulkanLayer.cpp">
@@ -71,12 +71,6 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="QWindowVulkan.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="moc_MainWindow.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="moc_QWindowVulkan.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="BufferUploadRunnable.cpp">

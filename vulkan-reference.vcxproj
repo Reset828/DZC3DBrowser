@@ -92,7 +92,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="BufferUploadRunnable.h" />
-    <ClInclude Include="MainWindow.h" />
     <ClInclude Include="ObjParseRunnable.h" />
     <ClInclude Include="VertexTypes.h" />
     <ClInclude Include="VulkanLayer.h" />
@@ -102,13 +101,12 @@
     <ClInclude Include="render\2DVulkanRender.h" />
     <ClInclude Include="render\3DVulkanRender.h" />
     <QtMoc Include="QWindowVulkan.h" />
+    <QtMoc Include="MainWindow.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="BufferUploadRunnable.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="MainWindow.cpp" />
-    <ClCompile Include="moc_MainWindow.cpp" />
-    <ClCompile Include="moc_QWindowVulkan.cpp" />
     <ClCompile Include="ObjParseRunnable.cpp" />
     <ClCompile Include="QWindowVulkan.cpp" />
     <ClCompile Include="VertexTypes.cpp" />
@@ -129,8 +127,5 @@
   <Import Project="$(QtMsBuild)\qt.targets" Condition="Exists('$(QtMsBuild)\qt.targets')" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
-  <PropertyGroup>
-    <PreBuildEvent>"D:\qt5.12.12\msvc2022_64\bin\moc.exe" "$(ProjectDir)MainWindow.h" -o "$(ProjectDir)moc_MainWindow.cpp"
-"D:\qt5.12.12\msvc2022_64\bin\moc.exe" "$(ProjectDir)QWindowVulkan.h" -o "$(ProjectDir)moc_QWindowVulkan.cpp"</PreBuildEvent>
-  </PropertyGroup>
+
 </Project>
