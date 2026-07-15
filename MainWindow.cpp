@@ -2,12 +2,16 @@
 #include "QWindowVulkan.h"
 #include "VulkanRender.h"
 #include "VulkanLayer.h"
+#include "VulkanMesh.h"
+#include "ObjParseRunnable.h"
 #include <QToolBar>
 #include <QAction>
 #include <QWidget>
+#include <QFileDialog>
 #include <QMessageBox>
 #include <QTimer>
 #include <QCloseEvent>
+#include <QThreadPool>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -25,11 +29,14 @@ MainWindow::~MainWindow() {
     if (m_renderTimer) {
         m_renderTimer->stop();
     }
+    // 先销毁场景（释放 mesh 的 Vulkan 缓冲区），此时 renderer 仍然有效
+    delete m_scene;
+    m_scene = nullptr;
+
     if (m_renderer) {
         m_renderer->Shutdown();
         delete m_renderer;
     }
-    delete m_scene;
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -37,6 +44,13 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         m_renderTimer->stop();
     }
     if (m_renderer && m_renderer->IsInitialized()) {
+        // 1) 停止新异步任务，等待进行中的任务完成（device 仍然有效）
+        m_renderer->Quiesce();
+
+        // 2) 销毁所有 mesh 的 Vulkan 缓冲区（此时 device 有效，m_pRender 有效）
+        if (m_scene) m_scene->Clear();
+
+        // 3) 完全关闭渲染器（销毁 device 等其余 Vulkan 资源）
         m_renderer->Shutdown();
     }
     QMainWindow::closeEvent(event);
@@ -79,8 +93,32 @@ void MainWindow::StartRenderLoop() {
 }
 
 void MainWindow::onOpenFile() {
-    QMessageBox::information(this, QStringLiteral("\u63d0\u793a"),
-        QStringLiteral("\u6253\u5f00\u6587\u4ef6\u529f\u80fd\u5f85\u5b9e\u73b0"));
+    QString filePath = QFileDialog::getOpenFileName(this,
+        QStringLiteral("\u9009\u62e9 OBJ \u6587\u4ef6"),
+        QStringLiteral("./obj"),
+        QStringLiteral("OBJ \u6587\u4ef6 (*.obj)"));
+
+    if (filePath.isEmpty()) return;
+
+    m_scene->Clear();
+
+    // 在后台线程中解析 OBJ 文件
+    auto* runnable = new ObjParseRunnable(
+        filePath.toStdString(),
+        [this](std::vector<VulkanVertex>&& vertices,
+               std::vector<uint32_t>&& indices) {
+            // 关闭中不回调
+            if (!m_renderer || m_renderer->IsShuttingDown()) return;
+
+            auto* mesh = new VulkanMesh();
+            mesh->SetRender(m_renderer);
+            mesh->SetMeshData(std::move(vertices), std::move(indices));
+            m_scene->AddChild(mesh);
+        });
+
+    // 状态栏提示（可选）
+    // statusBar()->showMessage(QStringLiteral("\u6b63\u5728\u52a0\u8f7d OBJ..."), 3000);
+    QThreadPool::globalInstance()->start(runnable);
 }
 
 void MainWindow::on2DController() {

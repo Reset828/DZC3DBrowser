@@ -40,8 +40,10 @@
   <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') OR !Exists('$(QtMsBuild)\Qt.props')">
     <Message Importance="High" Text="QtMsBuild: could not locate qt.targets, qt.props; project may not build correctly." />
   </Target>
-  <ImportGroup Label="ExtensionSettings"></ImportGroup>
-  <ImportGroup Label="Shared"></ImportGroup>
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="VulkanConfig.props" />
@@ -89,21 +91,27 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="BufferUploadRunnable.h" />
     <ClInclude Include="CEditLine.h" />
     <ClInclude Include="MainWindow.h" />
+    <ClInclude Include="ObjParseRunnable.h" />
     <ClInclude Include="QWindowVulkan.h" />
     <ClInclude Include="VulkanLayer.h" />
+    <ClInclude Include="VulkanMesh.h" />
     <ClInclude Include="VulkanObject.h" />
     <ClInclude Include="VulkanRender.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="BufferUploadRunnable.cpp" />
     <ClCompile Include="CEditLine.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="MainWindow.cpp" />
     <ClCompile Include="moc_MainWindow.cpp" />
     <ClCompile Include="moc_QWindowVulkan.cpp" />
+    <ClCompile Include="ObjParseRunnable.cpp" />
     <ClCompile Include="QWindowVulkan.cpp" />
     <ClCompile Include="VulkanLayer.cpp" />
+    <ClCompile Include="VulkanMesh.cpp" />
     <ClCompile Include="VulkanObject.cpp" />
     <ClCompile Include="VulkanRender.cpp" />
   </ItemGroup>
@@ -113,7 +121,8 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="$(QtMsBuild)\qt.targets" Condition="Exists('$(QtMsBuild)\qt.targets')" />
-  <ImportGroup Label="ExtensionTargets"></ImportGroup>
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
   <PropertyGroup>
     <PreBuildEvent>"D:\qt5.12.12\msvc2022_64\bin\moc.exe" "$(ProjectDir)MainWindow.h" -o "$(ProjectDir)moc_MainWindow.cpp"
 "D:\qt5.12.12\msvc2022_64\bin\moc.exe" "$(ProjectDir)QWindowVulkan.h" -o "$(ProjectDir)moc_QWindowVulkan.cpp"</PreBuildEvent>

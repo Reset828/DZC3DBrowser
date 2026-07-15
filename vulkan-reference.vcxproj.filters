@@ -33,6 +33,15 @@
     <ClInclude Include="QWindowVulkan.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="BufferUploadRunnable.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ObjParseRunnable.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="VulkanMesh.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="VulkanLayer.cpp">
@@ -54,6 +63,21 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="QWindowVulkan.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="moc_MainWindow.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="moc_QWindowVulkan.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="BufferUploadRunnable.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ObjParseRunnable.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="VulkanMesh.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>

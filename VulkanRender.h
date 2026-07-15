@@ -4,9 +4,13 @@
 
 #include <vulkan/vulkan.h>
 #include <vector>
+#include <unordered_map>
 #include <string>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
+
+class QRunnable;  // Qt 线程池任务（仅指针使用，可前向声明）
 
 // 基础数学类型
 struct Vec2 { float x, y; };
@@ -39,6 +43,13 @@ struct VulkanVertex {
     static std::vector<VkVertexInputAttributeDescription> GetAttributeDescriptions();
 };
 
+// 描述符集统一缓冲区对象（MVP矩阵）
+struct UniformBufferObject {
+    alignas(16) Mat4 model;  // 模型矩阵
+    alignas(16) Mat4 view;   // 视图矩阵
+    alignas(16) Mat4 proj;   // 投影矩阵
+};
+
 // Vulkan渲染器主类 - 管理完整的Vulkan渲染管线
 class VulkanRender {
 public:
@@ -60,6 +71,10 @@ public:
     bool Initialize(const char* appName, uint32_t width, uint32_t height);
     void Shutdown();
     bool IsInitialized() const { return m_initialized; }
+
+    // 停止新异步任务并等待所有进行中的任务完成，但不销毁 Vulkan 资源
+    // 用于在 Shutdown() 之前安全清理外部 Vulkan 对象
+    void Quiesce();
 
     // 视口和清除颜色设置
     void SetViewport(const Rect2D& rc);
@@ -92,6 +107,12 @@ public:
 
     // 等待设备空闲
     void WaitForIdle();
+
+    // 提交异步任务到全局线程池
+    void SubmitAsync(QRunnable* task);
+
+    // 是否正在关闭（阻止关闭过程中产生的异步回调创建新任务）
+    bool IsShuttingDown() const { return m_shuttingDown; }
 
     // 获取管线布局和渲染通道
     VkPipelineLayout GetPipelineLayout() const;
@@ -145,6 +166,14 @@ protected:
     std::vector<char> ReadShaderFile(const std::string& filename);
     VkShaderModule CreateShaderModuleHelper(const std::vector<char>& code);
 
+    // 描述符集相关
+    bool CreateDescriptorSetLayout();                   // 创建描述符集布局
+    bool CreateUniformBuffers();                        // 创建统一缓冲区
+    bool CreateDescriptorPool();                        // 创建描述符池
+    bool CreateDescriptorSets();                        // 创建描述符集
+    void DestroyUniformBuffers();                       // 销毁统一缓冲区
+    void InitIdentityMatrix(Mat4& mat);                 // 初始化为单位矩阵
+
     // 调试回调函数
     static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
         VkDebugUtilsMessageSeverityFlagBitsEXT severity,
@@ -185,8 +214,20 @@ protected:
     VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;            // 图形管线（兼容旧代码）
 
     // 命令缓冲区
-    VkCommandPool m_commandPool = VK_NULL_HANDLE;        // 命令池
-    std::vector<VkCommandBuffer> m_commandBuffers;       // 命令缓冲区数组
+    VkCommandPool m_commandPool = VK_NULL_HANDLE;             // 命令池（渲染帧）
+    VkCommandPool m_singleTimeCommandPool = VK_NULL_HANDLE;   // 单次命令专用池
+    std::vector<VkCommandBuffer> m_commandBuffers;            // 命令缓冲区数组
+
+    // 缓冲区内存映射（追踪 CreateBuffer 分配的内存）
+    std::unordered_map<VkBuffer, VkDeviceMemory> m_bufferMemoryMap;
+
+    // 描述符集相关
+    VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;      // 描述符集布局
+    VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;                // 描述符池
+    std::vector<VkDescriptorSet> m_descriptorSets;                     // 描述符集（每帧一个）
+    std::vector<VkBuffer> m_uniformBuffers;                            // 统一缓冲区（每帧一个）
+    std::vector<VkDeviceMemory> m_uniformBuffersMemory;                // 统一缓冲区内存（每帧一个）
+    std::vector<void*> m_uniformBuffersMapped;                         // 统一缓冲区映射指针
 
     // 同步对象
     std::vector<VkSemaphore> m_imageAvailableSemaphores;  // 图像可用信号量
@@ -198,6 +239,7 @@ protected:
 
     bool m_framebufferResized = false;  // 帧缓冲区是否已调整大小
     bool m_externalInstance = false;    // Instance 由外部管理（Qt 窗口）
+    std::atomic<bool> m_shuttingDown{false};  // 关闭中标志（禁止异步回调创建新任务）
 
     // 验证层和设备扩展
     std::vector<const char*> m_validationLayers = {

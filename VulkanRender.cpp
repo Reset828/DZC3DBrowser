@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cstring>
+#include <QRunnable>
+#include <QThreadPool>
+#include <QCoreApplication>
 
 // 错误处理宏
 #define VK_CHECK_RESULT(result, msg) \
@@ -88,10 +91,17 @@ bool VulkanRender::Initialize(const char* appName, uint32_t width, uint32_t heig
     if (!CreateSwapchain()) return false;
     if (!CreateImageViews()) return false;
     if (!CreateRenderPass()) return false;
-    // 创建管线布局（无描述符集）
+    if (!CreateDescriptorSetLayout()) return false;
+    if (!CreateUniformBuffers()) return false;
+    if (!CreateDescriptorPool()) return false;
+    if (!CreateDescriptorSets()) return false;
+
+    // 创建管线布局（含描述符集布局）
     {
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &m_descriptorSetLayout;
         if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
             std::cerr << "创建管线布局失败" << std::endl;
             return false;
@@ -113,12 +123,29 @@ bool VulkanRender::Initialize(const char* appName, uint32_t width, uint32_t heig
     return true;
 }
 
+// 停止异步任务并等待完成，但不销毁任何 Vulkan 资源
+void VulkanRender::Quiesce() {
+    if (!m_initialized) return;
+
+    // 设置关闭标志，阻止异步回调创建新的任务
+    m_shuttingDown = true;
+
+    // 等待所有已提交的 QRunnable 执行完毕
+    QThreadPool::globalInstance()->waitForDone();
+    // 处理 QRunnable 回调中投递的 QueuedConnection 事件
+    // （回调中会检查 m_shuttingDown，不会创建新任务）
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
+    // 等待设备空闲
+    vkDeviceWaitIdle(m_device);
+}
+
 // 关闭并清理所有Vulkan资源
 void VulkanRender::Shutdown() {
     if (!m_initialized) return;
 
-    // 等待设备空闲
-    vkDeviceWaitIdle(m_device);
+    // 先停止异步活动（幂等）
+    Quiesce();
 
     // 清理交换链
     CleanupSwapchain();
@@ -131,6 +158,10 @@ void VulkanRender::Shutdown() {
     }
 
     // 销毁命令池
+    if (m_singleTimeCommandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(m_device, m_singleTimeCommandPool, nullptr);
+        m_singleTimeCommandPool = VK_NULL_HANDLE;
+    }
     vkDestroyCommandPool(m_device, m_commandPool, nullptr);
 
     // 销毁图形管线
@@ -143,6 +174,17 @@ void VulkanRender::Shutdown() {
     m_graphicsPipeline = VK_NULL_HANDLE;
     vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
     vkDestroyRenderPass(m_device, m_renderPass, nullptr);
+
+    // 销毁描述符集相关资源
+    if (m_descriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
+        m_descriptorPool = VK_NULL_HANDLE;
+    }
+    DestroyUniformBuffers();
+    if (m_descriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
+        m_descriptorSetLayout = VK_NULL_HANDLE;
+    }
 
     // 销毁逻辑设备
     vkDestroyDevice(m_device, nullptr);
@@ -226,12 +268,16 @@ bool VulkanRender::BeginFrame() {
     // 绑定图形管线
     vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
 
-    // 设置视口
+    // 绑定描述符集（每帧对应一个 UBO）
+    vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+
+    // 设置视口（使用 m_viewport 配置）
     VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(m_swapchainExtent.width);
-    viewport.height = static_cast<float>(m_swapchainExtent.height);
+    viewport.x = static_cast<float>(m_viewport.x);
+    viewport.y = static_cast<float>(m_viewport.y);
+    viewport.width = static_cast<float>(m_viewport.width);
+    viewport.height = static_cast<float>(m_viewport.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &viewport);
@@ -334,30 +380,44 @@ VkBuffer VulkanRender::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 
     VkDeviceMemory bufferMemory;
     if (vkAllocateMemory(m_device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, buffer, nullptr);
         throw std::runtime_error("分配缓冲区内存失败");
     }
 
     // 绑定内存到缓冲区
     vkBindBufferMemory(m_device, buffer, bufferMemory, 0);
 
+    m_bufferMemoryMap[buffer] = bufferMemory;
     return buffer;
 }
 
 // 销毁缓冲区
 void VulkanRender::DestroyBuffer(VkBuffer buffer) {
-    if (buffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(m_device, buffer, nullptr);
+    if (buffer == VK_NULL_HANDLE) return;
+
+    auto it = m_bufferMemoryMap.find(buffer);
+    if (it != m_bufferMemoryMap.end()) {
+        vkFreeMemory(m_device, it->second, nullptr);
+        m_bufferMemoryMap.erase(it);
     }
+    vkDestroyBuffer(m_device, buffer, nullptr);
 }
 
 // 映射缓冲区内存
 VkResult VulkanRender::MapBuffer(VkBuffer buffer, void** data) {
-    return vkMapMemory(m_device, /* bufferMemory */ VK_NULL_HANDLE, 0, VK_WHOLE_SIZE, 0, data);
+    auto it = m_bufferMemoryMap.find(buffer);
+    if (it == m_bufferMemoryMap.end()) {
+        return VK_ERROR_MEMORY_MAP_FAILED;
+    }
+    return vkMapMemory(m_device, it->second, 0, VK_WHOLE_SIZE, 0, data);
 }
 
 // 取消映射
 void VulkanRender::UnmapBuffer(VkBuffer buffer) {
-    vkUnmapMemory(m_device, VK_NULL_HANDLE);
+    auto it = m_bufferMemoryMap.find(buffer);
+    if (it != m_bufferMemoryMap.end()) {
+        vkUnmapMemory(m_device, it->second);
+    }
 }
 
 // 分配设备内存
@@ -384,7 +444,7 @@ VkCommandBuffer VulkanRender::BeginSingleTimeCommands() {
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandPool = m_commandPool;
+    allocInfo.commandPool = m_singleTimeCommandPool;
     allocInfo.commandBufferCount = 1;
 
     VkCommandBuffer commandBuffer;
@@ -410,7 +470,7 @@ void VulkanRender::EndSingleTimeCommands(VkCommandBuffer commandBuffer) {
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
     vkQueueWaitIdle(m_graphicsQueue);
 
-    vkFreeCommandBuffers(m_device, m_commandPool, 1, &commandBuffer);
+    vkFreeCommandBuffers(m_device, m_singleTimeCommandPool, 1, &commandBuffer);
 }
 
 // 等待设备空闲
@@ -450,8 +510,7 @@ std::vector<const char*> VulkanRender::GetRequiredExtensions() {
     extensions.push_back("VK_KHR_win32_surface");
 
     // 如果启用验证层，添加调试扩展
-#ifdef NDEBUG
-#else
+#ifndef NDEBUG
     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 #endif
 
@@ -497,7 +556,8 @@ bool VulkanRender::CreateInstance(const char* appName) {
 
         // 设置调试回调
         debugCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        debugCreateInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+        debugCreateInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
                                          VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
         debugCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
                                      VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
@@ -951,6 +1011,13 @@ bool VulkanRender::CreateCommandPool() {
         return false;
     }
 
+    // 创建单次命令专用命令池（VK_COMMAND_POOL_CREATE_TRANSIENT_BIT 提示驱动优化）
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_singleTimeCommandPool) != VK_SUCCESS) {
+        std::cerr << "创建单次命令池失败" << std::endl;
+        return false;
+    }
+
     return true;
 }
 
@@ -1144,9 +1211,9 @@ VkSurfaceFormatKHR VulkanRender::ChooseSwapSurfaceFormat(const std::vector<VkSur
 
 // 选择呈现模式
 VkPresentModeKHR VulkanRender::ChooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
-    // 优先选择FIFO模式（垂直同步）
+    // 优先选择Mailbox模式（无撕裂 + 低延迟）
     for (const auto& availablePresentMode : availablePresentModes) {
-        if (availablePresentMode == VK_PRESENT_MODE_FIFO_KHR) {
+        if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
             return availablePresentMode;
         }
     }
@@ -1209,10 +1276,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanRender::DebugCallback(
     VkDebugUtilsMessageTypeFlagsEXT type,
     const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
     void* pUserData) {
-    // 忽略通知级别的消息
-    if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        std::cerr << "验证层: " << pCallbackData->pMessage << std::endl;
-    }
+    std::cerr << "验证层: " << pCallbackData->pMessage << std::endl;
     return VK_FALSE;
 }
 
@@ -1240,17 +1304,177 @@ std::vector<char> VulkanRender::ReadShaderFile(const std::string& filename) {
 
 // 创建着色器模块辅助函数
 VkShaderModule VulkanRender::CreateShaderModuleHelper(const std::vector<char>& code) {
-    VkShaderModuleCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = code.size();
-    createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-
     VkShaderModule shaderModule;
-    if (vkCreateShaderModule(m_device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+    if (CreateShaderModule(code, &shaderModule) != VK_SUCCESS) {
         throw std::runtime_error("创建着色器模块失败");
     }
-
     return shaderModule;
+}
+
+// ============================================================================
+// 描述符集相关实现
+// ============================================================================
+
+// 创建描述符集布局（一个 UBO 绑定）
+bool VulkanRender::CreateDescriptorSetLayout() {
+    VkDescriptorSetLayoutBinding uboLayoutBinding{};
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &uboLayoutBinding;
+
+    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
+        std::cerr << "创建描述符集布局失败" << std::endl;
+        return false;
+    }
+    return true;
+}
+
+// 创建统一缓冲区（每帧一个，存储 MVP 矩阵）
+bool VulkanRender::CreateUniformBuffers() {
+    VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+    m_uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    m_uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+    m_uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = bufferSize;
+        bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_uniformBuffers[i]) != VK_SUCCESS) {
+            std::cerr << "创建统一缓冲区失败" << std::endl;
+            return false;
+        }
+
+        VkMemoryRequirements memRequirements;
+        vkGetBufferMemoryRequirements(m_device, m_uniformBuffers[i], &memRequirements);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memRequirements.size;
+        allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_uniformBuffersMemory[i]) != VK_SUCCESS) {
+            std::cerr << "分配统一缓冲区内存失败" << std::endl;
+            return false;
+        }
+
+        vkBindBufferMemory(m_device, m_uniformBuffers[i], m_uniformBuffersMemory[i], 0);
+
+        // 持久映射方便更新
+        vkMapMemory(m_device, m_uniformBuffersMemory[i], 0, bufferSize, 0, &m_uniformBuffersMapped[i]);
+
+        // 初始化为单位矩阵（保持视觉输出不变）
+        UniformBufferObject ubo{};
+        InitIdentityMatrix(ubo.model);
+        InitIdentityMatrix(ubo.view);
+        InitIdentityMatrix(ubo.proj);
+        memcpy(m_uniformBuffersMapped[i], &ubo, sizeof(ubo));
+    }
+
+    return true;
+}
+
+// 创建描述符池
+bool VulkanRender::CreateDescriptorPool() {
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
+        std::cerr << "创建描述符池失败" << std::endl;
+        return false;
+    }
+    return true;
+}
+
+// 创建描述符集（每帧一个，关联到对应的统一缓冲区）
+bool VulkanRender::CreateDescriptorSets() {
+    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, m_descriptorSetLayout);
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_descriptorPool;
+    allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    allocInfo.pSetLayouts = layouts.data();
+
+    m_descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    if (vkAllocateDescriptorSets(m_device, &allocInfo, m_descriptorSets.data()) != VK_SUCCESS) {
+        std::cerr << "分配描述符集失败" << std::endl;
+        return false;
+    }
+
+    // 更新每个描述符集关联到对应的统一缓冲区
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = m_uniformBuffers[i];
+        bufferInfo.offset = 0;
+        bufferInfo.range = sizeof(UniformBufferObject);
+
+        VkWriteDescriptorSet descriptorWrite{};
+        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet = m_descriptorSets[i];
+        descriptorWrite.dstBinding = 0;
+        descriptorWrite.dstArrayElement = 0;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.pBufferInfo = &bufferInfo;
+
+        vkUpdateDescriptorSets(m_device, 1, &descriptorWrite, 0, nullptr);
+    }
+
+    return true;
+}
+
+// 销毁统一缓冲区
+void VulkanRender::DestroyUniformBuffers() {
+    for (size_t i = 0; i < m_uniformBuffers.size(); i++) {
+        if (m_uniformBuffersMapped[i] != nullptr) {
+            vkUnmapMemory(m_device, m_uniformBuffersMemory[i]);
+            m_uniformBuffersMapped[i] = nullptr;
+        }
+        if (m_uniformBuffers[i] != VK_NULL_HANDLE) {
+            vkDestroyBuffer(m_device, m_uniformBuffers[i], nullptr);
+            m_uniformBuffers[i] = VK_NULL_HANDLE;
+        }
+        if (m_uniformBuffersMemory[i] != VK_NULL_HANDLE) {
+            vkFreeMemory(m_device, m_uniformBuffersMemory[i], nullptr);
+            m_uniformBuffersMemory[i] = VK_NULL_HANDLE;
+        }
+    }
+    m_uniformBuffers.clear();
+    m_uniformBuffersMemory.clear();
+    m_uniformBuffersMapped.clear();
+}
+
+// 初始化为单位矩阵
+void VulkanRender::InitIdentityMatrix(Mat4& mat) {
+    memset(&mat, 0, sizeof(Mat4));
+    mat.m[0][0] = 1.0f;
+    mat.m[1][1] = 1.0f;
+    mat.m[2][2] = 1.0f;
+    mat.m[3][3] = 1.0f;
+}
+
+void VulkanRender::SubmitAsync(QRunnable* task) {
+    QThreadPool::globalInstance()->start(task);
 }
 
 VkDevice VulkanRender::GetDevice() const { return m_device; }
