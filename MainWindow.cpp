@@ -57,12 +57,12 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::SetupToolBar() {
-    QToolBar* toolbar = addToolBar(QStringLiteral("\u5de5\u5177\u680f"));
+    QToolBar* toolbar = addToolBar(QStringLiteral("工具栏"));
     toolbar->setMovable(false);
 
-    QAction* actOpen = toolbar->addAction(QStringLiteral("\u6253\u5f00\u6587\u4ef6"));
-    QAction* act2D = toolbar->addAction(QStringLiteral("\u4e8c\u7ef4\u63a7\u5236\u5668"));
-    QAction* act3D = toolbar->addAction(QStringLiteral("\u4e09\u7ef4\u63a7\u5236\u5668"));
+    QAction* actOpen = toolbar->addAction(QStringLiteral("打开文件"));
+    QAction* act2D = toolbar->addAction(QStringLiteral("二维控制器"));
+    QAction* act3D = toolbar->addAction(QStringLiteral("三维控制器"));
 
     connect(actOpen, &QAction::triggered, this, &MainWindow::onOpenFile);
     connect(act2D, &QAction::triggered, this, &MainWindow::on2DController);

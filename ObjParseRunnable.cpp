@@ -4,6 +4,7 @@
 #include <fstream>
 #include <cstring>
 #include <cstdlib>
+#include <algorithm>
 #include <memory>
 
 ObjParseRunnable::ObjParseRunnable(std::string filePath, Callback callback)
@@ -106,6 +107,14 @@ void ObjParseRunnable::run() {
         return val;
     };
 
+    // 包围盒（用于后续缩放到 [-1, 1] 范围并居中）
+    Vec3 bboxMin = { std::numeric_limits<float>::max(),
+                     std::numeric_limits<float>::max(),
+                     std::numeric_limits<float>::max() };
+    Vec3 bboxMax = { std::numeric_limits<float>::lowest(),
+                     std::numeric_limits<float>::lowest(),
+                     std::numeric_limits<float>::lowest() };
+
     while (ptr < end) {
         if (ptr[0] == 'v' && ptr[1] == ' ') {
             ptr += 2; // skip "v "
@@ -118,6 +127,13 @@ void ObjParseRunnable::run() {
             vert.color    = { 1.0f, 1.0f, 1.0f }; // 默认白色
             vert.texCoord = { 0.0f, 0.0f };        // 默认纹理坐标
             vertices.push_back(vert);
+
+            bboxMin.x = std::min(bboxMin.x, x);
+            bboxMin.y = std::min(bboxMin.y, y);
+            bboxMin.z = std::min(bboxMin.z, z);
+            bboxMax.x = std::max(bboxMax.x, x);
+            bboxMax.y = std::max(bboxMax.y, y);
+            bboxMax.z = std::max(bboxMax.z, z);
         } else if (ptr[0] == 'f' && ptr[1] == ' ') {
             ptr += 2; // skip "f "
             int i1 = parseFaceIndex();
@@ -135,7 +151,21 @@ void ObjParseRunnable::run() {
         if (ptr < end) ++ptr; // skip '\n'
     }
 
-    // --- 5. 回调主线程（使 lambda 可拷贝：将数据移入 shared_ptr） ---
+    // --- 5. 将模型缩放到 [-1, 1] 范围并居中 ---
+    Vec3 center = { (bboxMin.x + bboxMax.x) * 0.5f,
+                    (bboxMin.y + bboxMax.y) * 0.5f,
+                    (bboxMin.z + bboxMax.z) * 0.5f };
+    Vec3 size = { bboxMax.x - bboxMin.x,
+                  bboxMax.y - bboxMin.y,
+                  bboxMax.z - bboxMin.z };
+    float scale = 2.0f / std::max({ size.x, size.y, size.z });
+    for (auto& vert : vertices) {
+        vert.position.x = (vert.position.x - center.x) * scale;
+        vert.position.y = (vert.position.y - center.y) * scale;
+        vert.position.z = (vert.position.z - center.z) * scale;
+    }
+
+    // --- 6. 回调主线程（使 lambda 可拷贝：将数据移入 shared_ptr） ---
     auto sharedVerts = std::make_shared<std::vector<VulkanVertex>>(std::move(vertices));
     auto sharedIdxs  = std::make_shared<std::vector<uint32_t>>(std::move(indices));
     auto callback    = m_callback;
