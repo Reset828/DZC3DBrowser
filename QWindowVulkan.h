@@ -16,6 +16,7 @@ public:
 
     VkSurfaceKHR GetSurface() const { return m_surface; }
     VkInstance GetVkInstance() const { return m_instance; }
+    void SetRenderer(VulkanRender* renderer) { m_renderer = renderer; }
 
 signals:
     void vulkanReady();

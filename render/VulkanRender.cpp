@@ -1,4 +1,4 @@
-﻿#include "render/VulkanRender.h"
+﻿#include "VulkanRender.h"
 #include <iostream>
 #include <fstream>
 #include <set>
@@ -214,12 +214,12 @@ bool VulkanRender::BeginFrame() {
 
     vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // 设置视口（匹配交换链尺寸，确保渲染铺满整个窗口）
+    // 设置视口（使用 m_viewport 配置）
     VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(m_swapchainExtent.width);
-    viewport.height = static_cast<float>(m_swapchainExtent.height);
+    viewport.x = static_cast<float>(m_viewport.x);
+    viewport.y = static_cast<float>(m_viewport.y);
+    viewport.width = static_cast<float>(m_viewport.width);
+    viewport.height = static_cast<float>(m_viewport.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &viewport);

@@ -1,7 +1,8 @@
 ﻿#ifndef __VULKAN_OBJECT_H__
 #define __VULKAN_OBJECT_H__
 
-#include "VulkanRender.h"
+#include "render/VulkanRender.h"
+#include "VertexTypes.h"
 #include <cstdint>
 
 // Vulkan可编辑对象基类
@@ -49,9 +50,9 @@ public:
     virtual void Render(int iMode = 0) = 0;
 
     // Vulkan缓冲区管理
-    void CreateVertexBuffer(const std::vector<VulkanVertex>& vertices);  // 创建顶点缓冲区
-    void CreateIndexBuffer(const std::vector<uint32_t>& indices);        // 创建索引缓冲区
-    void UpdateVertexBuffer(const std::vector<VulkanVertex>& vertices);  // 更新顶点缓冲区
+void CreateVertexBuffer(const std::vector<Vertex3D>& vertices);  // 创建顶点缓冲区
+void CreateIndexBuffer(const std::vector<uint32_t>& indices);        // 创建索引缓冲区
+void UpdateVertexBuffer(const std::vector<Vertex3D>& vertices);  // 更新顶点缓冲区
     void UpdateIndexBuffer(const std::vector<uint32_t>& indices);        // 更新索引缓冲区
     void DestroyBuffers();  // 销毁缓冲区
 

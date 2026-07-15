@@ -123,13 +123,13 @@ bool VulkanObject::IsFlagEnabled(FlagType ft) const {
 // ============================================================================
 
 // 创建顶点缓冲区
-void VulkanObject::CreateVertexBuffer(const std::vector<VulkanVertex>& vertices) {
+void VulkanObject::CreateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     if (!m_pRender || vertices.empty()) return;
 
     // 销毁旧缓冲区
     DestroyBuffers();
 
-    VkDeviceSize bufferSize = sizeof(VulkanVertex) * vertices.size();
+    VkDeviceSize bufferSize = sizeof(Vertex3D) * vertices.size();
 
     // 创建暂存缓冲区（CPU可读写）
     VkBuffer stagingBuffer;
@@ -191,10 +191,10 @@ void VulkanObject::CreateIndexBuffer(const std::vector<uint32_t>& indices) {
 }
 
 // 更新顶点缓冲区
-void VulkanObject::UpdateVertexBuffer(const std::vector<VulkanVertex>& vertices) {
+void VulkanObject::UpdateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     if (!m_pRender || vertices.empty()) return;
 
-    VkDeviceSize bufferSize = sizeof(VulkanVertex) * vertices.size();
+    VkDeviceSize bufferSize = sizeof(Vertex3D) * vertices.size();
 
     void* data;
     vkMapMemory(m_pRender->GetDevice(), m_vertexBufferMemory, 0, bufferSize, 0, &data);

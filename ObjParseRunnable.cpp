@@ -52,7 +52,7 @@ void ObjParseRunnable::run() {
     }
 
     // --- 3. 预分配容器 ---
-    std::vector<VulkanVertex> vertices;
+    std::vector<Vertex3D> vertices;
     vertices.reserve(vertexCount);
     std::vector<uint32_t> indices;
     indices.reserve(faceCount * 3);
@@ -122,10 +122,15 @@ void ObjParseRunnable::run() {
             float y = parseFloat();
             float z = parseFloat();
 
-            VulkanVertex vert{};
-            vert.position = { x, y, z };
-            vert.color    = { 1.0f, 1.0f, 1.0f }; // 默认白色
-            vert.texCoord = { 0.0f, 0.0f };        // 默认纹理坐标
+            Vertex3D vert{};
+            vert.position[0] = x;
+            vert.position[1] = y;
+            vert.position[2] = z;
+            vert.color[0]    = 1.0f;
+            vert.color[1]    = 1.0f;
+            vert.color[2]    = 1.0f;
+            vert.texCoord[0] = 0.0f;
+            vert.texCoord[1] = 0.0f;
             vertices.push_back(vert);
 
             bboxMin.x = std::min(bboxMin.x, x);
@@ -160,13 +165,30 @@ void ObjParseRunnable::run() {
                   bboxMax.z - bboxMin.z };
     float scale = 2.0f / std::max({ size.x, size.y, size.z });
     for (auto& vert : vertices) {
-        vert.position.x = (vert.position.x - center.x) * scale;
-        vert.position.y = (vert.position.y - center.y) * scale;
-        vert.position.z = (vert.position.z - center.z) * scale;
+        vert.position[0] = (vert.position[0] - center.x) * scale;
+        vert.position[1] = (vert.position[1] - center.y) * scale;
+        vert.position[2] = (vert.position[2] - center.z) * scale;
+
+        float t = vert.position[1] * 0.5f + 0.5f;
+        float r, g, b;
+        if (t < 0.5f) {
+            float u = t / 0.5f;
+            r = 0.0f + u * 0.6f;
+            g = 0.5f + u * (0.3f - 0.5f);
+            b = 0.05f + u * 0.05f;
+        } else {
+            float u = (t - 0.5f) / 0.5f;
+            r = 0.6f + u * 0.3f;
+            g = 0.3f + u * 0.6f;
+            b = 0.1f + u * 0.8f;
+        }
+        vert.color[0] = r;
+        vert.color[1] = g;
+        vert.color[2] = b;
     }
 
     // --- 6. 回调主线程（使 lambda 可拷贝：将数据移入 shared_ptr） ---
-    auto sharedVerts = std::make_shared<std::vector<VulkanVertex>>(std::move(vertices));
+    auto sharedVerts = std::make_shared<std::vector<Vertex3D>>(std::move(vertices));
     auto sharedIdxs  = std::make_shared<std::vector<uint32_t>>(std::move(indices));
     auto callback    = m_callback;
 

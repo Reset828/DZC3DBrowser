@@ -4,14 +4,15 @@
 #include <functional>
 #include <string>
 #include <vector>
-#include "VulkanRender.h"
+#include "render/VulkanRender.h"
+#include "VertexTypes.h"
 
 // OBJ 文件解析 QRunnable
 // 在 QThreadPool 线程中读取并解析 .obj 文件，
 // 完成后在主线程回调产出 vector<VulkanVertex> + vector<uint32_t>（索引）。
 class ObjParseRunnable : public QRunnable {
 public:
-    using Callback = std::function<void(std::vector<VulkanVertex>&&,
+    using Callback = std::function<void(std::vector<Vertex3D>&&,
                                         std::vector<uint32_t>&&)>;
 
     explicit ObjParseRunnable(std::string filePath, Callback callback);

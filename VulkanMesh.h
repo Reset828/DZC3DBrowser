@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "VulkanObject.h"
+#include "VertexTypes.h"
 #include <memory>
 #include <atomic>
 
@@ -12,11 +13,11 @@ public:
     ~VulkanMesh() override;
 
     // 设置网格数据（从 OBJ 解析结果），隐式启动异步 GPU 上传
-    void SetMeshData(std::vector<VulkanVertex>&& vertices,
+    void SetMeshData(std::vector<Vertex3D>&& vertices,
                      std::vector<uint32_t>&& indices);
 
     // 创建同步方式（用于小数据量的紧急上传）
-    void SetMeshDataSync(const std::vector<VulkanVertex>& vertices,
+    void SetMeshDataSync(const std::vector<Vertex3D>& vertices,
                          const std::vector<uint32_t>& indices);
 
     void Render(int mode = 0) override;

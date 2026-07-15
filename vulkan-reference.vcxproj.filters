@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="渲染器">
+      <UniqueIdentifier>{9C5A3F8F-4C9C-4C1A-8B2A-7E2C6E7F3D4A}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="VulkanLayer.h">
@@ -21,11 +24,8 @@
     <ClInclude Include="VulkanObject.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="VulkanRender.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
-    <ClInclude Include="CEditLine.h">
-      <Filter>头文件</Filter>
+    <ClInclude Include="render\VulkanRender.h">
+      <Filter>渲染器</Filter>
     </ClInclude>
     <ClInclude Include="MainWindow.h">
       <Filter>头文件</Filter>
@@ -39,6 +39,20 @@
     <ClInclude Include="VulkanMesh.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="VertexTypes.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="render\2DVulkanRender.h">
+      <Filter>渲染器</Filter>
+    </ClInclude>
+    <ClInclude Include="render\3DVulkanRender.h">
+      <Filter>渲染器</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="QWindowVulkan.h">
+      <Filter>头文件</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="VulkanLayer.cpp">
@@ -48,9 +62,6 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="VulkanRender.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="CEditLine.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp">
@@ -77,14 +88,20 @@
     <ClCompile Include="VulkanMesh.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="VertexTypes.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="render\2DVulkanRender.cpp">
+      <Filter>渲染器</Filter>
+    </ClCompile>
+    <ClCompile Include="render\3DVulkanRender.cpp">
+      <Filter>渲染器</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <None Include="shaders\shader.frag" />
-    <None Include="shaders\shader.vert" />
-  </ItemGroup>
-  <ItemGroup>
-    <QtMoc Include="QWindowVulkan.h">
-      <Filter>头文件</Filter>
-    </QtMoc>
+    <None Include="shaders\2d.frag" />
+    <None Include="shaders\2d.vert" />
+    <None Include="shaders\3d.frag" />
+    <None Include="shaders\3d.vert" />
   </ItemGroup>
 </Project>

@@ -33,28 +33,12 @@ struct VulkanSwapchainSupportDetails {
     std::vector<VkPresentModeKHR> presentModes;   // 支持的呈现模式
 };
 
-// 顶点数据结构（位置、颜色、纹理坐标）
-struct VulkanVertex {
-    Vec3 position;   // 顶点位置
-    Vec3 color;      // 顶点颜色
-    Vec2 texCoord;   // 纹理坐标
-
-    static VkVertexInputBindingDescription GetBindingDescription();
-    static std::vector<VkVertexInputAttributeDescription> GetAttributeDescriptions();
-};
-
-// 描述符集统一缓冲区对象（MVP矩阵）
-struct UniformBufferObject {
-    alignas(16) Mat4 model;  // 模型矩阵
-    alignas(16) Mat4 view;   // 视图矩阵
-    alignas(16) Mat4 proj;   // 投影矩阵
-};
-
-// Vulkan渲染器主类 - 管理完整的Vulkan渲染管线
+// Vulkan渲染器基类 - 管理完整的Vulkan渲染基础设施
+// 采用 Template Method 模式：非虚函数编排流程，虚函数供派生类定制
 class VulkanRender {
 public:
     VulkanRender();
-    ~VulkanRender();
+    virtual ~VulkanRender();
 
     VulkanRender(const VulkanRender&) = delete;
     VulkanRender& operator=(const VulkanRender&) = delete;
@@ -69,7 +53,7 @@ public:
 
     // 初始化和关闭
     bool Initialize(const char* appName, uint32_t width, uint32_t height);
-    void Shutdown();
+    virtual void Shutdown();
     bool IsInitialized() const { return m_initialized; }
 
     // 停止新异步任务并等待所有进行中的任务完成，但不销毁 Vulkan 资源
@@ -80,10 +64,10 @@ public:
     void SetViewport(const Rect2D& rc);
     void SetClearColor(float r, float g, float b, float a);
 
-    // 帧渲染控制
-    bool BeginFrame();                                    // 开始帧渲染，获取交换链图像
-    void EndFrame();                                      // 结束帧渲染，提交命令缓冲区
-    void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1);  // 索引绘制
+    // 帧渲染控制（虚函数，派生类可重写）
+    virtual bool BeginFrame();                                    // 开始帧渲染，获取交换链图像
+    virtual void EndFrame();                                      // 结束帧渲染，提交命令缓冲区
+    virtual void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1);  // 索引绘制
 
     // 获取Vulkan对象
     VkDevice GetDevice() const;
@@ -125,9 +109,33 @@ public:
     void SetFramebufferSize(uint32_t width, uint32_t height) { m_framebufferWidth = width; m_framebufferHeight = height; }
     void SetFramebufferResized(bool resized) { m_framebufferResized = resized; }
 
+    // 相机控制（虚函数，派生类重写以实现 2D/3D 相机）
+    virtual void OnMouseDown(float nx, float ny, int button) { (void)nx; (void)ny; (void)button; }
+    virtual void OnMouseMove(float nx, float ny) { (void)nx; (void)ny; }
+    virtual void OnMouseUp(int button) { (void)button; }
+    virtual void OnMouseWheel(float delta) { (void)delta; }
+
     // 静态工具函数
     static bool CheckValidationLayerSupport();        // 检查验证层支持
     static std::vector<const char*> GetRequiredExtensions();  // 获取所需扩展
+
+    // ==================== 派生类可重写的虚函数 ====================
+protected:
+    // 初始化/关闭扩展点
+    virtual bool OnInitialize() { return true; }
+    virtual void OnShutdown() {}
+
+    // 帧渲染扩展点
+    virtual void OnBeginFrame() {}
+    virtual void OnEndFrame() {}
+
+    // 交换链重建扩展点（派生类在此清理/重建自己的资源）
+    virtual void OnRecreateSwapchain() {}
+
+    // 管线/渲染通道/帧缓冲创建（虚函数，派生类可重写）
+    virtual bool CreateRenderPass();
+    virtual bool CreatePipelines();
+    virtual bool CreateFramebuffers();
 
 protected:
     // Vulkan对象创建
@@ -138,9 +146,6 @@ protected:
     bool CreateSwapchain();                           // 创建交换链
     bool RecreateSwapchain();                         // 重建交换链（窗口大小变化时）
     bool CreateImageViews();                          // 创建图像视图
-    bool CreateRenderPass();                          // 创建渲染通道
-    bool CreatePipelineForTopology(DrawTopology topology);  // 创建指定拓扑的管线
-    bool CreateFramebuffers();                        // 创建帧缓冲区
     bool CreateCommandPool();                         // 创建命令池
     bool CreateCommandBuffers();                      // 创建命令缓冲区
     bool CreateSyncObjects();                         // 创建同步对象（信号量、围栏）
@@ -166,14 +171,6 @@ protected:
     std::vector<char> ReadShaderFile(const std::string& filename);
     VkShaderModule CreateShaderModuleHelper(const std::vector<char>& code);
 
-    // 描述符集相关
-    bool CreateDescriptorSetLayout();                   // 创建描述符集布局
-    bool CreateUniformBuffers();                        // 创建统一缓冲区
-    bool CreateDescriptorPool();                        // 创建描述符池
-    bool CreateDescriptorSets();                        // 创建描述符集
-    void DestroyUniformBuffers();                       // 销毁统一缓冲区
-    void InitIdentityMatrix(Mat4& mat);                 // 初始化为单位矩阵
-
     // 调试回调函数
     static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
         VkDebugUtilsMessageSeverityFlagBitsEXT severity,
@@ -186,7 +183,7 @@ protected:
     uint32_t m_framebufferWidth = 800;   // 帧缓冲区宽度
     uint32_t m_framebufferHeight = 600;  // 帧缓冲区高度
 
-    Vec4 m_clearColor = { 0.0f, 0.0f, 0.0f, 1.0f };  // 清除颜色（黑色）
+    Vec4 m_clearColor = { 0.1f, 0.1f, 0.12f, 1.0f };
     Rect2D m_viewport = { 0, 0, 800, 600 };            // 视口区域
 
     // Vulkan核心对象
@@ -209,9 +206,12 @@ protected:
 
     // 管线相关
     VkRenderPass m_renderPass = VK_NULL_HANDLE;                // 渲染通道
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;        // 管线布局
     VkPipeline m_pipelines[DT_COUNT] = {};                     // 多拓扑管线数组
-    VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;            // 图形管线（兼容旧代码）
+
+    // 清除值（基类默认 1 个颜色清除值，派生类可在 OnInitialize 中修改）
+    VkClearValue m_clearValues[2] = {};
+    uint32_t m_clearValueCount = 1;
 
     // 命令缓冲区
     VkCommandPool m_commandPool = VK_NULL_HANDLE;             // 命令池（渲染帧）
@@ -220,14 +220,6 @@ protected:
 
     // 缓冲区内存映射（追踪 CreateBuffer 分配的内存）
     std::unordered_map<VkBuffer, VkDeviceMemory> m_bufferMemoryMap;
-
-    // 描述符集相关
-    VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;      // 描述符集布局
-    VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;                // 描述符池
-    std::vector<VkDescriptorSet> m_descriptorSets;                     // 描述符集（每帧一个）
-    std::vector<VkBuffer> m_uniformBuffers;                            // 统一缓冲区（每帧一个）
-    std::vector<VkDeviceMemory> m_uniformBuffersMemory;                // 统一缓冲区内存（每帧一个）
-    std::vector<void*> m_uniformBuffersMapped;                         // 统一缓冲区映射指针
 
     // 同步对象
     std::vector<VkSemaphore> m_imageAvailableSemaphores;  // 图像可用信号量

@@ -17,7 +17,7 @@ VulkanMesh::~VulkanMesh() {
 // 公有接口
 // ============================================================================
 
-void VulkanMesh::SetMeshData(std::vector<VulkanVertex>&& vertices,
+void VulkanMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
                               std::vector<uint32_t>&& indices) {
     if (!m_pRender || vertices.empty() || indices.empty()) return;
 
@@ -28,12 +28,12 @@ void VulkanMesh::SetMeshData(std::vector<VulkanVertex>&& vertices,
     VkDevice device         = m_pRender->GetDevice();
     VkPhysicalDevice phyDev = m_pRender->GetPhysicalDevice();
 
-    VkDeviceSize vertSize = vertices.size() * sizeof(VulkanVertex);
+    VkDeviceSize vertSize = vertices.size() * sizeof(Vertex3D);
     VkDeviceSize idxSize  = indices.size()  * sizeof(uint32_t);
     m_indexCount = static_cast<uint32_t>(indices.size());
 
     // 保持原始数据在 QRunnable 执行期间存活
-    auto vertData = std::make_shared<std::vector<VulkanVertex>>(std::move(vertices));
+    auto vertData = std::make_shared<std::vector<Vertex3D>>(std::move(vertices));
     auto idxData  = std::make_shared<std::vector<uint32_t>>(std::move(indices));
 
     // 生命周期令牌（值拷贝，使 lambda 可拷贝）
@@ -69,7 +69,7 @@ void VulkanMesh::SetMeshData(std::vector<VulkanVertex>&& vertices,
     m_pRender->SubmitAsync(idxTask);
 }
 
-void VulkanMesh::SetMeshDataSync(const std::vector<VulkanVertex>& vertices,
+void VulkanMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
                                   const std::vector<uint32_t>& indices) {
     if (!m_pRender || vertices.empty() || indices.empty()) return;
 
