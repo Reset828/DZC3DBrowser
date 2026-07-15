@@ -1,4 +1,4 @@
-#include "VulkanMesh.h"
+﻿#include "VulkanMesh.h"
 #include "BufferUploadRunnable.h"
 #include <QApplication>
 #include <QMetaObject>

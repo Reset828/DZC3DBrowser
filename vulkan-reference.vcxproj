@@ -95,7 +95,7 @@
     <ClInclude Include="CEditLine.h" />
     <ClInclude Include="MainWindow.h" />
     <ClInclude Include="ObjParseRunnable.h" />
-    <ClInclude Include="QWindowVulkan.h" />
+    <QtMoc Include="QWindowVulkan.h" />
     <ClInclude Include="VulkanLayer.h" />
     <ClInclude Include="VulkanMesh.h" />
     <ClInclude Include="VulkanObject.h" />

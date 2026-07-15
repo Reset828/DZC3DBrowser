@@ -83,6 +83,29 @@ void ObjParseRunnable::run() {
         return val;
     };
 
+    // 解析 face 中的单个顶点索引（支持 v、v/vt、v/vt/vn、v//vn、v/ 等格式）
+    auto parseFaceIndex = [&ptr, end, &parseInt]() -> int {
+        int val = parseInt();
+        // 跳过可选的 /vt 和 /vn 部分
+        if (ptr < end && *ptr == '/') {
+            ++ptr;
+            if (ptr < end && (*ptr == '-' || (*ptr >= '0' && *ptr <= '9'))) {
+                char* endPtr = nullptr;
+                std::strtol(ptr, &endPtr, 10);
+                ptr = endPtr;
+            }
+            if (ptr < end && *ptr == '/') {
+                ++ptr;
+                if (ptr < end && (*ptr == '-' || (*ptr >= '0' && *ptr <= '9'))) {
+                    char* endPtr = nullptr;
+                    std::strtol(ptr, &endPtr, 10);
+                    ptr = endPtr;
+                }
+            }
+        }
+        return val;
+    };
+
     while (ptr < end) {
         if (ptr[0] == 'v' && ptr[1] == ' ') {
             ptr += 2; // skip "v "
@@ -97,9 +120,9 @@ void ObjParseRunnable::run() {
             vertices.push_back(vert);
         } else if (ptr[0] == 'f' && ptr[1] == ' ') {
             ptr += 2; // skip "f "
-            int i1 = parseInt();
-            int i2 = parseInt();
-            int i3 = parseInt();
+            int i1 = parseFaceIndex();
+            int i2 = parseFaceIndex();
+            int i3 = parseFaceIndex();
 
             // OBJ 索引从 1 开始，转为 0-based
             indices.push_back(static_cast<uint32_t>(i1 - 1));

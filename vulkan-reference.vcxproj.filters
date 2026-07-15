@@ -30,9 +30,6 @@
     <ClInclude Include="MainWindow.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="QWindowVulkan.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
     <ClInclude Include="BufferUploadRunnable.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -84,5 +81,10 @@
   <ItemGroup>
     <None Include="shaders\shader.frag" />
     <None Include="shaders\shader.vert" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="QWindowVulkan.h">
+      <Filter>头文件</Filter>
+    </QtMoc>
   </ItemGroup>
 </Project>

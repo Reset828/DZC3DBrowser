@@ -1,4 +1,4 @@
-#include "MainWindow.h"
+﻿#include "MainWindow.h"
 #include "QWindowVulkan.h"
 #include "VulkanRender.h"
 #include "VulkanLayer.h"
@@ -94,9 +94,9 @@ void MainWindow::StartRenderLoop() {
 
 void MainWindow::onOpenFile() {
     QString filePath = QFileDialog::getOpenFileName(this,
-        QStringLiteral("\u9009\u62e9 OBJ \u6587\u4ef6"),
+        QStringLiteral("选择 OBJ 文件"),
         QStringLiteral("./obj"),
-        QStringLiteral("OBJ \u6587\u4ef6 (*.obj)"));
+        QStringLiteral("OBJ 文件 (*.obj)"));
 
     if (filePath.isEmpty()) return;
 
@@ -116,17 +116,16 @@ void MainWindow::onOpenFile() {
             m_scene->AddChild(mesh);
         });
 
-    // 状态栏提示（可选）
-    // statusBar()->showMessage(QStringLiteral("\u6b63\u5728\u52a0\u8f7d OBJ..."), 3000);
+
     QThreadPool::globalInstance()->start(runnable);
 }
 
 void MainWindow::on2DController() {
-    QMessageBox::information(this, QStringLiteral("\u63d0\u793a"),
-        QStringLiteral("\u4e8c\u7ef4\u63a7\u5236\u5668\u5f85\u5b9e\u73b0"));
+    QMessageBox::information(this, QStringLiteral("提示"),
+        QStringLiteral("二维控制器待实现"));
 }
 
 void MainWindow::on3DController() {
-    QMessageBox::information(this, QStringLiteral("\u63d0\u793a"),
-        QStringLiteral("\u4e09\u7ef4\u63a7\u5236\u5668\u5f85\u5b9e\u73b0"));
+    QMessageBox::information(this, QStringLiteral("提示"),
+        QStringLiteral("三维控制器待实现"));
 }
