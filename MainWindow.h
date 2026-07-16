@@ -13,6 +13,7 @@ class QWidget;
 class QTreeWidget;
 class QPlainTextEdit;
 class QCheckBox;
+class QLabel;
 struct Vertex3D;
 
 class MainWindow : public QMainWindow {
@@ -32,6 +33,7 @@ private slots:
 
 private:
     void SetupToolBar();
+    void SetupStatusBar();
     void SetupVulkan();
     void StartRenderLoop();
     void SwitchTo2D();
@@ -50,6 +52,10 @@ private:
     bool m_hasStoredMesh = false;
 
     QCheckBox* m_borderCheck = nullptr;
+
+    QLabel* m_coordX = nullptr;
+    QLabel* m_coordY = nullptr;
+    QLabel* m_coordZ = nullptr;
 };
 
 #endif // __MAIN_WINDOW_H__

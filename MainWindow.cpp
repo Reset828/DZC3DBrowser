@@ -10,6 +10,8 @@
 #include <QMenuBar>
 #include <QToolBar>
 #include <QCheckBox>
+#include <QLabel>
+#include <QStatusBar>
 #include <QWidget>
 #include <QFileDialog>
 #include <QMessageBox>
@@ -44,6 +46,8 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
+    SetupStatusBar();
+
     setStyleSheet(QStringLiteral(R"(
         QMainWindow { background-color: #1e1e1e; }
         QWidget { background-color: #1e1e1e; color: #d4d4d4; }
@@ -56,6 +60,9 @@ MainWindow::MainWindow(QWidget* parent)
         QMenuBar { background-color: #2d2d2d; color: #d4d4d4; border: none; padding: 2px; }
         QToolBar { background-color: #252526; border: none; spacing: 8px; padding: 2px 4px; }
         QCheckBox { color: #d4d4d4; spacing: 4px; }
+        QStatusBar { background-color: #2d2d2d; color: #888888; font-size: 12px; }
+        QStatusBar QLabel { background: transparent; border: none; padding: 0 6px; }
+        QStatusBar::item { border: none; background: transparent; }
         QMenuBar::item { background-color: transparent; color: #d4d4d4; padding: 4px 12px; }
         QMenuBar::item:selected { background-color: #3c3c3c; }
         QMenu { background-color: #2d2d2d; color: #d4d4d4; border: 1px solid #3c3c3c; }
@@ -104,6 +111,19 @@ void MainWindow::SetupToolBar() {
     m_borderCheck = new QCheckBox(QStringLiteral("线框模式"));
     m_borderCheck->setLayoutDirection(Qt::RightToLeft);
     toolbar->addWidget(m_borderCheck);
+}
+
+void MainWindow::SetupStatusBar() {
+    statusBar()->setSizeGripEnabled(false);
+
+    m_coordX = new QLabel(QStringLiteral("X: 0.000"));
+    m_coordY = new QLabel(QStringLiteral("Y: 0.000"));
+    m_coordZ = new QLabel(QStringLiteral("Z: 0.000"));
+
+
+    statusBar()->addPermanentWidget(m_coordX);
+    statusBar()->addPermanentWidget(m_coordY);
+    statusBar()->addPermanentWidget(m_coordZ);
 }
 
 void MainWindow::SetupVulkan() {

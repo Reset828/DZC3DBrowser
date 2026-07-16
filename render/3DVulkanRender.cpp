@@ -34,7 +34,7 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
     if (m_mouseButton == 0) {
         m_orbitTheta -= delta.x * 180.0f;
         m_orbitPhi += delta.y * 180.0f;
-        m_orbitPhi = glm::clamp(m_orbitPhi, -89.0f, 89.0f);
+        m_orbitPhi = glm::clamp(m_orbitPhi, 0.0f, 89.0f);
     } else if (m_mouseButton == 1) {
         float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
         float moveSpeed = m_orbitDistance * 0.5f;
@@ -642,7 +642,6 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     float zNear = 0.1f;
     float zFar = 100.0f;
 
-    // 方法1：使用 glm（推荐）
     glm::mat4 proj = glm::perspectiveRH_ZO(
         glm::radians(45.0f),
         aspect,
@@ -652,17 +651,7 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     // Vulkan 需要翻转 Y 轴（glm 的 perspectiveRH_ZO 不自动翻转）
     proj[1][1] *= -1;
 
-    // 方法2：手动构造（如果你坚持）
-    /*
-    float fov = glm::radians(45.0f);
-    float tanHalfFov = tan(fov * 0.5f);
-    glm::mat4 proj(0.0f);
-    proj[0][0] = 1.0f / (aspect * tanHalfFov);
-    proj[1][1] = -1.0f / tanHalfFov;  // Vulkan Y 轴翻转
-    proj[2][2] = zFar / (zFar - zNear);  // ✅ 修复：正号！
-    proj[2][3] = 1.0f;  // ✅ 修复！
-    proj[3][2] = -(zFar * zNear) / (zFar - zNear);
-    */
+
 
     // 组装 UBO
     UniformBufferObject3D ubo{};
