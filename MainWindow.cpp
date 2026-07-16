@@ -6,8 +6,10 @@
 #include "ObjParseRunnable.h"
 #include "render/3DVulkanRender.h"
 #include "render/2DVulkanRender.h"
-#include <QToolBar>
 #include <QAction>
+#include <QMenuBar>
+#include <QToolBar>
+#include <QCheckBox>
 #include <QWidget>
 #include <QFileDialog>
 #include <QMessageBox>
@@ -45,10 +47,11 @@ MainWindow::MainWindow(QWidget* parent)
         QHeaderView::section { background-color: #2d2d2d; color: #d4d4d4; border: none; padding: 4px; }
         QPlainTextEdit { background-color: #1e1e1e; color: #d4d4d4; border: none; }
         QSplitter::handle { background-color: #3c3c3c; }
-        QToolBar { background-color: #2d2d2d; border: none; spacing: 4px; padding: 2px; }
-        QToolButton { background-color: transparent; color: #d4d4d4; border: 1px solid #3c3c3c; border-radius: 3px; padding: 4px 12px; }
-        QToolButton:hover { background-color: #3c3c3c; }
-        QToolButton:pressed { background-color: #094771; }
+        QMenuBar { background-color: #2d2d2d; color: #d4d4d4; border: none; padding: 2px; }
+        QToolBar { background-color: #252526; border: none; spacing: 8px; padding: 2px 4px; }
+        QCheckBox { color: #d4d4d4; spacing: 4px; }
+        QMenuBar::item { background-color: transparent; color: #d4d4d4; padding: 4px 12px; }
+        QMenuBar::item:selected { background-color: #3c3c3c; }
         QMenu { background-color: #2d2d2d; color: #d4d4d4; border: 1px solid #3c3c3c; }
         QMenu::item:selected { background-color: #094771; }
     )"));
@@ -80,25 +83,20 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::SetupToolBar() {
-    QToolBar* toolbar = addToolBar(QStringLiteral("工具栏"));
-    toolbar->setMovable(false);
+    QMenuBar* mb = menuBar();
 
-    QToolButton* fileBtn = new QToolButton();
-    fileBtn->setText(QStringLiteral("文件"));
-    fileBtn->setPopupMode(QToolButton::InstantPopup);
-    QMenu* fileMenu = new QMenu(fileBtn);
+    QMenu* fileMenu = mb->addMenu(QStringLiteral("文件"));
     fileMenu->addAction(QStringLiteral("打开文件"), this, &MainWindow::onOpenFile);
-    fileBtn->setMenu(fileMenu);
-    toolbar->addWidget(fileBtn);
 
-    QToolButton* viewBtn = new QToolButton();
-    viewBtn->setText(QStringLiteral("查看"));
-    viewBtn->setPopupMode(QToolButton::InstantPopup);
-    QMenu* viewMenu = new QMenu(viewBtn);
+    QMenu* viewMenu = mb->addMenu(QStringLiteral("查看"));
     viewMenu->addAction(QStringLiteral("3D查看"), this, &MainWindow::on3DController);
     viewMenu->addAction(QStringLiteral("2D查看"), this, &MainWindow::on2DController);
-    viewBtn->setMenu(viewMenu);
-    toolbar->addWidget(viewBtn);
+
+    QToolBar* toolbar = addToolBar(QStringLiteral("工具"));
+    toolbar->setMovable(false);
+
+    QCheckBox* borderCheck = new QCheckBox(QStringLiteral("线框模式"));
+    toolbar->addWidget(borderCheck);
 }
 
 void MainWindow::SetupVulkan() {

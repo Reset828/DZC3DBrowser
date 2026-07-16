@@ -152,7 +152,7 @@ void ObjParseRunnable::run() {
         vert.position[1] = (vert.position[1] - center.y) * scale;
         vert.position[2] = (vert.position[2] - center.z) * scale;
 
-        float t = vert.position[1] * 0.5f + 0.5f;
+        float t = vert.position[2] * 0.5f + 0.5f;
         float r, g, b;
         if (t < 0.5f) {
             float u = t / 0.5f;

@@ -622,28 +622,45 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     float thetaRad = glm::radians(m_orbitTheta);
     float phiRad = glm::radians(m_orbitPhi);
 
+    // 计算相机位置
     glm::vec3 eye(
         m_orbitTarget.x + m_orbitDistance * cos(phiRad) * sin(thetaRad),
         m_orbitTarget.y + m_orbitDistance * sin(phiRad),
         m_orbitTarget.z + m_orbitDistance * cos(phiRad) * cos(thetaRad)
     );
 
+    // 视图矩阵
     glm::mat4 view = glm::lookAt(eye, m_orbitTarget, glm::vec3(0.0f, 1.0f, 0.0f));
 
+    // 投影矩阵（Vulkan 标准）
     float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
-    float fov = glm::radians(45.0f);
-    float tanHalfFov = tan(fov * 0.5f);
     float zNear = 0.1f;
     float zFar = 100.0f;
 
+    // 方法1：使用 glm（推荐）
+    glm::mat4 proj = glm::perspectiveRH_ZO(
+        glm::radians(45.0f),
+        aspect,
+        zNear,
+        zFar
+    );
+    // Vulkan 需要翻转 Y 轴（glm 的 perspectiveRH_ZO 不自动翻转）
+    proj[1][1] *= -1;
+
+    // 方法2：手动构造（如果你坚持）
+    /*
+    float fov = glm::radians(45.0f);
+    float tanHalfFov = tan(fov * 0.5f);
     glm::mat4 proj(0.0f);
     proj[0][0] = 1.0f / (aspect * tanHalfFov);
-    proj[1][1] = -1.0f / tanHalfFov;
-    proj[2][2] = -zFar / (zFar - zNear);
-    proj[2][3] = -1.0f;
+    proj[1][1] = -1.0f / tanHalfFov;  // Vulkan Y 轴翻转
+    proj[2][2] = zFar / (zFar - zNear);  // ✅ 修复：正号！
+    proj[2][3] = 1.0f;  // ✅ 修复！
     proj[3][2] = -(zFar * zNear) / (zFar - zNear);
+    */
 
-    UniformBufferObject3D ubo;
+    // 组装 UBO
+    UniformBufferObject3D ubo{};
     memcpy(ubo.model, glm::value_ptr(glm::mat4(1.0f)), sizeof(float) * 16);
     memcpy(ubo.view, glm::value_ptr(view), sizeof(float) * 16);
     memcpy(ubo.proj, glm::value_ptr(proj), sizeof(float) * 16);
