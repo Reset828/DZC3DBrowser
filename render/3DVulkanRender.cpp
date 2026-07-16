@@ -2,10 +2,12 @@
 #include <iostream>
 #include <cstring>
 #include <cmath>
+#include <algorithm>
 #include <stdexcept>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 
 // ============================================================================
 // 构造和析构
@@ -34,7 +36,7 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
     if (m_mouseButton == 0) {
         m_orbitTheta -= delta.x * 180.0f;
         m_orbitPhi += delta.y * 180.0f;
-        m_orbitPhi = glm::clamp(m_orbitPhi, 0.0f, 89.0f);
+        m_orbitPhi = glm::clamp(m_orbitPhi, -179.0f, 0.0f);
     } else if (m_mouseButton == 1) {
         float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
         float moveSpeed = m_orbitDistance * 0.5f;
@@ -66,10 +68,12 @@ bool VulkanRender3D::OnInitialize() {
     if (!CreateUniformBuffers()) return false;
     if (!CreateDescriptorPool()) return false;
     if (!CreateDescriptorSets()) return false;
+    if (!CreateDepthReadbackResources()) return false;
     return true;
 }
 
 void VulkanRender3D::OnShutdown() {
+    DestroyDepthReadbackResources();
     if (m_descriptorPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
         m_descriptorPool = VK_NULL_HANDLE;
@@ -82,6 +86,8 @@ void VulkanRender3D::OnShutdown() {
 }
 
 void VulkanRender3D::OnBeginFrame() {
+    ProcessDepthReadback(m_currentFrame);
+
     UpdateUniformBuffer(m_currentFrame);
 
     // 绑定描述符集（每帧对应一个 UBO）
@@ -118,7 +124,7 @@ bool VulkanRender3D::CreateRenderPass() {
     depthAttachment.format = FindDepthFormat();
     depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -412,7 +418,7 @@ bool VulkanRender3D::CreateDepthResources() {
     imageInfo.format = depthFormat;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -653,6 +659,9 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
 
 
 
+    // 存储逆矩阵供坐标回读使用
+    m_frameInvViewProj[currentImage] = glm::inverse(proj * view);
+
     // 组装 UBO
     UniformBufferObject3D ubo{};
     memcpy(ubo.model, glm::value_ptr(glm::mat4(1.0f)), sizeof(float) * 16);
@@ -671,4 +680,161 @@ void VulkanRender3D::InitIdentityMatrix(float mat[4][4]) {
     mat[1][1] = 1.0f;
     mat[2][2] = 1.0f;
     mat[3][3] = 1.0f;
+}
+
+// ============================================================================
+// 世界坐标拾取（深度回读）
+// ============================================================================
+
+bool VulkanRender3D::CreateDepthReadbackResources() {
+    VkDeviceSize bufferSize = sizeof(float);
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = bufferSize;
+        bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_depthReadbackBuffer[i]) != VK_SUCCESS) {
+            return false;
+        }
+
+        VkMemoryRequirements memRequirements;
+        vkGetBufferMemoryRequirements(m_device, m_depthReadbackBuffer[i], &memRequirements);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memRequirements.size;
+        allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_depthReadbackMemory[i]) != VK_SUCCESS) {
+            return false;
+        }
+
+        vkBindBufferMemory(m_device, m_depthReadbackBuffer[i], m_depthReadbackMemory[i], 0);
+        vkMapMemory(m_device, m_depthReadbackMemory[i], 0, bufferSize, 0, &m_depthReadbackMapped[i]);
+
+        float initialDepth = 1.0f;
+        memcpy(m_depthReadbackMapped[i], &initialDepth, sizeof(float));
+    }
+
+    return true;
+}
+
+void VulkanRender3D::DestroyDepthReadbackResources() {
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (m_depthReadbackMapped[i] != nullptr) {
+            vkUnmapMemory(m_device, m_depthReadbackMemory[i]);
+            m_depthReadbackMapped[i] = nullptr;
+        }
+        if (m_depthReadbackBuffer[i] != VK_NULL_HANDLE) {
+            vkDestroyBuffer(m_device, m_depthReadbackBuffer[i], nullptr);
+            m_depthReadbackBuffer[i] = VK_NULL_HANDLE;
+        }
+        if (m_depthReadbackMemory[i] != VK_NULL_HANDLE) {
+            vkFreeMemory(m_device, m_depthReadbackMemory[i], nullptr);
+            m_depthReadbackMemory[i] = VK_NULL_HANDLE;
+        }
+        m_pendingReadback[i] = false;
+    }
+}
+
+void VulkanRender3D::RequestCoordReadback(float ndcX, float ndcY) {
+    m_depthReadbackRequested = true;
+    m_requestedNDCX = ndcX;
+    m_requestedNDCY = ndcY;
+}
+
+void VulkanRender3D::OnEndFrame() {
+    if (!m_depthReadbackRequested) return;
+    if (m_depthImage == VK_NULL_HANDLE) return;
+    m_depthReadbackRequested = false;
+
+    VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+
+    int32_t pixelX = static_cast<int32_t>(m_requestedNDCX * m_swapchainExtent.width);
+    int32_t pixelY = static_cast<int32_t>(m_requestedNDCY * m_swapchainExtent.height);
+    pixelX = std::max(0, std::min(pixelX, static_cast<int32_t>(m_swapchainExtent.width) - 1));
+    pixelY = std::max(0, std::min(pixelY, static_cast<int32_t>(m_swapchainExtent.height) - 1));
+
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = m_depthImage;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = { pixelX, pixelY, 0 };
+    region.imageExtent = { 1, 1, 1 };
+
+    vkCmdCopyImageToBuffer(cmd, m_depthImage,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        m_depthReadbackBuffer[m_currentFrame], 1, &region);
+
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    m_pendingReadback[m_currentFrame] = true;
+    m_pendingNDCX[m_currentFrame] = m_requestedNDCX;
+    m_pendingNDCY[m_currentFrame] = m_requestedNDCY;
+}
+
+void VulkanRender3D::ProcessDepthReadback(uint32_t frameIndex) {
+    if (!m_pendingReadback[frameIndex]) return;
+    m_pendingReadback[frameIndex] = false;
+
+    float depth;
+    memcpy(&depth, m_depthReadbackMapped[frameIndex], sizeof(float));
+
+    if (depth > 0.999f) return;
+
+    float x_ndc = m_pendingNDCX[frameIndex] * 2.0f - 1.0f;
+    float y_ndc = 1.0f - m_pendingNDCY[frameIndex] * 2.0f;
+
+    glm::mat4 invViewProj = m_frameInvViewProj[frameIndex];
+
+    glm::vec4 clipPos(x_ndc, y_ndc, depth, 1.0f);
+    glm::vec4 worldPos = invViewProj * clipPos;
+    worldPos /= worldPos.w;
+
+    m_lastWorldCoord[0] = worldPos.x;
+    m_lastWorldCoord[1] = worldPos.y;
+    m_lastWorldCoord[2] = worldPos.z;
+    m_newCoordAvailable = true;
+}
+
+bool VulkanRender3D::HasNewWorldCoord() const {
+    bool v = m_newCoordAvailable;
+    m_newCoordAvailable = false;
+    return v;
 }

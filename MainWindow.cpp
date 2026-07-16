@@ -6,6 +6,7 @@
 #include "ObjParseRunnable.h"
 #include "render/3DVulkanRender.h"
 #include "render/2DVulkanRender.h"
+#include <QString>
 #include <QAction>
 #include <QMenuBar>
 #include <QToolBar>
@@ -195,6 +196,9 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
             float nx = (float)me->x() / (float)m_vulkanWindow->width();
             float ny = (float)me->y() / (float)m_vulkanWindow->height();
             m_renderer->OnMouseMove(nx, ny);
+            if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+                render3D->RequestCoordReadback(nx, ny);
+            }
             break;
         }
         case QEvent::Wheel: {
@@ -216,6 +220,13 @@ void MainWindow::StartRenderLoop() {
             if (m_renderer->BeginFrame()) {
                 m_scene->Render(0);
                 m_renderer->EndFrame();
+            }
+            if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+                if (render3D->HasNewWorldCoord()) {
+                    m_coordX->setText(QStringLiteral("X: %1").arg(render3D->GetLastWorldX(), 0, 'f', 3));
+                    m_coordY->setText(QStringLiteral("Y: %1").arg(render3D->GetLastWorldY(), 0, 'f', 3));
+                    m_coordZ->setText(QStringLiteral("Z: %1").arg(render3D->GetLastWorldZ(), 0, 'f', 3));
+                }
             }
         }
     });
