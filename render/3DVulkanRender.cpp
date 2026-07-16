@@ -228,17 +228,33 @@ bool VulkanRender3D::CreatePipelines() {
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // 创建三种拓扑的管线
-    DrawTopology topologies[] = { DT_TRIANGLE, DT_LINE, DT_POINT };
+    // 创建管线
+    DrawTopology topologies[] = { DT_TRIANGLE, DT_TRIANGLE_WIREFRAME, DT_LINE, DT_POINT };
     for (auto topo : topologies) {
         // 输入装配状态
         VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
         inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
         inputAssembly.primitiveRestartEnable = VK_FALSE;
 
+        // 光栅化状态（默认填充）
+        VkPipelineRasterizationStateCreateInfo rasterizer{};
+        rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizer.depthClampEnable = VK_FALSE;
+        rasterizer.rasterizerDiscardEnable = VK_FALSE;
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizer.lineWidth = 1.0f;
+        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        rasterizer.depthBiasEnable = VK_FALSE;
+
         switch (topo) {
         case DT_TRIANGLE:
             inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            break;
+        case DT_TRIANGLE_WIREFRAME:
+            inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            rasterizer.polygonMode = VK_POLYGON_MODE_LINE;
+            rasterizer.cullMode = VK_CULL_MODE_NONE;
             break;
         case DT_LINE:
             inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
@@ -256,17 +272,6 @@ bool VulkanRender3D::CreatePipelines() {
         viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
         viewportState.viewportCount = 1;
         viewportState.scissorCount = 1;
-
-        // 光栅化状态
-        VkPipelineRasterizationStateCreateInfo rasterizer{};
-        rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-        rasterizer.depthClampEnable = VK_FALSE;
-        rasterizer.rasterizerDiscardEnable = VK_FALSE;
-        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-        rasterizer.lineWidth = 1.0f;
-        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-        rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
-        rasterizer.depthBiasEnable = VK_FALSE;
 
         // 多重采样
         VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -665,6 +670,10 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     memcpy(ubo.view, glm::value_ptr(view), sizeof(float) * 16);
     memcpy(ubo.proj, glm::value_ptr(proj), sizeof(float) * 16);
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+}
+
+void VulkanRender3D::SetWireframeEnabled(bool enabled) {
+    m_wireframeMode = enabled;
 }
 
 void VulkanRender3D::InitIdentityMatrix(float mat[4][4]) {

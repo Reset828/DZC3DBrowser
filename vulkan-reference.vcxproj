@@ -109,11 +109,11 @@
     <ClCompile Include="MainWindow.cpp" />
     <ClCompile Include="ObjParseRunnable.cpp" />
     <ClCompile Include="QWindowVulkan.cpp" />
+    <ClCompile Include="render\VulkanRender.cpp" />
     <ClCompile Include="VertexTypes.cpp" />
     <ClCompile Include="VulkanLayer.cpp" />
     <ClCompile Include="VulkanMesh.cpp" />
     <ClCompile Include="VulkanObject.cpp" />
-    <ClCompile Include="VulkanRender.cpp" />
     <ClCompile Include="render\2DVulkanRender.cpp" />
     <ClCompile Include="render\3DVulkanRender.cpp" />
   </ItemGroup>
@@ -127,5 +127,4 @@
   <Import Project="$(QtMsBuild)\qt.targets" Condition="Exists('$(QtMsBuild)\qt.targets')" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
-
 </Project>

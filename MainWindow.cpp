@@ -38,6 +38,12 @@ MainWindow::MainWindow(QWidget* parent)
     SetupToolBar();
     SetupVulkan();
 
+    connect(m_borderCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+            render3D->SetWireframeEnabled(checked);
+        }
+    });
+
     setStyleSheet(QStringLiteral(R"(
         QMainWindow { background-color: #1e1e1e; }
         QWidget { background-color: #1e1e1e; color: #d4d4d4; }
@@ -95,8 +101,9 @@ void MainWindow::SetupToolBar() {
     QToolBar* toolbar = addToolBar(QStringLiteral("工具"));
     toolbar->setMovable(false);
 
-    QCheckBox* borderCheck = new QCheckBox(QStringLiteral("线框模式"));
-    toolbar->addWidget(borderCheck);
+    m_borderCheck = new QCheckBox(QStringLiteral("线框模式"));
+    m_borderCheck->setLayoutDirection(Qt::RightToLeft);
+    toolbar->addWidget(m_borderCheck);
 }
 
 void MainWindow::SetupVulkan() {

@@ -18,6 +18,8 @@ public:
     void OnMouseMove(float nx, float ny) override;
     void OnMouseUp(int button) override;
     void OnMouseWheel(float delta) override;
+    void SetWireframeEnabled(bool enabled);
+    bool IsWireframeEnabled() const override { return m_wireframeMode; }
 
 protected:
     bool OnInitialize() override;
@@ -44,6 +46,9 @@ protected:
                                   VkImageTiling tiling,
                                   VkFormatFeatureFlags features);
     bool HasStencilComponent(VkFormat format);
+
+    // 线框模式
+    bool m_wireframeMode = false;
 
 protected:
     // 轨道相机

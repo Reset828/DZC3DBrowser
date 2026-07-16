@@ -61,7 +61,7 @@ bool VulkanRender::Initialize(const char* appName, uint32_t width, uint32_t heig
     // [虚] 创建渲染通道
     if (!CreateRenderPass()) return false;
 
-    // [虚] 创建管线（派发类加载着色器并创建管线）
+    // [虚] 创建管线（派生类加载着色器并创建管线）
     if (!CreatePipelines()) return false;
 
     // [虚] 创建帧缓冲
@@ -152,13 +152,7 @@ void VulkanRender::Shutdown() {
     m_initialized = false;
 }
 
-// ============================================================================
-// 视口和清除颜色
-// ============================================================================
 
-void VulkanRender::SetViewport(const Rect2D& rc) {
-    m_viewport = rc;
-}
 
 void VulkanRender::SetClearColor(float r, float g, float b, float a) {
     m_clearColor = { r, g, b, a };
@@ -214,12 +208,12 @@ bool VulkanRender::BeginFrame() {
 
     vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // 设置视口（使用 m_viewport 配置）
+    // 设置视口（匹配交换链尺寸，确保渲染铺满整个窗口）
     VkViewport viewport{};
-    viewport.x = static_cast<float>(m_viewport.x);
-    viewport.y = static_cast<float>(m_viewport.y);
-    viewport.width = static_cast<float>(m_viewport.width);
-    viewport.height = static_cast<float>(m_viewport.height);
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(m_swapchainExtent.width);
+    viewport.height = static_cast<float>(m_swapchainExtent.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &viewport);
@@ -603,6 +597,7 @@ bool VulkanRender::CreateLogicalDevice() {
     // 设备特性
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;  // 启用各向异性过滤
+    deviceFeatures.fillModeNonSolid = VK_TRUE;   // 启用线框模式
 
     // 创建逻辑设备
     VkDeviceCreateInfo createInfo{};
@@ -1132,15 +1127,32 @@ void VulkanRender::SubmitAsync(QRunnable* task) {
     QThreadPool::globalInstance()->start(task);
 }
 
+bool VulkanRender::IsInitialized() const { return m_initialized; }
+
 VkDevice VulkanRender::GetDevice() const { return m_device; }
 VkPhysicalDevice VulkanRender::GetPhysicalDevice() const { return m_physicalDevice; }
-VkInstance VulkanRender::GetInstance() const { return m_instance; }
-VkCommandBuffer VulkanRender::GetCurrentCommandBuffer() const { return m_commandBuffers[m_currentFrame]; }
-uint32_t VulkanRender::GetCurrentFrame() const { return m_currentFrame; }
-uint32_t VulkanRender::GetFramebufferWidth() const { return m_framebufferWidth; }
-uint32_t VulkanRender::GetFramebufferHeight() const { return m_framebufferHeight; }
 
-// 获取管线布局和渲染通道
-VkPipelineLayout VulkanRender::GetPipelineLayout() const { return m_pipelineLayout; }
-VkRenderPass VulkanRender::GetRenderPass() const { return m_renderPass; }
-VkPipeline VulkanRender::GetPipeline(DrawTopology topology) const { return m_pipelines[topology]; }
+VkCommandBuffer VulkanRender::GetCurrentCommandBuffer() const { return m_commandBuffers[m_currentFrame]; }
+
+
+// 是否正在关闭（阻止关闭过程中产生的异步回调创建新任务）
+bool VulkanRender::IsShuttingDown() const { return m_shuttingDown; }
+
+VkPipeline VulkanRender::GetPipeline(DrawTopology topology) const {
+    if (topology >= 0 && topology < DT_COUNT) {
+        return m_pipelines[topology];
+    }
+    return VK_NULL_HANDLE;
+}
+
+
+// 窗口表面设置
+void VulkanRender::SetSurface(VkSurfaceKHR surface) { m_surface = surface; }
+void VulkanRender::SetInstance(VkInstance instance) { m_instance = instance; m_externalInstance = true; }
+void VulkanRender::SetFramebufferSize(uint32_t width, uint32_t height) { m_framebufferWidth = width; m_framebufferHeight = height; }
+void VulkanRender::SetFramebufferResized(bool resized) { m_framebufferResized = resized; }
+
+void VulkanRender::OnMouseDown(float nx, float ny, int button) { (void)nx; (void)ny; (void)button; }
+void VulkanRender::OnMouseMove(float nx, float ny) { (void)nx; (void)ny; }
+void VulkanRender::OnMouseUp(int button) { (void)button; }
+void VulkanRender::OnMouseWheel(float delta) { (void)delta; }

@@ -86,10 +86,10 @@ void VulkanMesh::Render(int /*mode*/) {
 
     VkCommandBuffer cmd = m_pRender->GetCurrentCommandBuffer();
 
-    // 绑定三角形管线（与 BeginFrame 中的默认管线一致，但在 CEditLine
-    // 切换拓扑后需要显式恢复）
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      m_pRender->GetPipeline(VulkanRender::DT_TRIANGLE));
+                      m_pRender->GetPipeline(m_pRender->IsWireframeEnabled()
+                          ? VulkanRender::DT_TRIANGLE_WIREFRAME
+                          : VulkanRender::DT_TRIANGLE));
 
     VkBuffer vb[] = { m_vertexBuffer };
     VkDeviceSize offsets[] = { 0 };

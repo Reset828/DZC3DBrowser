@@ -12,6 +12,7 @@ class QTimer;
 class QWidget;
 class QTreeWidget;
 class QPlainTextEdit;
+class QCheckBox;
 struct Vertex3D;
 
 class MainWindow : public QMainWindow {
@@ -47,6 +48,8 @@ private:
     std::vector<Vertex3D> m_storedVertices;
     std::vector<uint32_t> m_storedIndices;
     bool m_hasStoredMesh = false;
+
+    QCheckBox* m_borderCheck = nullptr;
 };
 
 #endif // __MAIN_WINDOW_H__

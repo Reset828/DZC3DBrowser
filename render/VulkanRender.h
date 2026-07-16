@@ -46,10 +46,14 @@ public:
     // 绘制拓扑类型
     enum DrawTopology {
         DT_TRIANGLE = 0,  // 三角形列表（多边形）
+        DT_TRIANGLE_WIREFRAME, // 三角形线框
         DT_LINE,          // 线段列表
         DT_POINT,         // 点列表
         DT_COUNT
     };
+
+    // 是否启用线框模式
+    virtual bool IsWireframeEnabled() const { return false; }
 
     // 初始化和关闭
     bool Initialize(const char* appName, uint32_t width, uint32_t height);

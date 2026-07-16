@@ -61,9 +61,6 @@
     <ClCompile Include="VulkanObject.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="VulkanRender.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="main.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -90,6 +87,9 @@
     </ClCompile>
     <ClCompile Include="render\3DVulkanRender.cpp">
       <Filter>渲染器</Filter>
+    </ClCompile>
+    <ClCompile Include="render\VulkanRender.cpp">
+      <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
