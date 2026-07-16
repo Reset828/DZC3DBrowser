@@ -2,6 +2,7 @@
 
 #include "VulkanObject.h"
 #include "VertexTypes.h"
+#include "BufferUploadRunnable.h"
 #include <memory>
 #include <atomic>
 
@@ -32,12 +33,20 @@ private:
     // 检查 vertex + index 是否都已就绪
     void CheckBuffersReady();
 
+    // 合并上传完成回调：从同一 staging buffer 创建 vertex + index device-local buffer
+    void OnCombinedBuffersUploaded(VkBuffer staging, VkDeviceMemory stagingMem,
+                                   const std::vector<BufferUploadRunnable::UploadSegment>& segments);
+
     // 清理 staging buffer（对象已销毁时使用）
     void CleanupStaging(VkBuffer staging, VkDeviceMemory stagingMem);
 
     // 生命周期令牌：对象销毁时标记失效，阻止异步回调访问野指针
     std::shared_ptr<std::atomic<bool>> m_alive;
     bool m_buffersReady = false;
+
+    // 上传代号：SetMeshData 每次调用递增，异步回调检查是否匹配，
+    // 防止旧回调在 SetMeshData 被连续调用后覆盖新数据
+    uint64_t m_uploadGeneration = 0;
 };
 
 

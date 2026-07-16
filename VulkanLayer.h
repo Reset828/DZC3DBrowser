@@ -3,7 +3,7 @@
 
 #include "VulkanObject.h"
 #include <vector>
-#include <mutex>
+#include <shared_mutex>
 
 class VulkanLayer : public VulkanObject {
 public:
@@ -28,7 +28,7 @@ public:
     std::vector<VulkanObject*> m_arrChild;
 
 protected:
-    mutable std::mutex m_mutex;
+    mutable std::shared_mutex m_mutex;
 };
 
 #endif //__VULKAN_LAYER_H__

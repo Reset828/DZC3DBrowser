@@ -32,32 +32,15 @@ void ObjParseRunnable::run() {
     }
     file.close();
 
-    // --- 2. 第一遍扫描：统计 v 和 f 的行数（预分配优化） ---
-    size_t vertexCount = 0;
-    size_t faceCount = 0;
-
-    {
-        const char* ptr = content.data();
-        const char* end = ptr + content.size();
-        while (ptr < end) {
-            if (ptr[0] == 'v' && ptr[1] == ' ') {
-                ++vertexCount;
-            } else if (ptr[0] == 'f' && ptr[1] == ' ') {
-                ++faceCount;
-            }
-            // 跳到下一行
-            while (ptr < end && *ptr != '\n') ++ptr;
-            if (ptr < end) ++ptr; // skip '\n'
-        }
-    }
-
-    // --- 3. 预分配容器 ---
+    // --- 2. 单遍解析（不预扫描，vector 动态增长即可） ---
     std::vector<Vertex3D> vertices;
-    vertices.reserve(vertexCount);
     std::vector<uint32_t> indices;
-    indices.reserve(faceCount * 3);
 
-    // --- 4. 第二遍：解析 ---
+    // 根据文件大小粗略预分配，减少 reallocation
+    vertices.reserve(fileSize / 64);
+    indices.reserve(fileSize / 64);
+
+    // --- 3. 解析 ---
     const char* ptr = content.data();
     const char* end = ptr + content.size();
 
@@ -156,7 +139,7 @@ void ObjParseRunnable::run() {
         if (ptr < end) ++ptr; // skip '\n'
     }
 
-    // --- 5. 将模型缩放到 [-1, 1] 范围并居中 ---
+    // --- 4. 将模型缩放到 [-1, 1] 范围并居中 ---
     Vec3 center = { (bboxMin.x + bboxMax.x) * 0.5f,
                     (bboxMin.y + bboxMax.y) * 0.5f,
                     (bboxMin.z + bboxMax.z) * 0.5f };
@@ -187,7 +170,7 @@ void ObjParseRunnable::run() {
         vert.color[2] = b;
     }
 
-    // --- 6. 回调主线程（使 lambda 可拷贝：将数据移入 shared_ptr） ---
+    // --- 5. 回调主线程（使 lambda 可拷贝：将数据移入 shared_ptr） ---
     auto sharedVerts = std::make_shared<std::vector<Vertex3D>>(std::move(vertices));
     auto sharedIdxs  = std::make_shared<std::vector<uint32_t>>(std::move(indices));
     auto callback    = m_callback;

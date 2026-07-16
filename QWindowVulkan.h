@@ -14,9 +14,9 @@ public:
     explicit QWindowVulkan(VulkanRender* renderer);
     ~QWindowVulkan();
 
-    VkSurfaceKHR GetSurface() const { return m_surface; }
-    VkInstance GetVkInstance() const { return m_instance; }
-    void SetRenderer(VulkanRender* renderer) { m_renderer = renderer; }
+    VkSurfaceKHR GetSurface() const;
+    VkInstance GetVkInstance() const;
+    void SetRenderer(VulkanRender* renderer);
 
 signals:
     void vulkanReady();

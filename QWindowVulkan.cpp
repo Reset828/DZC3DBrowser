@@ -84,3 +84,8 @@ bool QWindowVulkan::CreateVulkanSurface() {
 
     return true;
 }
+
+
+VkSurfaceKHR QWindowVulkan::GetSurface() const { return m_surface; }
+VkInstance QWindowVulkan::GetVkInstance() const { return m_instance; }
+void QWindowVulkan::SetRenderer(VulkanRender* renderer) { m_renderer = renderer; }

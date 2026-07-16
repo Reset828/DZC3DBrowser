@@ -1,5 +1,6 @@
 ﻿#include "VulkanLayer.h"
 #include <algorithm>
+#include <shared_mutex>
 
 // ============================================================================
 // VulkanLayer 构造和析构
@@ -18,14 +19,17 @@ VulkanLayer::~VulkanLayer() {
 // ============================================================================
 
 bool VulkanLayer::IsEmpty() const {
+    std::shared_lock lock(m_mutex);
     return m_arrChild.empty();
 }
 
 uint32_t VulkanLayer::GetCount() const {
+    std::shared_lock lock(m_mutex);
     return static_cast<uint32_t>(m_arrChild.size());
 }
 
 VulkanObject* VulkanLayer::GetChild(uint32_t index) {
+    std::shared_lock lock(m_mutex);
     if (index < m_arrChild.size()) {
         return m_arrChild[index];
     }
@@ -33,6 +37,7 @@ VulkanObject* VulkanLayer::GetChild(uint32_t index) {
 }
 
 const VulkanObject* VulkanLayer::GetChild(uint32_t index) const {
+    std::shared_lock lock(m_mutex);
     if (index < m_arrChild.size()) {
         return m_arrChild[index];
     }
@@ -42,6 +47,7 @@ const VulkanObject* VulkanLayer::GetChild(uint32_t index) const {
 int VulkanLayer::FindChild(const VulkanObject* pObject) const {
     if (!pObject) return -1;
 
+    std::shared_lock lock(m_mutex);
     for (size_t i = 0; i < m_arrChild.size(); i++) {
         if (m_arrChild[i] == pObject) {
             return static_cast<int>(i);
@@ -55,6 +61,7 @@ int VulkanLayer::FindChild(const VulkanObject* pObject) const {
 // ============================================================================
 
 void VulkanLayer::Clear() {
+    std::unique_lock lock(m_mutex);
     for (auto* child : m_arrChild) {
         if (child) {
             delete child;
@@ -66,16 +73,15 @@ void VulkanLayer::Clear() {
 void VulkanLayer::AddChild(VulkanObject* pObject) {
     if (!pObject) return;
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::shared_mutex> lock(m_mutex);
 
     pObject->SetParent(this);
     m_arrChild.push_back(pObject);
 }
 
 void VulkanLayer::RemoveChild(uint32_t index) {
+    std::unique_lock lock(m_mutex);
     if (index >= m_arrChild.size()) return;
-
-    std::lock_guard<std::mutex> lock(m_mutex);
 
     VulkanObject* child = m_arrChild[index];
     if (child) {
@@ -87,9 +93,9 @@ void VulkanLayer::RemoveChild(uint32_t index) {
 void VulkanLayer::RemoveChild(VulkanObject* pObject) {
     if (!pObject) return;
 
+    std::unique_lock lock(m_mutex);
     auto it = std::find(m_arrChild.begin(), m_arrChild.end(), pObject);
     if (it != m_arrChild.end()) {
-        std::lock_guard<std::mutex> lock(m_mutex);
         delete *it;
         m_arrChild.erase(it);
     }
@@ -100,6 +106,7 @@ void VulkanLayer::RemoveChild(VulkanObject* pObject) {
 void VulkanLayer::Render(int iMode) {
     if (!IsVisible()) return;
 
+    std::shared_lock lock(m_mutex);
     for (auto* child : m_arrChild) {
         if (child && child->IsVisible()) {
             child->Render(iMode);

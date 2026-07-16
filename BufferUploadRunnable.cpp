@@ -17,6 +17,21 @@ BufferUploadRunnable::BufferUploadRunnable(
     , m_size(size)
     , m_usage(usage)
     , m_callback(std::move(callback))
+    , m_isMulti(false)
+{
+    setAutoDelete(true);
+}
+
+BufferUploadRunnable::BufferUploadRunnable(
+    VkDevice device,
+    VkPhysicalDevice physicalDevice,
+    std::vector<UploadSegment> segments,
+    MultiCallback callback)
+    : m_device(device)
+    , m_physicalDevice(physicalDevice)
+    , m_segments(std::move(segments))
+    , m_multiCallback(std::move(callback))
+    , m_isMulti(true)
 {
     setAutoDelete(true);
 }
@@ -24,10 +39,22 @@ BufferUploadRunnable::BufferUploadRunnable(
 BufferUploadRunnable::~BufferUploadRunnable() = default;
 
 void BufferUploadRunnable::run() {
+    // --- 0. 计算总大小（多段） ---
+    VkDeviceSize totalSize = m_size;
+    if (m_isMulti) {
+        totalSize = 0;
+        VkDeviceSize offset = 0;
+        for (auto& seg : m_segments) {
+            seg.stagingOffset = offset;
+            totalSize += seg.size;
+            offset += seg.size;
+        }
+    }
+
     // --- 1. 创建 staging buffer ---
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = m_size;
+    bufferInfo.size = totalSize;
     bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -76,16 +103,34 @@ void BufferUploadRunnable::run() {
 
     // --- 5. 映射并拷贝数据 ---
     void* mapped = nullptr;
-    vkMapMemory(m_device, stagingMemory, 0, m_size, 0, &mapped);
-    std::memcpy(mapped, m_data, static_cast<size_t>(m_size));
+    vkMapMemory(m_device, stagingMemory, 0, totalSize, 0, &mapped);
+
+    if (m_isMulti) {
+        for (const auto& seg : m_segments) {
+            std::memcpy(static_cast<char*>(mapped) + seg.stagingOffset,
+                        seg.data, static_cast<size_t>(seg.size));
+        }
+    } else {
+        std::memcpy(mapped, m_data, static_cast<size_t>(m_size));
+    }
+
     vkUnmapMemory(m_device, stagingMemory);
 
     // --- 6. 回调主线程处理 device-local 创建和 GPU 拷贝 ---
     auto staging = stagingBuffer;
     auto memory = stagingMemory;
-    auto callback = m_callback;
 
-    QMetaObject::invokeMethod(QApplication::instance(), [staging, memory, callback]() {
-        callback(staging, memory);
-    }, Qt::QueuedConnection);
+    if (m_isMulti) {
+        auto segments = m_segments;
+        auto callback = m_multiCallback;
+        QMetaObject::invokeMethod(QApplication::instance(),
+            [staging, memory, segments, callback]() {
+                callback(staging, memory, segments);
+            }, Qt::QueuedConnection);
+    } else {
+        auto callback = m_callback;
+        QMetaObject::invokeMethod(QApplication::instance(), [staging, memory, callback]() {
+            callback(staging, memory);
+        }, Qt::QueuedConnection);
+    }
 }

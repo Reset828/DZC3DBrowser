@@ -200,7 +200,7 @@ void MainWindow::StartRenderLoop() {
 void MainWindow::onOpenFile() {
     QString filePath = QFileDialog::getOpenFileName(this,
         QStringLiteral("选择 OBJ 文件"),
-        QStringLiteral("./obj"),
+        "",
         QStringLiteral("OBJ 文件 (*.obj)"));
 
     if (filePath.isEmpty()) return;
