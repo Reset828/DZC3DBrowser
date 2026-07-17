@@ -4,6 +4,7 @@
 #include "VulkanRender.h"
 #include "VertexTypes.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <vector>
 
 class VulkanRender3D : public VulkanRender {
@@ -19,6 +20,7 @@ public:
     void OnMouseUp(int button) override;
     void OnMouseWheel(float delta) override;
     void SetWireframeEnabled(bool enabled);
+    void SetCoordinateNormalization(const Vec3& sourceCenter, float normalizationScale);
     bool IsWireframeEnabled() const override { return m_wireframeMode; }
 
     void RequestCoordReadback(float ndcX, float ndcY);
@@ -44,6 +46,8 @@ protected:
     bool CreateDescriptorSets();
     void DestroyUniformBuffers();
     void UpdateUniformBuffer(uint32_t currentImage);
+    glm::vec3 ProjectToVirtualSphere(float nx, float ny) const;
+    void ApplyConstrainedLocalRotation(const glm::vec3& localAxis, float angle);
     static void InitIdentityMatrix(float mat[4][4]);
 
     bool CreateDepthResources();
@@ -56,6 +60,13 @@ protected:
 
     // 线框模式
     bool m_wireframeMode = false;
+
+    // 模型局部坐标系旋转：初始 X 向右、Y 向上、Z 朝屏幕外。
+    glm::quat m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    float m_orbitDistance = 3.0f;
+    int m_mouseButton = -1;
+    glm::vec2 m_lastMouse = glm::vec2(0.0f);
+    glm::vec3 m_lastVerticalLocalAxis = glm::vec3(1.0f, 0.0f, 0.0f);
 
     // 深度回读（世界坐标拾取）
     bool CreateDepthReadbackResources();
@@ -74,17 +85,9 @@ protected:
     float m_lastWorldCoord[3] = {};
     mutable bool m_newCoordAvailable = false;
     glm::mat4 m_frameInvViewProj[MAX_FRAMES_IN_FLIGHT] = {};
+    glm::mat4 m_normalizedToWorld = glm::mat4(1.0f);
 
 protected:
-    // 轨道相机
-    glm::vec3 m_orbitTarget = glm::vec3(0.0f);
-    float m_orbitDistance = 3.0f;
-    float m_orbitTheta = 0.0f;
-    float m_orbitPhi = 0.0f;
-
-    int m_mouseButton = -1;
-    glm::vec2 m_lastMouse = glm::vec2(0.0f);
-
     // 深度缓冲
     VkImage m_depthImage = VK_NULL_HANDLE;
     VkDeviceMemory m_depthImageMemory = VK_NULL_HANDLE;

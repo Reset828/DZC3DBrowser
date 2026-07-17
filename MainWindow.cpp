@@ -246,12 +246,22 @@ void MainWindow::onOpenFile() {
     auto* runnable = new ObjParseRunnable(
         filePath.toStdString(),
         [this](std::vector<Vertex3D>&& vertices,
-               std::vector<uint32_t>&& indices) {
+               std::vector<uint32_t>&& indices,
+               const Vec3& sourceCenter,
+               float normalizationScale) {
             if (!m_renderer || m_renderer->IsShuttingDown()) return;
 
             m_storedVertices = vertices;
             m_storedIndices = indices;
             m_hasStoredMesh = true;
+            m_meshSourceCenter[0] = sourceCenter.x;
+            m_meshSourceCenter[1] = sourceCenter.y;
+            m_meshSourceCenter[2] = sourceCenter.z;
+            m_meshNormalizationScale = normalizationScale;
+
+            if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+                render3D->SetCoordinateNormalization(sourceCenter, normalizationScale);
+            }
 
             auto* mesh = new VulkanMesh();
             mesh->SetRender(m_renderer);
@@ -285,6 +295,11 @@ void MainWindow::SwitchTo3D() {
     m_renderer->SetFramebufferSize(w, h);
     if (m_renderer->Initialize("VulkanReference", w, h)) {
         if (m_hasStoredMesh) {
+            auto* render3D = static_cast<VulkanRender3D*>(m_renderer);
+            render3D->SetCoordinateNormalization(
+                Vec3{ m_meshSourceCenter[0], m_meshSourceCenter[1], m_meshSourceCenter[2] },
+                m_meshNormalizationScale);
+
             auto verts = m_storedVertices;
             auto idxs = m_storedIndices;
             auto* mesh = new VulkanMesh();

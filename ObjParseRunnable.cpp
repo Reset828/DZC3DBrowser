@@ -176,7 +176,7 @@ void ObjParseRunnable::run() {
     auto callback    = m_callback;
 
     QMetaObject::invokeMethod(QApplication::instance(),
-        [callback, sharedVerts, sharedIdxs]() {
-            callback(std::move(*sharedVerts), std::move(*sharedIdxs));
+        [callback, sharedVerts, sharedIdxs, center, scale]() {
+            callback(std::move(*sharedVerts), std::move(*sharedIdxs), center, scale);
         }, Qt::QueuedConnection);
 }

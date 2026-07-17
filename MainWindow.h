@@ -50,6 +50,8 @@ private:
     std::vector<Vertex3D> m_storedVertices;
     std::vector<uint32_t> m_storedIndices;
     bool m_hasStoredMesh = false;
+    float m_meshSourceCenter[3] = {};
+    float m_meshNormalizationScale = 1.0f;
 
     QCheckBox* m_borderCheck = nullptr;
 

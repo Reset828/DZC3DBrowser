@@ -13,7 +13,9 @@
 class ObjParseRunnable : public QRunnable {
 public:
     using Callback = std::function<void(std::vector<Vertex3D>&&,
-                                        std::vector<uint32_t>&&)>;
+                                        std::vector<uint32_t>&&,
+                                        const Vec3& sourceCenter,
+                                        float normalizationScale)>;
 
     explicit ObjParseRunnable(std::string filePath, Callback callback);
     ~ObjParseRunnable() override;
@@ -23,5 +25,4 @@ private:
     std::string m_filePath;
     Callback m_callback;
 };
-
 

@@ -3,8 +3,10 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
@@ -19,9 +21,7 @@ VulkanRender3D::~VulkanRender3D() {
     // Shutdown() 由基类 ~VulkanRender() 调用，会触发 OnShutdown()
 }
 
-// ============================================================================
-// 轨道相机控制
-// ============================================================================
+
 
 void VulkanRender3D::OnMouseDown(float nx, float ny, int button) {
     m_mouseButton = button;
@@ -30,19 +30,126 @@ void VulkanRender3D::OnMouseDown(float nx, float ny, int button) {
 
 void VulkanRender3D::OnMouseMove(float nx, float ny) {
     if (m_mouseButton < 0) return;
-    glm::vec2 delta = glm::vec2(nx, ny) - m_lastMouse;
+    const glm::vec2 previousMouse = m_lastMouse;
+    const glm::vec3 sphereFrom =
+        ProjectToVirtualSphere(previousMouse.x, previousMouse.y);
+    const glm::vec3 sphereTo = ProjectToVirtualSphere(nx, ny);
     m_lastMouse = glm::vec2(nx, ny);
 
     if (m_mouseButton == 0) {
-        m_orbitTheta -= delta.x * 180.0f;
-        m_orbitPhi += delta.y * 180.0f;
-        m_orbitPhi = glm::clamp(m_orbitPhi, -179.0f, 0.0f);
+        const glm::vec3 sphereCross = glm::cross(sphereFrom, sphereTo);
+        const float sinAngle = glm::length(sphereCross);
+        if (sinAngle <= std::numeric_limits<float>::epsilon()) return;
+
+        // 虚拟球决定旋转方向；旋转量按窗口短边上的实际移动比例计算，
+        // 消除双曲面外围的角速度衰减，使中心和外围保持相同灵敏度。
+        const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
+        const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
+        const float minExtent = std::min(width, height);
+        const glm::vec2 screenDelta(
+            (nx - previousMouse.x) * width / minExtent,
+            (ny - previousMouse.y) * height / minExtent);
+        constexpr float rotationSensitivity = 4.71238898038f; // 270 degrees
+        const float uniformAngle = glm::length(screenDelta) * rotationSensitivity;
+
+        // 当前交互只使用虚拟球旋转轴的 X/Y 分量。重新归一化后，斜向
+        // 拖拽仍保持方向比例，同时不会因为球面位置不同而降低总角速度。
+        glm::vec2 rotationAxisXY(sphereCross.x, sphereCross.y);
+        if (glm::length(rotationAxisXY) <= 1.0e-6f) {
+            rotationAxisXY = glm::vec2(screenDelta.y, screenDelta.x);
+        }
+        rotationAxisXY = glm::normalize(rotationAxisXY);
+        const glm::vec3 sphereRotation(
+            rotationAxisXY.x * uniformAngle,
+            rotationAxisXY.y * uniformAngle,
+            0.0f);
+
+        if (std::abs(sphereRotation.y) >
+            std::numeric_limits<float>::epsilon()) {
+            ApplyConstrainedLocalRotation(
+                glm::vec3(0.0f, 0.0f, 1.0f), sphereRotation.y);
+        }
+
+        if (std::abs(sphereRotation.x) >
+            std::numeric_limits<float>::epsilon()) {
+            // 把屏幕水平轴投影到模型局部 XY 平面。得到的连续组合轴会随
+            // 当前姿态在局部 X/Y 之间平滑过渡，不再发生离散切换。
+            const glm::vec3 worldLocalX =
+                m_modelRotation * glm::vec3(1.0f, 0.0f, 0.0f);
+            const glm::vec3 worldLocalY =
+                m_modelRotation * glm::vec3(0.0f, 1.0f, 0.0f);
+            const glm::vec2 localWeights(worldLocalX.x, worldLocalY.x);
+
+            glm::vec3 verticalLocalAxis = m_lastVerticalLocalAxis;
+            if (glm::length(localWeights) > 1.0e-4f) {
+                verticalLocalAxis = glm::normalize(
+                    glm::vec3(localWeights.x, localWeights.y, 0.0f));
+                m_lastVerticalLocalAxis = verticalLocalAxis;
+            }
+
+            ApplyConstrainedLocalRotation(verticalLocalAxis, sphereRotation.x);
+        }
     } else if (m_mouseButton == 1) {
-        float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
-        float moveSpeed = m_orbitDistance * 0.5f;
-        m_orbitTarget.x += -delta.x * moveSpeed * aspect;
-        m_orbitTarget.y += delta.y * moveSpeed;
+        // 中键平移（保留扩展点）
     }
+}
+
+glm::vec3 VulkanRender3D::ProjectToVirtualSphere(float nx, float ny) const {
+    // 使用窗口短边作为球体直径基准，避免宽高比将轨迹球拉成椭圆。
+    const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
+    const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
+    const float minExtent = std::min(width, height);
+    float x = (nx * 2.0f - 1.0f) * width / minExtent;
+    float y = (1.0f - ny * 2.0f) * height / minExtent;
+
+    const float distanceSquared = x * x + y * y;
+    const float distance = std::sqrt(distanceSquared);
+    constexpr float sphereToHyperbola = 0.70710678118f; // 1 / sqrt(2)
+
+    float z;
+    if (distance <= sphereToHyperbola) {
+        // 中心区域使用单位球面。
+        z = std::sqrt(1.0f - distanceSquared);
+    } else {
+        // 外围区域平滑连接双曲面。与吸附到圆周不同，同一径向方向上
+        // 继续移动时 z 仍会变化，因此窗口边缘也始终产生旋转增量。
+        z = 0.5f / distance;
+    }
+
+    return glm::normalize(glm::vec3(x, y, z));
+}
+
+void VulkanRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
+                                                    float angle) {
+    if (std::abs(angle) <= std::numeric_limits<float>::epsilon()) return;
+
+    auto rotationAt = [&](float ratio) {
+        return glm::normalize(m_modelRotation * glm::angleAxis(angle * ratio, localAxis));
+    };
+    auto zAxisDoesNotPointDown = [](const glm::quat& rotation) {
+        const glm::vec3 worldZ = rotation * glm::vec3(0.0f, 0.0f, 1.0f);
+        return worldZ.y >= -1.0e-6f;
+    };
+
+    glm::quat candidate = rotationAt(1.0f);
+    if (zAxisDoesNotPointDown(candidate)) {
+        m_modelRotation = candidate;
+        return;
+    }
+
+    // 本次拖动越过约束边界时，将旋转精确收敛到 Z.y == 0，
+    // 避免直接丢弃整个鼠标增量造成边界处跳动。
+    float allowed = 0.0f;
+    float rejected = 1.0f;
+    for (int i = 0; i < 16; ++i) {
+        const float middle = (allowed + rejected) * 0.5f;
+        if (zAxisDoesNotPointDown(rotationAt(middle))) {
+            allowed = middle;
+        } else {
+            rejected = middle;
+        }
+    }
+    m_modelRotation = rotationAt(allowed);
 }
 
 void VulkanRender3D::OnMouseUp(int /*button*/) {
@@ -630,41 +737,26 @@ void VulkanRender3D::DestroyUniformBuffers() {
 }
 
 void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
-    float thetaRad = glm::radians(m_orbitTheta);
-    float phiRad = glm::radians(m_orbitPhi);
-
-    // 计算相机位置
-    glm::vec3 eye(
-        m_orbitTarget.x + m_orbitDistance * cos(phiRad) * sin(thetaRad),
-        m_orbitTarget.y + m_orbitDistance * sin(phiRad),
-        m_orbitTarget.z + m_orbitDistance * cos(phiRad) * cos(thetaRad)
-    );
-
-    // 视图矩阵
-    glm::mat4 view = glm::lookAt(eye, m_orbitTarget, glm::vec3(0.0f, 1.0f, 0.0f));
-
-    // 投影矩阵（Vulkan 标准）
     float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
-    float zNear = 0.1f;
-    float zFar = 100.0f;
+
+    // 相机保持在 +Z 方向，模型自身坐标系通过 model 矩阵旋转。
+    const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
+    const glm::mat4 model = glm::mat4_cast(m_modelRotation);
+    const glm::mat4 view = glm::lookAt(
+        eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
     glm::mat4 proj = glm::perspectiveRH_ZO(
         glm::radians(45.0f),
         aspect,
-        zNear,
-        zFar
+        0.1f,
+        100.0f
     );
-    // Vulkan 需要翻转 Y 轴（glm 的 perspectiveRH_ZO 不自动翻转）
     proj[1][1] *= -1;
 
-
-
-    // 存储逆矩阵供坐标回读使用
     m_frameInvViewProj[currentImage] = glm::inverse(proj * view);
 
-    // 组装 UBO
     UniformBufferObject3D ubo{};
-    memcpy(ubo.model, glm::value_ptr(glm::mat4(1.0f)), sizeof(float) * 16);
+    memcpy(ubo.model, glm::value_ptr(model), sizeof(float) * 16);
     memcpy(ubo.view, glm::value_ptr(view), sizeof(float) * 16);
     memcpy(ubo.proj, glm::value_ptr(proj), sizeof(float) * 16);
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
@@ -672,6 +764,23 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
 
 void VulkanRender3D::SetWireframeEnabled(bool enabled) {
     m_wireframeMode = enabled;
+}
+
+void VulkanRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
+                                                 float normalizationScale) {
+    if (!std::isfinite(normalizationScale) || normalizationScale <= 0.0f) {
+        m_normalizedToWorld = glm::mat4(1.0f);
+        return;
+    }
+
+    // OBJ 导入时执行 normalized = (source - center) * scale。
+    // 状态栏需要源文件坐标，因此保存其逆变换供深度拾取结果使用。
+    const glm::mat4 translateToSource = glm::translate(
+        glm::mat4(1.0f),
+        glm::vec3(sourceCenter.x, sourceCenter.y, sourceCenter.z));
+    const glm::mat4 undoScale = glm::scale(
+        glm::mat4(1.0f), glm::vec3(1.0f / normalizationScale));
+    m_normalizedToWorld = translateToSource * undoScale;
 }
 
 void VulkanRender3D::InitIdentityMatrix(float mat[4][4]) {
@@ -816,16 +925,35 @@ void VulkanRender3D::ProcessDepthReadback(uint32_t frameIndex) {
     float depth;
     memcpy(&depth, m_depthReadbackMapped[frameIndex], sizeof(float));
 
-    if (depth > 0.999f) return;
-
     float x_ndc = m_pendingNDCX[frameIndex] * 2.0f - 1.0f;
     float y_ndc = 1.0f - m_pendingNDCY[frameIndex] * 2.0f;
 
     glm::mat4 invViewProj = m_frameInvViewProj[frameIndex];
 
-    glm::vec4 clipPos(x_ndc, y_ndc, depth, 1.0f);
-    glm::vec4 worldPos = invViewProj * clipPos;
-    worldPos /= worldPos.w;
+    glm::vec4 normalizedPos{};
+    if (std::isfinite(depth) && depth >= 0.0f && depth < 0.999f) {
+        // 光标位于模型表面：使用深度缓冲反投影到真实表面位置。
+        const glm::vec4 clipPos(x_ndc, y_ndc, depth, 1.0f);
+        normalizedPos = invViewProj * clipPos;
+        normalizedPos /= normalizedPos.w;
+    } else {
+        // 背景没有可用深度。用同一像素的近、远裁剪点构造世界射线，
+        // 与经过模型原点的 Z=0 工作平面求交，使窗口任意位置都有坐标。
+        glm::vec4 nearPos = invViewProj * glm::vec4(x_ndc, y_ndc, 0.0f, 1.0f);
+        glm::vec4 farPos  = invViewProj * glm::vec4(x_ndc, y_ndc, 1.0f, 1.0f);
+        nearPos /= nearPos.w;
+        farPos  /= farPos.w;
+
+        const glm::vec3 rayOrigin(nearPos);
+        const glm::vec3 rayDirection = glm::normalize(glm::vec3(farPos - nearPos));
+        const float denominator = rayDirection.z;
+        const float distance = std::abs(denominator) > 1.0e-6f
+            ? -rayOrigin.z / denominator
+            : 0.0f;
+        normalizedPos = glm::vec4(rayOrigin + rayDirection * distance, 1.0f);
+    }
+
+    glm::vec4 worldPos = m_normalizedToWorld * normalizedPos;
 
     m_lastWorldCoord[0] = worldPos.x;
     m_lastWorldCoord[1] = worldPos.y;
