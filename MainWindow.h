@@ -54,6 +54,7 @@ private:
     float m_meshNormalizationScale = 1.0f;
 
     QCheckBox* m_borderCheck = nullptr;
+    QCheckBox* m_grayCheck = nullptr;
 
     QLabel* m_coordX = nullptr;
     QLabel* m_coordY = nullptr;

@@ -47,6 +47,12 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
+    connect(m_grayCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+            render3D->SetGrayEnabled(checked);
+        }
+    });
+
     SetupStatusBar();
 
     setStyleSheet(QStringLiteral(R"(
@@ -112,6 +118,10 @@ void MainWindow::SetupToolBar() {
     m_borderCheck = new QCheckBox(QStringLiteral("线框模式"));
     m_borderCheck->setLayoutDirection(Qt::RightToLeft);
     toolbar->addWidget(m_borderCheck);
+
+    m_grayCheck = new QCheckBox(QStringLiteral("显示灰色"));
+    m_grayCheck->setLayoutDirection(Qt::RightToLeft);
+    toolbar->addWidget(m_grayCheck);
 }
 
 void MainWindow::SetupStatusBar() {
@@ -294,6 +304,8 @@ void MainWindow::SwitchTo3D() {
     m_renderer->SetSurface(surface);
     m_renderer->SetFramebufferSize(w, h);
     if (m_renderer->Initialize("VulkanReference", w, h)) {
+        static_cast<VulkanRender3D*>(m_renderer)->SetGrayEnabled(
+            m_grayCheck && m_grayCheck->isChecked());
         if (m_hasStoredMesh) {
             auto* render3D = static_cast<VulkanRender3D*>(m_renderer);
             render3D->SetCoordinateNormalization(

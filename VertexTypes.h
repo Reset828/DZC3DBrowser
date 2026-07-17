@@ -31,6 +31,7 @@ struct UniformBufferObject3D {
     alignas(16) float model[4][4];
     alignas(16) float view[4][4];
     alignas(16) float proj[4][4];
+    alignas(16) float displayOptions[4]; // x: 是否按局部 Z 显示灰度
 };
 
 #endif //__VERTEX_TYPES_H__

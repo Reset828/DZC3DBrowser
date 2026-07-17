@@ -89,8 +89,19 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
 
             ApplyConstrainedLocalRotation(verticalLocalAxis, sphereRotation.x);
         }
-    } else if (m_mouseButton == 1) {
-        // 中键平移（保留扩展点）
+    } else if (m_mouseButton == 2) {
+        // 中键平移：根据当前观察距离计算目标平面在屏幕上的世界尺寸，
+        // 使模型在不同缩放级别下都跟随鼠标移动相同的屏幕距离。
+        const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
+        const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
+        const float aspect = width / height;
+        const float visibleHeight = 2.0f * m_orbitDistance
+            * std::tan(glm::radians(45.0f) * 0.5f);
+        const float visibleWidth = visibleHeight * aspect;
+
+        const glm::vec2 mouseDelta = glm::vec2(nx, ny) - previousMouse;
+        m_panOffset.x += mouseDelta.x * visibleWidth;
+        m_panOffset.y -= mouseDelta.y * visibleHeight;
     }
 }
 
@@ -741,7 +752,8 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
 
     // 相机保持在 +Z 方向，模型自身坐标系通过 model 矩阵旋转。
     const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
-    const glm::mat4 model = glm::mat4_cast(m_modelRotation);
+    const glm::mat4 model = glm::translate(glm::mat4(1.0f), m_panOffset)
+        * glm::mat4_cast(m_modelRotation);
     const glm::mat4 view = glm::lookAt(
         eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
@@ -759,11 +771,16 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     memcpy(ubo.model, glm::value_ptr(model), sizeof(float) * 16);
     memcpy(ubo.view, glm::value_ptr(view), sizeof(float) * 16);
     memcpy(ubo.proj, glm::value_ptr(proj), sizeof(float) * 16);
+    ubo.displayOptions[0] = m_grayEnabled ? 1.0f : 0.0f;
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
 void VulkanRender3D::SetWireframeEnabled(bool enabled) {
     m_wireframeMode = enabled;
+}
+
+void VulkanRender3D::SetGrayEnabled(bool enabled) {
+    m_grayEnabled = enabled;
 }
 
 void VulkanRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
