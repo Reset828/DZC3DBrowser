@@ -2,19 +2,22 @@
 #define __MAIN_WINDOW_H__
 
 #include <QMainWindow>
+#include "VertexTypes.h"
 #include <vector>
 #include <cstdint>
 
 class QWindowVulkan;
 class VulkanRender;
 class VulkanLayer;
+class VulkanMesh;
 class QTimer;
 class QWidget;
 class QTreeWidget;
+class QTreeWidgetItem;
 class QPlainTextEdit;
 class QCheckBox;
 class QLabel;
-struct Vertex3D;
+class QString;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -38,6 +41,21 @@ private:
     void StartRenderLoop();
     void SwitchTo2D();
     void SwitchTo3D();
+    void AddLoadedModel(const QString& filePath,
+                        std::vector<Vertex3D>&& vertices,
+                        std::vector<uint32_t>&& indices);
+    void SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible);
+    void RemoveLoadedModel(QTreeWidgetItem* treeItem);
+    void RebuildSceneMeshes();
+    void ResetLoadedMeshPointers();
+
+    struct LoadedModel {
+        std::vector<Vertex3D> sourceVertices;
+        std::vector<uint32_t> indices;
+        VulkanMesh* mesh = nullptr;             // 所有权属于 m_scene
+        QTreeWidgetItem* treeItem = nullptr;    // 所有权属于 m_projectPanel
+        bool visible = true;
+    };
 
     VulkanRender* m_renderer;
     QWindowVulkan* m_vulkanWindow;
@@ -45,16 +63,15 @@ private:
     VulkanLayer* m_scene;
     QTimer* m_renderTimer;
     QTreeWidget* m_projectPanel;
+    QTreeWidgetItem* m_modelsTreeItem;
     QPlainTextEdit* m_outputWindow;
 
-    std::vector<Vertex3D> m_storedVertices;
-    std::vector<uint32_t> m_storedIndices;
-    bool m_hasStoredMesh = false;
-    float m_meshSourceCenter[3] = {};
-    float m_meshNormalizationScale = 1.0f;
+    std::vector<LoadedModel> m_loadedModels;
+    float m_sceneViewDistance = 3.0f;
 
     QCheckBox* m_borderCheck = nullptr;
     QCheckBox* m_grayCheck = nullptr;
+    QCheckBox* m_orthographicCheck = nullptr;
 
     QLabel* m_coordX = nullptr;
     QLabel* m_coordY = nullptr;

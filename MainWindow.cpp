@@ -15,6 +15,7 @@
 #include <QStatusBar>
 #include <QWidget>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QTimer>
 #include <QCloseEvent>
@@ -26,8 +27,12 @@
 #include <QToolButton>
 #include <QSplitter>
 #include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QPlainTextEdit>
 #include <QVBoxLayout>
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -36,6 +41,7 @@ MainWindow::MainWindow(QWidget* parent)
     , m_container(nullptr)
     , m_scene(new VulkanLayer())
     , m_renderTimer(nullptr)
+    , m_modelsTreeItem(nullptr)
 {
     resize(1280, 720);
     SetupToolBar();
@@ -50,6 +56,15 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_grayCheck, &QCheckBox::toggled, this, [this](bool checked) {
         if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
             render3D->SetGrayEnabled(checked);
+        }
+    });
+
+    connect(m_orthographicCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+            render3D->SetOrthographicEnabled(checked);
+            if (!checked) {
+                render3D->ResetView(m_sceneViewDistance);
+            }
         }
     });
 
@@ -108,10 +123,6 @@ void MainWindow::SetupToolBar() {
     QMenu* fileMenu = mb->addMenu(QStringLiteral("文件"));
     fileMenu->addAction(QStringLiteral("打开文件"), this, &MainWindow::onOpenFile);
 
-    QMenu* viewMenu = mb->addMenu(QStringLiteral("查看"));
-    viewMenu->addAction(QStringLiteral("3D查看"), this, &MainWindow::on3DController);
-    viewMenu->addAction(QStringLiteral("2D查看"), this, &MainWindow::on2DController);
-
     QToolBar* toolbar = addToolBar(QStringLiteral("工具"));
     toolbar->setMovable(false);
 
@@ -122,6 +133,11 @@ void MainWindow::SetupToolBar() {
     m_grayCheck = new QCheckBox(QStringLiteral("显示灰色"));
     m_grayCheck->setLayoutDirection(Qt::RightToLeft);
     toolbar->addWidget(m_grayCheck);
+
+    m_orthographicCheck = new QCheckBox(QStringLiteral("正射模式"));
+    m_orthographicCheck->setLayoutDirection(Qt::RightToLeft);
+    m_orthographicCheck->setChecked(false);
+    toolbar->addWidget(m_orthographicCheck);
 }
 
 void MainWindow::SetupStatusBar() {
@@ -145,8 +161,33 @@ void MainWindow::SetupVulkan() {
     m_vulkanWindow->installEventFilter(this);
 
     m_projectPanel = new QTreeWidget();
-    m_projectPanel->setHeaderLabel(QStringLiteral("工程"));
+    m_projectPanel->setHeaderLabel(QStringLiteral("主图层"));
     m_projectPanel->setMinimumWidth(150);
+    m_projectPanel->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    m_modelsTreeItem = new QTreeWidgetItem(m_projectPanel);
+    m_modelsTreeItem->setText(0, QStringLiteral("模型"));
+    m_modelsTreeItem->setExpanded(true);
+
+    connect(m_projectPanel, &QTreeWidget::customContextMenuRequested,
+            this, [this](const QPoint& pos) {
+        QTreeWidgetItem* item = m_projectPanel->itemAt(pos);
+        if (!item || item->parent() != m_modelsTreeItem) return;
+
+        QMenu menu(m_projectPanel);
+        QAction* showAction = menu.addAction(QStringLiteral("显示"));
+        QAction* hideAction = menu.addAction(QStringLiteral("隐藏"));
+        QAction* removeAction = menu.addAction(QStringLiteral("移除"));
+        QAction* selectedAction = menu.exec(m_projectPanel->viewport()->mapToGlobal(pos));
+
+        if (selectedAction == showAction) {
+            SetLoadedModelVisible(item, true);
+        } else if (selectedAction == hideAction) {
+            SetLoadedModelVisible(item, false);
+        } else if (selectedAction == removeAction) {
+            RemoveLoadedModel(item);
+        }
+    });
 
     m_outputWindow = new QPlainTextEdit();
     m_outputWindow->setReadOnly(true);
@@ -251,36 +292,163 @@ void MainWindow::onOpenFile() {
 
     if (filePath.isEmpty()) return;
 
-    m_scene->Clear();
-
     auto* runnable = new ObjParseRunnable(
         filePath.toStdString(),
-        [this](std::vector<Vertex3D>&& vertices,
-               std::vector<uint32_t>&& indices,
-               const Vec3& sourceCenter,
-               float normalizationScale) {
+        [this, filePath](std::vector<Vertex3D>&& vertices,
+                         std::vector<uint32_t>&& indices,
+                         const Vec3& /*sourceCenter*/,
+                         float /*normalizationScale*/) {
             if (!m_renderer || m_renderer->IsShuttingDown()) return;
-
-            m_storedVertices = vertices;
-            m_storedIndices = indices;
-            m_hasStoredMesh = true;
-            m_meshSourceCenter[0] = sourceCenter.x;
-            m_meshSourceCenter[1] = sourceCenter.y;
-            m_meshSourceCenter[2] = sourceCenter.z;
-            m_meshNormalizationScale = normalizationScale;
-
-            if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
-                render3D->SetCoordinateNormalization(sourceCenter, normalizationScale);
+            AddLoadedModel(filePath, std::move(vertices), std::move(indices));
+        },
+        [this, filePath](const std::string& message, bool isError) {
+            const QString text = QStringLiteral("%1: %2")
+                .arg(QFileInfo(filePath).fileName(), QString::fromStdString(message));
+            if (m_outputWindow) {
+                m_outputWindow->appendPlainText(text);
             }
-
-            auto* mesh = new VulkanMesh();
-            mesh->SetRender(m_renderer);
-            mesh->SetMeshData(std::move(vertices), std::move(indices));
-            m_scene->AddChild(mesh);
+            if (isError) {
+                QMessageBox::warning(this, QStringLiteral("OBJ 加载失败"), text);
+            }
         });
 
 
     QThreadPool::globalInstance()->start(runnable);
+}
+
+void MainWindow::AddLoadedModel(const QString& filePath,
+                                std::vector<Vertex3D>&& vertices,
+                                std::vector<uint32_t>&& indices) {
+    if (vertices.empty() || indices.empty()) return;
+
+    LoadedModel model;
+    model.sourceVertices = std::move(vertices);
+    model.indices = std::move(indices);
+    model.treeItem = new QTreeWidgetItem(m_modelsTreeItem);
+    model.treeItem->setText(0, QFileInfo(filePath).fileName());
+    m_modelsTreeItem->setExpanded(true);
+
+    m_loadedModels.push_back(std::move(model));
+    RebuildSceneMeshes();
+}
+
+void MainWindow::SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible) {
+    auto it = std::find_if(m_loadedModels.begin(), m_loadedModels.end(),
+        [treeItem](const LoadedModel& model) {
+            return model.treeItem == treeItem;
+        });
+    if (it == m_loadedModels.end() || it->visible == visible) return;
+
+    it->visible = visible;
+    if (it->mesh) {
+        it->mesh->SetVisible(visible);
+    }
+}
+
+void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
+    auto it = std::find_if(m_loadedModels.begin(), m_loadedModels.end(),
+        [treeItem](const LoadedModel& model) {
+            return model.treeItem == treeItem;
+        });
+    if (it == m_loadedModels.end()) return;
+
+    if (it->mesh && m_scene) {
+        if (m_renderer && m_renderer->IsInitialized()) {
+            m_renderer->WaitForIdle();
+        }
+        m_scene->RemoveChild(it->mesh);
+        it->mesh = nullptr;
+    }
+
+    delete it->treeItem;
+    it->treeItem = nullptr;
+    m_loadedModels.erase(it);
+}
+
+void MainWindow::RebuildSceneMeshes() {
+    if (!m_renderer || !m_renderer->IsInitialized() || m_loadedModels.empty()) return;
+
+    Vec3 bboxMin = { std::numeric_limits<float>::max(),
+                     std::numeric_limits<float>::max(),
+                     std::numeric_limits<float>::max() };
+    Vec3 bboxMax = { std::numeric_limits<float>::lowest(),
+                     std::numeric_limits<float>::lowest(),
+                     std::numeric_limits<float>::lowest() };
+
+    for (const LoadedModel& model : m_loadedModels) {
+        for (const Vertex3D& vertex : model.sourceVertices) {
+            bboxMin.x = std::min(bboxMin.x, vertex.position[0]);
+            bboxMin.y = std::min(bboxMin.y, vertex.position[1]);
+            bboxMin.z = std::min(bboxMin.z, vertex.position[2]);
+            bboxMax.x = std::max(bboxMax.x, vertex.position[0]);
+            bboxMax.y = std::max(bboxMax.y, vertex.position[1]);
+            bboxMax.z = std::max(bboxMax.z, vertex.position[2]);
+        }
+    }
+
+    const Vec3 center = {
+        (bboxMin.x + bboxMax.x) * 0.5f,
+        (bboxMin.y + bboxMax.y) * 0.5f,
+        (bboxMin.z + bboxMax.z) * 0.5f
+    };
+    const float sizeX = bboxMax.x - bboxMin.x;
+    const float sizeY = bboxMax.y - bboxMin.y;
+    const float sizeZ = bboxMax.z - bboxMin.z;
+    const float maxSize = std::max({ sizeX, sizeY, sizeZ });
+    const float scale = maxSize > std::numeric_limits<float>::epsilon()
+        ? 2.0f / maxSize
+        : 1.0f;
+
+    // 按默认朝向计算能容纳总体包围盒的透视距离。
+    const float aspect = static_cast<float>(std::max(1, m_vulkanWindow->width())) /
+                         static_cast<float>(std::max(1, m_vulkanWindow->height()));
+    constexpr float verticalHalfFov = 0.3926990817f; // 45° / 2
+    const float tanVertical = std::tan(verticalHalfFov);
+    const float tanHorizontal = tanVertical * aspect;
+    const float halfX = sizeX * scale * 0.5f;
+    const float halfY = sizeY * scale * 0.5f;
+    const float halfZ = sizeZ * scale * 0.5f;
+    const float fitDistance = halfZ +
+        std::max(halfY / tanVertical, halfX / tanHorizontal) + 0.1f;
+    m_sceneViewDistance = std::max(3.0f, fitDistance);
+
+    if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+        if (m_orthographicCheck && m_orthographicCheck->isChecked()) {
+            m_orthographicCheck->setChecked(false);
+        } else {
+            render3D->SetOrthographicEnabled(false);
+            render3D->ResetView(m_sceneViewDistance);
+        }
+        render3D->SetCoordinateNormalization(center, scale);
+    }
+
+    // SetMeshData 会替换旧 GPU 缓冲区，先确保正在显示的帧已完成。
+    m_renderer->WaitForIdle();
+
+    for (LoadedModel& model : m_loadedModels) {
+        std::vector<Vertex3D> normalizedVertices = model.sourceVertices;
+        for (Vertex3D& vertex : normalizedVertices) {
+            vertex.position[0] = (vertex.position[0] - center.x) * scale;
+            vertex.position[1] = (vertex.position[1] - center.y) * scale;
+            vertex.position[2] = (vertex.position[2] - center.z) * scale;
+        }
+
+        if (!model.mesh) {
+            model.mesh = new VulkanMesh();
+            model.mesh->SetRender(m_renderer);
+            model.mesh->SetVisible(model.visible);
+            m_scene->AddChild(model.mesh);
+        }
+
+        auto indices = model.indices;
+        model.mesh->SetMeshData(std::move(normalizedVertices), std::move(indices));
+    }
+}
+
+void MainWindow::ResetLoadedMeshPointers() {
+    for (LoadedModel& model : m_loadedModels) {
+        model.mesh = nullptr;
+    }
 }
 
 void MainWindow::SwitchTo3D() {
@@ -289,6 +457,7 @@ void MainWindow::SwitchTo3D() {
 
     m_renderTimer->stop();
     m_scene->Clear();
+    ResetLoadedMeshPointers();
     m_renderer->Shutdown();
     delete m_renderer;
 
@@ -304,21 +473,10 @@ void MainWindow::SwitchTo3D() {
     m_renderer->SetSurface(surface);
     m_renderer->SetFramebufferSize(w, h);
     if (m_renderer->Initialize("VulkanReference", w, h)) {
-        static_cast<VulkanRender3D*>(m_renderer)->SetGrayEnabled(
-            m_grayCheck && m_grayCheck->isChecked());
-        if (m_hasStoredMesh) {
-            auto* render3D = static_cast<VulkanRender3D*>(m_renderer);
-            render3D->SetCoordinateNormalization(
-                Vec3{ m_meshSourceCenter[0], m_meshSourceCenter[1], m_meshSourceCenter[2] },
-                m_meshNormalizationScale);
-
-            auto verts = m_storedVertices;
-            auto idxs = m_storedIndices;
-            auto* mesh = new VulkanMesh();
-            mesh->SetRender(m_renderer);
-            mesh->SetMeshData(std::move(verts), std::move(idxs));
-            m_scene->AddChild(mesh);
-        }
+        auto* render3D = static_cast<VulkanRender3D*>(m_renderer);
+        render3D->SetGrayEnabled(m_grayCheck && m_grayCheck->isChecked());
+        render3D->SetWireframeEnabled(m_borderCheck && m_borderCheck->isChecked());
+        RebuildSceneMeshes();
         m_renderTimer->start(16);
     }
 }
@@ -329,6 +487,7 @@ void MainWindow::SwitchTo2D() {
 
     m_renderTimer->stop();
     m_scene->Clear();
+    ResetLoadedMeshPointers();
     m_renderer->Shutdown();
     delete m_renderer;
 
@@ -344,14 +503,7 @@ void MainWindow::SwitchTo2D() {
     m_renderer->SetSurface(surface);
     m_renderer->SetFramebufferSize(w, h);
     if (m_renderer->Initialize("VulkanReference", w, h)) {
-        if (m_hasStoredMesh) {
-            auto verts = m_storedVertices;
-            auto idxs = m_storedIndices;
-            auto* mesh = new VulkanMesh();
-            mesh->SetRender(m_renderer);
-            mesh->SetMeshData(std::move(verts), std::move(idxs));
-            m_scene->AddChild(mesh);
-        }
+        RebuildSceneMeshes();
         m_renderTimer->start(16);
     }
 }

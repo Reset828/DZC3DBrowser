@@ -51,15 +51,18 @@ void VulkanMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
     auto segsCopy = std::make_shared<std::vector<BufferUploadRunnable::UploadSegment>>(segments);
 
     auto task = new BufferUploadRunnable(device, phyDev, std::move(segments),
-        [alive, this, vertData, idxData, segsCopy, gen](VkBuffer staging,
-                                                         VkDeviceMemory stagingMem,
+        [alive, this, device, vertData, idxData, segsCopy, gen](VkBuffer staging,
+                                                                VkDeviceMemory stagingMem,
             const std::vector<BufferUploadRunnable::UploadSegment>& resultSegs) {
-            if (!*alive || gen != m_uploadGeneration) {
-                VkDevice dev = m_pRender ? m_pRender->GetDevice() : VK_NULL_HANDLE;
-                if (dev != VK_NULL_HANDLE) {
-                    vkDestroyBuffer(dev, staging, nullptr);
-                    vkFreeMemory(dev, stagingMem, nullptr);
+            if (!*alive) {
+                if (device != VK_NULL_HANDLE) {
+                    vkDestroyBuffer(device, staging, nullptr);
+                    vkFreeMemory(device, stagingMem, nullptr);
                 }
+                return;
+            }
+            if (gen != m_uploadGeneration) {
+                CleanupStaging(staging, stagingMem);
                 return;
             }
             OnCombinedBuffersUploaded(staging, stagingMem, resultSegs);

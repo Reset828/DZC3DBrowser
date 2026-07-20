@@ -21,6 +21,7 @@ struct Vertex3D {
     float position[3];
     float color[3];
     float texCoord[2];
+    float normal[3];
 
     static VkVertexInputBindingDescription GetBindingDescription();
     static std::vector<VkVertexInputAttributeDescription> GetAttributeDescriptions();

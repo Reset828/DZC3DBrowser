@@ -757,15 +757,22 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     const glm::mat4 view = glm::lookAt(
         eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
-    glm::mat4 proj = glm::perspectiveRH_ZO(
-        glm::radians(45.0f),
-        aspect,
-        0.1f,
-        100.0f
-    );
+    const float verticalFov = glm::radians(45.0f);
+    glm::mat4 proj;
+    if (m_orthographicEnabled) {
+        // 使用与当前透视距离相同的可视高度，切换时模型屏幕尺寸保持稳定。
+        const float halfHeight = m_orbitDistance * std::tan(verticalFov * 0.5f);
+        const float halfWidth = halfHeight * aspect;
+        proj = glm::orthoRH_ZO(-halfWidth, halfWidth,
+                               -halfHeight, halfHeight,
+                               0.1f, 100.0f);
+    } else {
+        proj = glm::perspectiveRH_ZO(verticalFov, aspect, 0.1f, 100.0f);
+    }
     proj[1][1] *= -1;
 
     m_frameInvViewProj[currentImage] = glm::inverse(proj * view);
+    m_frameRenderToSource[currentImage] = m_normalizedToWorld * glm::inverse(model);
 
     UniformBufferObject3D ubo{};
     memcpy(ubo.model, glm::value_ptr(model), sizeof(float) * 16);
@@ -781,6 +788,21 @@ void VulkanRender3D::SetWireframeEnabled(bool enabled) {
 
 void VulkanRender3D::SetGrayEnabled(bool enabled) {
     m_grayEnabled = enabled;
+}
+
+void VulkanRender3D::SetOrthographicEnabled(bool enabled) {
+    m_orthographicEnabled = enabled;
+}
+
+void VulkanRender3D::ResetView(float orbitDistance) {
+    m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    m_panOffset = glm::vec3(0.0f);
+    m_orbitDistance = std::isfinite(orbitDistance)
+        ? glm::clamp(orbitDistance, 0.1f, 1000.0f)
+        : 3.0f;
+    m_mouseButton = -1;
+    m_lastMouse = glm::vec2(0.0f);
+    m_lastVerticalLocalAxis = glm::vec3(1.0f, 0.0f, 0.0f);
 }
 
 void VulkanRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
@@ -947,30 +969,36 @@ void VulkanRender3D::ProcessDepthReadback(uint32_t frameIndex) {
 
     glm::mat4 invViewProj = m_frameInvViewProj[frameIndex];
 
-    glm::vec4 normalizedPos{};
+    const glm::mat4 renderToSource = m_frameRenderToSource[frameIndex];
+    glm::vec4 worldPos{};
     if (std::isfinite(depth) && depth >= 0.0f && depth < 0.999f) {
         // 光标位于模型表面：使用深度缓冲反投影到真实表面位置。
         const glm::vec4 clipPos(x_ndc, y_ndc, depth, 1.0f);
-        normalizedPos = invViewProj * clipPos;
-        normalizedPos /= normalizedPos.w;
+        glm::vec4 renderPos = invViewProj * clipPos;
+        renderPos /= renderPos.w;
+        worldPos = renderToSource * renderPos;
+        worldPos /= worldPos.w;
     } else {
-        // 背景没有可用深度。用同一像素的近、远裁剪点构造世界射线，
-        // 与经过模型原点的 Z=0 工作平面求交，使窗口任意位置都有坐标。
-        glm::vec4 nearPos = invViewProj * glm::vec4(x_ndc, y_ndc, 0.0f, 1.0f);
-        glm::vec4 farPos  = invViewProj * glm::vec4(x_ndc, y_ndc, 1.0f, 1.0f);
-        nearPos /= nearPos.w;
-        farPos  /= farPos.w;
+        // 背景没有可用深度。把近、远裁剪点还原到 OBJ 世界坐标，
+        // 再与世界 Z=0 平面求交。
+        glm::vec4 nearRender = invViewProj * glm::vec4(x_ndc, y_ndc, 0.0f, 1.0f);
+        glm::vec4 farRender  = invViewProj * glm::vec4(x_ndc, y_ndc, 1.0f, 1.0f);
+        nearRender /= nearRender.w;
+        farRender  /= farRender.w;
 
-        const glm::vec3 rayOrigin(nearPos);
-        const glm::vec3 rayDirection = glm::normalize(glm::vec3(farPos - nearPos));
+        glm::vec4 nearWorld = renderToSource * nearRender;
+        glm::vec4 farWorld = renderToSource * farRender;
+        nearWorld /= nearWorld.w;
+        farWorld /= farWorld.w;
+
+        const glm::vec3 rayOrigin(nearWorld);
+        const glm::vec3 rayDirection = glm::normalize(glm::vec3(farWorld - nearWorld));
         const float denominator = rayDirection.z;
         const float distance = std::abs(denominator) > 1.0e-6f
             ? -rayOrigin.z / denominator
             : 0.0f;
-        normalizedPos = glm::vec4(rayOrigin + rayDirection * distance, 1.0f);
+        worldPos = glm::vec4(rayOrigin + rayDirection * distance, 1.0f);
     }
-
-    glm::vec4 worldPos = m_normalizedToWorld * normalizedPos;
 
     m_lastWorldCoord[0] = worldPos.x;
     m_lastWorldCoord[1] = worldPos.y;
