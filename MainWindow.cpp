@@ -1,4 +1,4 @@
-﻿#include "MainWindow.h"
+#include "MainWindow.h"
 #include "QWindowVulkan.h"
 #include "render/VulkanRender.h"
 #include "VulkanLayer.h"
@@ -28,6 +28,8 @@
 #include <QSplitter>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QStyleFactory>
+#include <QStyle>
 #include <QPlainTextEdit>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -73,7 +75,7 @@ MainWindow::MainWindow(QWidget* parent)
     setStyleSheet(QStringLiteral(R"(
         QMainWindow { background-color: #1e1e1e; }
         QWidget { background-color: #1e1e1e; color: #d4d4d4; }
-        QTreeWidget { background-color: #252526; color: #d4d4d4; border: none; outline: none; }
+        QTreeWidget { background-color: #252526; color: #d4d4d4; border: none; outline: none; show-decoration-selected: 0; }
         QTreeWidget::item:hover { background-color: #2a2d2e; }
         QTreeWidget::item:selected { background-color: #094771; }
         QHeaderView::section { background-color: #2d2d2d; color: #d4d4d4; border: none; padding: 4px; }
@@ -161,20 +163,39 @@ void MainWindow::SetupVulkan() {
     m_vulkanWindow->installEventFilter(this);
 
     m_projectPanel = new QTreeWidget();
+    if (QStyle* treeStyle = QStyleFactory::create(QStringLiteral("Fusion"))) {
+        treeStyle->setParent(m_projectPanel);
+        m_projectPanel->setStyle(treeStyle);
+    }
     m_projectPanel->setHeaderLabel(QStringLiteral("主图层"));
     m_projectPanel->setMinimumWidth(150);
     m_projectPanel->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_projectPanel->setRootIsDecorated(true);
+    m_projectPanel->setItemsExpandable(true);
+    m_projectPanel->setExpandsOnDoubleClick(false);
+    m_projectPanel->setIndentation(18);
 
     m_modelsTreeItem = new QTreeWidgetItem(m_projectPanel);
     m_modelsTreeItem->setText(0, QStringLiteral("模型"));
+    m_modelsTreeItem->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
     m_modelsTreeItem->setExpanded(true);
 
     connect(m_projectPanel, &QTreeWidget::customContextMenuRequested,
             this, [this](const QPoint& pos) {
         QTreeWidgetItem* item = m_projectPanel->itemAt(pos);
-        if (!item || item->parent() != m_modelsTreeItem) return;
+        if (!item) return;
 
         QMenu menu(m_projectPanel);
+        if (item == m_modelsTreeItem) {
+            QAction* clearAction = menu.addAction(QStringLiteral("清空"));
+            if (menu.exec(m_projectPanel->viewport()->mapToGlobal(pos)) == clearAction) {
+                ClearLoadedModels();
+            }
+            return;
+        }
+
+        if (item->parent() != m_modelsTreeItem) return;
+
         QAction* showAction = menu.addAction(QStringLiteral("显示"));
         QAction* hideAction = menu.addAction(QStringLiteral("隐藏"));
         QAction* removeAction = menu.addAction(QStringLiteral("移除"));
@@ -186,6 +207,20 @@ void MainWindow::SetupVulkan() {
             SetLoadedModelVisible(item, false);
         } else if (selectedAction == removeAction) {
             RemoveLoadedModel(item);
+        }
+    });
+
+    connect(m_projectPanel, &QTreeWidget::itemDoubleClicked,
+            this, [this](QTreeWidgetItem* item, int /*column*/) {
+        if (!item) return;
+
+        if (item == m_modelsTreeItem) {
+            FocusSceneOrModel(nullptr);
+            return;
+        }
+
+        if (item->parent() == m_modelsTreeItem) {
+            FocusSceneOrModel(item);
         }
     });
 
@@ -292,16 +327,20 @@ void MainWindow::onOpenFile() {
 
     if (filePath.isEmpty()) return;
 
+    const uint64_t loadGeneration = m_loadGeneration;
+
     auto* runnable = new ObjParseRunnable(
         filePath.toStdString(),
-        [this, filePath](std::vector<Vertex3D>&& vertices,
-                         std::vector<uint32_t>&& indices,
-                         const Vec3& /*sourceCenter*/,
-                         float /*normalizationScale*/) {
+        [this, filePath, loadGeneration](std::vector<Vertex3D>&& vertices,
+                                         std::vector<uint32_t>&& indices,
+                                         const Vec3& /*sourceCenter*/,
+                                         float /*normalizationScale*/) {
+            if (loadGeneration != m_loadGeneration) return;
             if (!m_renderer || m_renderer->IsShuttingDown()) return;
             AddLoadedModel(filePath, std::move(vertices), std::move(indices));
         },
-        [this, filePath](const std::string& message, bool isError) {
+        [this, filePath, loadGeneration](const std::string& message, bool isError) {
+            if (loadGeneration != m_loadGeneration) return;
             const QString text = QStringLiteral("%1: %2")
                 .arg(QFileInfo(filePath).fileName(), QString::fromStdString(message));
             if (m_outputWindow) {
@@ -365,6 +404,118 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
     m_loadedModels.erase(it);
 }
 
+void MainWindow::ClearLoadedModels() {
+    // Invalidate OBJ parse callbacks that were started before this clear.
+    ++m_loadGeneration;
+
+    if (m_renderer && m_renderer->IsInitialized()) {
+        m_renderer->WaitForIdle();
+    }
+
+    for (LoadedModel& model : m_loadedModels) {
+        if (model.mesh && m_scene) {
+            m_scene->RemoveChild(model.mesh);
+            model.mesh = nullptr;
+        }
+        delete model.treeItem;
+        model.treeItem = nullptr;
+    }
+    m_loadedModels.clear();
+
+    m_sceneViewDistance = 3.0f;
+    m_sceneSourceCenter[0] = 0.0f;
+    m_sceneSourceCenter[1] = 0.0f;
+    m_sceneSourceCenter[2] = 0.0f;
+    m_sceneNormalizationScale = 1.0f;
+
+    if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+        render3D->SetOrbitCenter(Vec3{});
+        render3D->ResetView(m_sceneViewDistance);
+        render3D->SetCoordinateNormalization(Vec3{}, 1.0f);
+        render3D->SetOrthographicEnabled(
+            m_orthographicCheck && m_orthographicCheck->isChecked());
+    }
+
+    m_coordX->setText(QStringLiteral("X: 0.000"));
+    m_coordY->setText(QStringLiteral("Y: 0.000"));
+    m_coordZ->setText(QStringLiteral("Z: 0.000"));
+}
+
+void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
+    if (m_loadedModels.empty()) return;
+
+    const LoadedModel* selectedModel = nullptr;
+    if (treeItem) {
+        auto it = std::find_if(m_loadedModels.begin(), m_loadedModels.end(),
+            [treeItem](const LoadedModel& model) {
+                return model.treeItem == treeItem;
+            });
+        if (it == m_loadedModels.end()) return;
+        selectedModel = &(*it);
+    }
+
+    Vec3 bboxMin = { std::numeric_limits<float>::max(),
+                     std::numeric_limits<float>::max(),
+                     std::numeric_limits<float>::max() };
+    Vec3 bboxMax = { std::numeric_limits<float>::lowest(),
+                     std::numeric_limits<float>::lowest(),
+                     std::numeric_limits<float>::lowest() };
+
+    auto includeModelBounds = [&](const LoadedModel& model) {
+        for (const Vertex3D& vertex : model.sourceVertices) {
+            bboxMin.x = std::min(bboxMin.x, vertex.position[0]);
+            bboxMin.y = std::min(bboxMin.y, vertex.position[1]);
+            bboxMin.z = std::min(bboxMin.z, vertex.position[2]);
+            bboxMax.x = std::max(bboxMax.x, vertex.position[0]);
+            bboxMax.y = std::max(bboxMax.y, vertex.position[1]);
+            bboxMax.z = std::max(bboxMax.z, vertex.position[2]);
+        }
+    };
+
+    if (selectedModel) {
+        includeModelBounds(*selectedModel);
+    } else {
+        for (const LoadedModel& model : m_loadedModels) {
+            includeModelBounds(model);
+        }
+    }
+
+    const Vec3 sourceCenter = {
+        (bboxMin.x + bboxMax.x) * 0.5f,
+        (bboxMin.y + bboxMax.y) * 0.5f,
+        (bboxMin.z + bboxMax.z) * 0.5f
+    };
+    const Vec3 normalizedCenter = {
+        (sourceCenter.x - m_sceneSourceCenter[0]) * m_sceneNormalizationScale,
+        (sourceCenter.y - m_sceneSourceCenter[1]) * m_sceneNormalizationScale,
+        (sourceCenter.z - m_sceneSourceCenter[2]) * m_sceneNormalizationScale
+    };
+
+    const float sizeX = (bboxMax.x - bboxMin.x) * m_sceneNormalizationScale;
+    const float sizeY = (bboxMax.y - bboxMin.y) * m_sceneNormalizationScale;
+    const float sizeZ = (bboxMax.z - bboxMin.z) * m_sceneNormalizationScale;
+    const float aspect = static_cast<float>(std::max(1, m_vulkanWindow->width())) /
+                         static_cast<float>(std::max(1, m_vulkanWindow->height()));
+    constexpr float verticalHalfFov = 0.3926990817f; // 45 degrees / 2
+    const float tanVertical = std::tan(verticalHalfFov);
+    const float tanHorizontal = tanVertical * aspect;
+    const float fitDistance = sizeZ * 0.5f +
+        std::max(sizeY * 0.5f / tanVertical,
+                 sizeX * 0.5f / tanHorizontal) + 0.1f;
+
+    const float viewDistance = std::max(0.1f, fitDistance);
+    if (!selectedModel) {
+        m_sceneViewDistance = viewDistance;
+    }
+
+    if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+        render3D->SetOrbitCenter(normalizedCenter);
+        render3D->ResetView(viewDistance);
+        render3D->SetOrthographicEnabled(
+            m_orthographicCheck && m_orthographicCheck->isChecked());
+    }
+}
+
 void MainWindow::RebuildSceneMeshes() {
     if (!m_renderer || !m_renderer->IsInitialized() || m_loadedModels.empty()) return;
 
@@ -398,6 +549,10 @@ void MainWindow::RebuildSceneMeshes() {
     const float scale = maxSize > std::numeric_limits<float>::epsilon()
         ? 2.0f / maxSize
         : 1.0f;
+    m_sceneSourceCenter[0] = center.x;
+    m_sceneSourceCenter[1] = center.y;
+    m_sceneSourceCenter[2] = center.z;
+    m_sceneNormalizationScale = scale;
 
     // 按默认朝向计算能容纳总体包围盒的透视距离。
     const float aspect = static_cast<float>(std::max(1, m_vulkanWindow->width())) /
@@ -413,12 +568,11 @@ void MainWindow::RebuildSceneMeshes() {
     m_sceneViewDistance = std::max(3.0f, fitDistance);
 
     if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
-        if (m_orthographicCheck && m_orthographicCheck->isChecked()) {
-            m_orthographicCheck->setChecked(false);
-        } else {
-            render3D->SetOrthographicEnabled(false);
-            render3D->ResetView(m_sceneViewDistance);
-        }
+        const bool orthographicEnabled =
+            m_orthographicCheck && m_orthographicCheck->isChecked();
+        render3D->SetOrbitCenter(Vec3{});
+        render3D->ResetView(m_sceneViewDistance);
+        render3D->SetOrthographicEnabled(orthographicEnabled);
         render3D->SetCoordinateNormalization(center, scale);
     }
 

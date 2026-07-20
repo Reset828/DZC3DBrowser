@@ -22,6 +22,7 @@ public:
     void SetWireframeEnabled(bool enabled);
     void SetGrayEnabled(bool enabled);
     void SetOrthographicEnabled(bool enabled);
+    void SetOrbitCenter(const Vec3& normalizedCenter);
     void ResetView(float orbitDistance = 3.0f);
     void SetCoordinateNormalization(const Vec3& sourceCenter, float normalizationScale);
     bool IsWireframeEnabled() const override { return m_wireframeMode; }
@@ -68,6 +69,7 @@ protected:
 
     // 模型局部坐标系旋转：初始 X 向右、Y 向上、Z 朝屏幕外。
     glm::quat m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::vec3 m_orbitCenter = glm::vec3(0.0f);
     glm::vec3 m_panOffset = glm::vec3(0.0f);
     float m_orbitDistance = 3.0f;
     int m_mouseButton = -1;

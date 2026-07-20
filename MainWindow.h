@@ -46,6 +46,8 @@ private:
                         std::vector<uint32_t>&& indices);
     void SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible);
     void RemoveLoadedModel(QTreeWidgetItem* treeItem);
+    void ClearLoadedModels();
+    void FocusSceneOrModel(QTreeWidgetItem* treeItem);
     void RebuildSceneMeshes();
     void ResetLoadedMeshPointers();
 
@@ -67,7 +69,10 @@ private:
     QPlainTextEdit* m_outputWindow;
 
     std::vector<LoadedModel> m_loadedModels;
+    uint64_t m_loadGeneration = 0;
     float m_sceneViewDistance = 3.0f;
+    float m_sceneSourceCenter[3] = {};
+    float m_sceneNormalizationScale = 1.0f;
 
     QCheckBox* m_borderCheck = nullptr;
     QCheckBox* m_grayCheck = nullptr;

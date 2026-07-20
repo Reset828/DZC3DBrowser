@@ -8,24 +8,39 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     if (grayEnabled > 0.5) {
-        // 优先使用 OBJ 法线；缺失时由片元位置导数重建三角面法线。
-        // 后一种方式无需按面复制顶点，同时天然保持硬边。
-        float normalLengthSquared = dot(fragViewNormal, fragViewNormal);
-        vec3 normal = normalLengthSquared > 1.0e-12
-            ? fragViewNormal * inversesqrt(normalLengthSquared)
-            : normalize(cross(dFdx(fragViewPosition), dFdy(fragViewPosition)));
-        if (!gl_FrontFacing) {
-            normal = -normal;
+        // The geometric normal preserves the triangular surface detail seen in
+        // dense scan meshes. OBJ normals still contribute to the final normal
+        // so authored shape information remains part of the rendering.
+        vec3 geometricNormal = normalize(
+            cross(dFdx(fragViewPosition), dFdy(fragViewPosition)));
+        vec3 viewDirection = normalize(-fragViewPosition);
+        if (dot(geometricNormal, viewDirection) < 0.0) {
+            geometricNormal = -geometricNormal;
         }
 
-        vec3 mainLight = normalize(vec3(-0.45, 0.65, 0.60));
-        vec3 fillLight = normalize(vec3(0.35, -0.20, 0.75));
+        float objNormalLengthSquared = dot(fragViewNormal, fragViewNormal);
+        vec3 normal = geometricNormal;
+        if (objNormalLengthSquared > 1.0e-12) {
+            vec3 objNormal = fragViewNormal * inversesqrt(objNormalLengthSquared);
+            if (dot(objNormal, geometricNormal) < 0.0) {
+                objNormal = -objNormal;
+            }
+            normal = normalize(mix(objNormal, geometricNormal, 0.72));
+        }
+
+        // A high, oblique key light exposes slopes and cavities. The weak
+        // camera-side fill prevents completely black faces without flattening
+        // the relief.
+        vec3 mainLight = normalize(vec3(-0.58, 0.72, 0.38));
+        vec3 fillLight = normalize(vec3(0.20, -0.15, 1.00));
         float mainDiffuse = max(dot(normal, mainLight), 0.0);
         float fillDiffuse = max(dot(normal, fillLight), 0.0);
-        float lighting = clamp(0.26 + 0.66 * mainDiffuse + 0.18 * fillDiffuse,
-                               0.0, 1.0);
+        float lighting = 0.13 + 0.78 * mainDiffuse + 0.09 * fillDiffuse;
 
-        float gray = pow(lighting, 0.85);
+        // Expand local contrast to produce the bright facets and dark recesses
+        // of the reference image while retaining continuous grayscale.
+        float gray = smoothstep(0.05, 0.95, lighting);
+        gray = pow(gray, 0.92);
         outColor = vec4(vec3(gray), 1.0);
     } else {
         outColor = vec4(fragColor, 1.0);

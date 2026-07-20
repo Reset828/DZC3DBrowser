@@ -37,6 +37,26 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
     m_lastMouse = glm::vec2(nx, ny);
 
     if (m_mouseButton == 0) {
+        if (m_orthographicEnabled) {
+            // In orthographic mode only horizontal mouse movement rotates the
+            // model. Vertical movement is deliberately ignored.
+            const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
+            const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
+            const float minExtent = std::min(width, height);
+            const float horizontalDelta =
+                (nx - previousMouse.x) * width / minExtent;
+            if (std::abs(horizontalDelta) <=
+                std::numeric_limits<float>::epsilon()) {
+                return;
+            }
+
+            constexpr float rotationSensitivity = 4.71238898038f; // 270 degrees
+            ApplyConstrainedLocalRotation(
+                glm::vec3(0.0f, 0.0f, 1.0f),
+                horizontalDelta * rotationSensitivity);
+            return;
+        }
+
         const glm::vec3 sphereCross = glm::cross(sphereFrom, sphereTo);
         const float sinAngle = glm::length(sphereCross);
         if (sinAngle <= std::numeric_limits<float>::epsilon()) return;
@@ -367,7 +387,9 @@ bool VulkanRender3D::CreatePipelines() {
         rasterizer.rasterizerDiscardEnable = VK_FALSE;
         rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
         rasterizer.lineWidth = 1.0f;
-        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+        // OBJ models may contain open surfaces that need to remain visible
+        // from either side, so the 3D pipelines render both face directions.
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
         rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
         rasterizer.depthBiasEnable = VK_FALSE;
 
@@ -753,7 +775,8 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     // 相机保持在 +Z 方向，模型自身坐标系通过 model 矩阵旋转。
     const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
     const glm::mat4 model = glm::translate(glm::mat4(1.0f), m_panOffset)
-        * glm::mat4_cast(m_modelRotation);
+        * glm::mat4_cast(m_modelRotation)
+        * glm::translate(glm::mat4(1.0f), -m_orbitCenter);
     const glm::mat4 view = glm::lookAt(
         eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
@@ -791,7 +814,20 @@ void VulkanRender3D::SetGrayEnabled(bool enabled) {
 }
 
 void VulkanRender3D::SetOrthographicEnabled(bool enabled) {
+    if (enabled && !m_orthographicEnabled) {
+        // Orthographic mode always starts from the model's front plane rather
+        // than projecting from the current perspective orientation.
+        m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        m_mouseButton = -1;
+        m_lastMouse = glm::vec2(0.0f);
+        m_lastVerticalLocalAxis = glm::vec3(1.0f, 0.0f, 0.0f);
+    }
     m_orthographicEnabled = enabled;
+}
+
+void VulkanRender3D::SetOrbitCenter(const Vec3& normalizedCenter) {
+    m_orbitCenter = glm::vec3(
+        normalizedCenter.x, normalizedCenter.y, normalizedCenter.z);
 }
 
 void VulkanRender3D::ResetView(float orbitDistance) {
