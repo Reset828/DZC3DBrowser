@@ -304,7 +304,7 @@ std::vector<std::array<size_t, 3>> TriangulateFace(
     return triangles;
 }
 
-} // namespace
+} // 匿名命名空间
 
 ObjParseRunnable::ObjParseRunnable(std::string filePath, Callback callback,
                                    DiagnosticCallback diagnosticCallback)

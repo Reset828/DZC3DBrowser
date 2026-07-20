@@ -468,7 +468,7 @@ void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
     const float sizeZ = (bboxMax.z - bboxMin.z) * m_sceneNormalizationScale;
     const float aspect = static_cast<float>(std::max(1, m_vulkanWindow->width())) /
                          static_cast<float>(std::max(1, m_vulkanWindow->height()));
-    constexpr float verticalHalfFov = 0.3926990817f; // 45 degrees / 2
+    constexpr float verticalHalfFov = 0.3926990817f; // 45度 / 2
     const float tanVertical = std::tan(verticalHalfFov);
     const float tanHorizontal = tanVertical * aspect;
     const float fitDistance = sizeZ * 0.5f +

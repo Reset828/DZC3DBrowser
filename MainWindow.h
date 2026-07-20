@@ -53,8 +53,8 @@ private:
     struct LoadedModel {
         std::vector<Vertex3D> sourceVertices;
         std::vector<uint32_t> indices;
-        VulkanMesh* mesh = nullptr;             // 所有权属于 m_scene
-        QTreeWidgetItem* treeItem = nullptr;    // 所有权属于 m_projectPanel
+        VulkanMesh* mesh = nullptr;             // 所有权属于场景
+        QTreeWidgetItem* treeItem = nullptr;    // 所有权属于主面板
         bool visible = true;
     };
 

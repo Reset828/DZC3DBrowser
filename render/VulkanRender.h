@@ -163,7 +163,7 @@ protected:
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;        // 交换链
     std::vector<VkImage> m_swapchainImages;             // 交换链图像
     VkFormat m_swapchainImageFormat;                    // 交换链图像格式
-    VkExtent2D m_swapchainExtent;                       // 交换链 extent
+    VkExtent2D m_swapchainExtent;                       // 交换链尺寸
     std::vector<VkImageView> m_swapchainImageViews;     // 交换链图像视图
     std::vector<VkFramebuffer> m_swapchainFramebuffers; // 交换链帧缓冲区
 
@@ -188,7 +188,7 @@ protected:
     static const int MAX_FRAMES_IN_FLIGHT = 2;           // 最大飞行帧数（双缓冲）
 
     bool m_framebufferResized = false;  // 帧缓冲区是否已调整大小
-    bool m_externalInstance = false;    // Instance 由外部管理（Qt 窗口）
+    bool m_externalInstance = false;    // 实例由外部管理（Qt 窗口）
     std::atomic<bool> m_shuttingDown{false};  // 关闭中标志（禁止异步回调创建新任务）
 
     std::vector<const char*> m_validationLayers = {
@@ -200,9 +200,9 @@ protected:
     };
 
 #ifdef NDEBUG
-    const bool m_enableValidationLayers = false;  // Release模式禁用验证层
+    const bool m_enableValidationLayers = false;  // 发布模式禁用验证层
 #else
-    const bool m_enableValidationLayers = true;   // Debug模式启用验证层
+    const bool m_enableValidationLayers = true;   // 调试模式启用验证层
 #endif
 };
 

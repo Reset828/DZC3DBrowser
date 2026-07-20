@@ -21,12 +21,10 @@ void main() {
     gl_Position = ubo.proj * viewPosition;
     gl_PointSize = 8.0;
 
-    // The default display remains pure black.
-    fragColor = vec3(0.0);
+    // 榛樿鏄剧ず绾粦鑹层€?    fragColor = vec3(0.0);
     fragViewPosition = viewPosition.xyz;
     grayEnabled = ubo.displayOptions.x;
 
     mat3 normalMatrix = transpose(inverse(mat3(ubo.view * ubo.model)));
-    // 零向量表示 OBJ 未提供法线，片元着色器将按三角面重建法线。
-    fragViewNormal = normalMatrix * inNormal;
+    // 闂嗚泛鎮滈柌蹇氥€冪粈?OBJ 閺堫亝褰佹笟娑欑《缁惧尅绱濋悧鍥у帗閻偓閼规彃娅掔亸鍡樺瘻娑撳顫楅棃銏ゅ櫢瀵ょ儤纭剁痪瑁も偓?    fragViewNormal = normalMatrix * inNormal;
 }

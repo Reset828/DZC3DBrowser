@@ -14,7 +14,7 @@ public:
         const void* data = nullptr;
         VkDeviceSize size = 0;
         VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        VkDeviceSize stagingOffset = 0; // run() 内填充
+        VkDeviceSize stagingOffset = 0; // 在 run() 中填充
     };
 
     using MultiCallback = std::function<void(VkBuffer, VkDeviceMemory,

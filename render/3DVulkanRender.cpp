@@ -44,7 +44,7 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
                 return;
             }
 
-            constexpr float rotationSensitivity = 4.71238898038f; // 270 degrees
+            constexpr float rotationSensitivity = 4.71238898038f; // 270度
             ApplyConstrainedLocalRotation(
                 glm::vec3(0.0f, 0.0f, 1.0f),
                 horizontalDelta * rotationSensitivity);
@@ -61,7 +61,7 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
         const glm::vec2 screenDelta(
             (nx - previousMouse.x) * width / minExtent,
             (ny - previousMouse.y) * height / minExtent);
-        constexpr float rotationSensitivity = 4.71238898038f; // 270 degrees
+        constexpr float rotationSensitivity = 4.71238898038f; // 270度
         const float uniformAngle = glm::length(screenDelta) * rotationSensitivity;
 
         glm::vec2 rotationAxisXY(sphereCross.x, sphereCross.y);
@@ -120,7 +120,7 @@ glm::vec3 VulkanRender3D::ProjectToVirtualSphere(float nx, float ny) const {
 
     const float distanceSquared = x * x + y * y;
     const float distance = std::sqrt(distanceSquared);
-    constexpr float sphereToHyperbola = 0.70710678118f; // 1 / sqrt(2)
+    constexpr float sphereToHyperbola = 0.70710678118f; // 1 / 平方根(2)
 
     float z;
     if (distance <= sphereToHyperbola) {
