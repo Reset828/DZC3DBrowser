@@ -23,9 +23,6 @@ VulkanObject& VulkanObject::operator=(const VulkanObject& obj) {
     return *this;
 }
 
-// ============================================================================
-// 渲染器关联
-// ============================================================================
 
 void VulkanObject::SetRender(VulkanRender* pRender) {
     m_pRender = pRender;
@@ -35,9 +32,6 @@ VulkanRender* VulkanObject::GetRender() const {
     return m_pRender;
 }
 
-// ============================================================================
-// 父对象管理
-// ============================================================================
 
 void VulkanObject::SetParent(VulkanObject* pParent) {
     m_pParent = pParent;
@@ -55,17 +49,11 @@ bool VulkanObject::IsDirty() const {
     return IsFlagEnabled(FT_DIRTY);
 }
 
-// ============================================================================
-// 对象类型
-// ============================================================================
 
 uint32_t VulkanObject::GetType() const {
     return m_uType;
 }
 
-// ============================================================================
-// 可见性控制
-// ============================================================================
 
 void VulkanObject::SetVisible(bool bVisible) {
     EnableFlag(FT_VISIBLE, bVisible);
@@ -75,9 +63,6 @@ bool VulkanObject::IsVisible() const {
     return IsFlagEnabled(FT_VISIBLE);
 }
 
-// ============================================================================
-// 颜色管理
-// ============================================================================
 
 void VulkanObject::SetColor(const Vec4& clr) {
     uint8_t r = static_cast<uint8_t>(clr.x * 255.0f);
@@ -102,9 +87,6 @@ Vec4 VulkanObject::GetColor() const {
     return Vec4{ r, g, b, a };
 }
 
-// ============================================================================
-// 标志位操作
-// ============================================================================
 
 void VulkanObject::EnableFlag(FlagType ft, bool bEnable) {
     if (bEnable) {
@@ -118,79 +100,62 @@ bool VulkanObject::IsFlagEnabled(FlagType ft) const {
     return (m_uFlag & static_cast<uint8_t>(ft)) != 0;
 }
 
-// ============================================================================
-// Vulkan缓冲区管理
-// ============================================================================
 
-// 创建顶点缓冲区
 void VulkanObject::CreateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     if (!m_pRender || vertices.empty()) return;
 
-    // 销毁旧缓冲区
     DestroyBuffers();
 
     VkDeviceSize bufferSize = sizeof(Vertex3D) * vertices.size();
 
-    // 创建暂存缓冲区（CPU可读写）
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
     CreateBufferHelper(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                        stagingBuffer, stagingBufferMemory);
 
-    // 映射并复制数据
     void* data;
     vkMapMemory(m_pRender->GetDevice(), stagingBufferMemory, 0, bufferSize, 0, &data);
     memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
     vkUnmapMemory(m_pRender->GetDevice(), stagingBufferMemory);
 
-    // 创建设备本地缓冲区（GPU专用）
     CreateBufferHelper(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                        m_vertexBuffer, m_vertexBufferMemory);
 
-    // 从暂存缓冲区复制到设备本地缓冲区
     CopyBuffer(stagingBuffer, m_vertexBuffer, bufferSize);
 
-    // 销毁暂存缓冲区
     vkDestroyBuffer(m_pRender->GetDevice(), stagingBuffer, nullptr);
     vkFreeMemory(m_pRender->GetDevice(), stagingBufferMemory, nullptr);
 }
 
-// 创建索引缓冲区
 void VulkanObject::CreateIndexBuffer(const std::vector<uint32_t>& indices) {
     if (!m_pRender || indices.empty()) return;
 
     m_indexCount = static_cast<uint32_t>(indices.size());
     VkDeviceSize bufferSize = sizeof(uint32_t) * indices.size();
 
-    // 创建暂存缓冲区
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
     CreateBufferHelper(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                        stagingBuffer, stagingBufferMemory);
 
-    // 映射并复制数据
     void* data;
     vkMapMemory(m_pRender->GetDevice(), stagingBufferMemory, 0, bufferSize, 0, &data);
     memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
     vkUnmapMemory(m_pRender->GetDevice(), stagingBufferMemory);
 
-    // 创建设备本地缓冲区
     CreateBufferHelper(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                        m_indexBuffer, m_indexBufferMemory);
 
-    // 复制数据
     CopyBuffer(stagingBuffer, m_indexBuffer, bufferSize);
 
-    // 销毁暂存缓冲区
     vkDestroyBuffer(m_pRender->GetDevice(), stagingBuffer, nullptr);
     vkFreeMemory(m_pRender->GetDevice(), stagingBufferMemory, nullptr);
 }
 
-// 更新顶点缓冲区
 void VulkanObject::UpdateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     if (!m_pRender || vertices.empty()) return;
 
@@ -202,7 +167,6 @@ void VulkanObject::UpdateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     vkUnmapMemory(m_pRender->GetDevice(), m_vertexBufferMemory);
 }
 
-// 更新索引缓冲区
 void VulkanObject::UpdateIndexBuffer(const std::vector<uint32_t>& indices) {
     if (!m_pRender || indices.empty()) return;
 
@@ -215,7 +179,6 @@ void VulkanObject::UpdateIndexBuffer(const std::vector<uint32_t>& indices) {
     vkUnmapMemory(m_pRender->GetDevice(), m_indexBufferMemory);
 }
 
-// 销毁缓冲区
 void VulkanObject::DestroyBuffers() {
     if (!m_pRender) return;
 
@@ -240,11 +203,7 @@ void VulkanObject::DestroyBuffers() {
     }
 }
 
-// ============================================================================
-// 辅助函数
-// ============================================================================
 
-// 创建缓冲区（内部辅助）
 void VulkanObject::CreateBufferHelper(VkDeviceSize size, VkBufferUsageFlags usage,
                                       VkMemoryPropertyFlags properties,
                                       VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
@@ -273,7 +232,6 @@ void VulkanObject::CreateBufferHelper(VkDeviceSize size, VkBufferUsageFlags usag
     vkBindBufferMemory(m_pRender->GetDevice(), buffer, bufferMemory, 0);
 }
 
-// 查找内存类型
 uint32_t VulkanObject::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(m_pRender->GetPhysicalDevice(), &memProperties);
@@ -287,7 +245,6 @@ uint32_t VulkanObject::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags
     throw std::runtime_error("未找到合适的内存类型");
 }
 
-// 复制缓冲区
 void VulkanObject::CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
     VkCommandBuffer commandBuffer = m_pRender->BeginSingleTimeCommands();
 

@@ -11,14 +11,10 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 
-// ============================================================================
-// 构造和析构
-// ============================================================================
 
 VulkanRender3D::VulkanRender3D() {}
 
 VulkanRender3D::~VulkanRender3D() {
-    // Shutdown() 由基类 ~VulkanRender() 调用，会触发 OnShutdown()
 }
 
 
@@ -38,8 +34,6 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
 
     if (m_mouseButton == 0) {
         if (m_orthographicEnabled) {
-            // In orthographic mode only horizontal mouse movement rotates the
-            // model. Vertical movement is deliberately ignored.
             const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
             const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
             const float minExtent = std::min(width, height);
@@ -61,8 +55,6 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
         const float sinAngle = glm::length(sphereCross);
         if (sinAngle <= std::numeric_limits<float>::epsilon()) return;
 
-        // 虚拟球决定旋转方向；旋转量按窗口短边上的实际移动比例计算，
-        // 消除双曲面外围的角速度衰减，使中心和外围保持相同灵敏度。
         const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
         const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
         const float minExtent = std::min(width, height);
@@ -72,8 +64,6 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
         constexpr float rotationSensitivity = 4.71238898038f; // 270 degrees
         const float uniformAngle = glm::length(screenDelta) * rotationSensitivity;
 
-        // 当前交互只使用虚拟球旋转轴的 X/Y 分量。重新归一化后，斜向
-        // 拖拽仍保持方向比例，同时不会因为球面位置不同而降低总角速度。
         glm::vec2 rotationAxisXY(sphereCross.x, sphereCross.y);
         if (glm::length(rotationAxisXY) <= 1.0e-6f) {
             rotationAxisXY = glm::vec2(screenDelta.y, screenDelta.x);
@@ -92,8 +82,6 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
 
         if (std::abs(sphereRotation.x) >
             std::numeric_limits<float>::epsilon()) {
-            // 把屏幕水平轴投影到模型局部 XY 平面。得到的连续组合轴会随
-            // 当前姿态在局部 X/Y 之间平滑过渡，不再发生离散切换。
             const glm::vec3 worldLocalX =
                 m_modelRotation * glm::vec3(1.0f, 0.0f, 0.0f);
             const glm::vec3 worldLocalY =
@@ -110,8 +98,6 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
             ApplyConstrainedLocalRotation(verticalLocalAxis, sphereRotation.x);
         }
     } else if (m_mouseButton == 2) {
-        // 中键平移：根据当前观察距离计算目标平面在屏幕上的世界尺寸，
-        // 使模型在不同缩放级别下都跟随鼠标移动相同的屏幕距离。
         const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
         const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
         const float aspect = width / height;
@@ -126,7 +112,6 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
 }
 
 glm::vec3 VulkanRender3D::ProjectToVirtualSphere(float nx, float ny) const {
-    // 使用窗口短边作为球体直径基准，避免宽高比将轨迹球拉成椭圆。
     const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
     const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
     const float minExtent = std::min(width, height);
@@ -139,11 +124,8 @@ glm::vec3 VulkanRender3D::ProjectToVirtualSphere(float nx, float ny) const {
 
     float z;
     if (distance <= sphereToHyperbola) {
-        // 中心区域使用单位球面。
         z = std::sqrt(1.0f - distanceSquared);
     } else {
-        // 外围区域平滑连接双曲面。与吸附到圆周不同，同一径向方向上
-        // 继续移动时 z 仍会变化，因此窗口边缘也始终产生旋转增量。
         z = 0.5f / distance;
     }
 
@@ -168,8 +150,6 @@ void VulkanRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
         return;
     }
 
-    // 本次拖动越过约束边界时，将旋转精确收敛到 Z.y == 0，
-    // 避免直接丢弃整个鼠标增量造成边界处跳动。
     float allowed = 0.0f;
     float rejected = 1.0f;
     for (int i = 0; i < 16; ++i) {
@@ -192,12 +172,8 @@ void VulkanRender3D::OnMouseWheel(float delta) {
     m_orbitDistance = glm::clamp(m_orbitDistance, 0.1f, 1000.0f);
 }
 
-// ============================================================================
-// 虚钩子重写
-// ============================================================================
 
 bool VulkanRender3D::OnInitialize() {
-    // 配置清除值：颜色 + 深度
     m_clearValueCount = 2;
     m_clearValues[0].color = { m_clearColor.x, m_clearColor.y, m_clearColor.z, m_clearColor.w };
     m_clearValues[1].depthStencil = { 1.0f, 0 };
@@ -228,7 +204,6 @@ void VulkanRender3D::OnBeginFrame() {
 
     UpdateUniformBuffer(m_currentFrame);
 
-    // 绑定描述符集（每帧对应一个 UBO）
     vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
         m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
 }
@@ -237,12 +212,8 @@ void VulkanRender3D::OnRecreateSwapchain() {
     DestroyDepthResources();
 }
 
-// ============================================================================
-// 渲染通道创建（颜色 + 深度附件）
-// ============================================================================
 
 bool VulkanRender3D::CreateRenderPass() {
-    // 颜色附件
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = m_swapchainImageFormat;
     colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -257,7 +228,6 @@ bool VulkanRender3D::CreateRenderPass() {
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    // 深度附件
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = FindDepthFormat();
     depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -272,14 +242,12 @@ bool VulkanRender3D::CreateRenderPass() {
     depthAttachmentRef.attachment = 1;
     depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-    // 子通道
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
     subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
-    // 子通道依赖
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
@@ -291,7 +259,6 @@ bool VulkanRender3D::CreateRenderPass() {
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-    // 附件数组
     std::vector<VkAttachmentDescription> attachments = { colorAttachment, depthAttachment };
 
     VkRenderPassCreateInfo renderPassInfo{};
@@ -311,26 +278,20 @@ bool VulkanRender3D::CreateRenderPass() {
     return true;
 }
 
-// ============================================================================
-// 管线创建
-// ============================================================================
 
 bool VulkanRender3D::CreatePipelines() {
-    // 加载着色器模块
     auto vertShaderCode = ReadShaderFile("shaders/3d_vert.spv");
     auto fragShaderCode = ReadShaderFile("shaders/3d_frag.spv");
 
     VkShaderModule vertShaderModule = CreateShaderModuleHelper(vertShaderCode);
     VkShaderModule fragShaderModule = CreateShaderModuleHelper(fragShaderCode);
 
-    // 顶点着色器阶段
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
     vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
     vertShaderStageInfo.module = vertShaderModule;
     vertShaderStageInfo.pName = "main";
 
-    // 片段着色器阶段
     VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
     fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -339,7 +300,6 @@ bool VulkanRender3D::CreatePipelines() {
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
-    // 顶点输入状态（使用 Vertex3D）
     auto bindingDescription = Vertex3D::GetBindingDescription();
     auto attributeDescriptions = Vertex3D::GetAttributeDescriptions();
 
@@ -350,7 +310,6 @@ bool VulkanRender3D::CreatePipelines() {
     vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
-    // 创建管线布局（含描述符集布局）
     {
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -362,7 +321,6 @@ bool VulkanRender3D::CreatePipelines() {
         }
     }
 
-    // 动态状态
     std::vector<VkDynamicState> dynamicStates = {
         VK_DYNAMIC_STATE_VIEWPORT,
         VK_DYNAMIC_STATE_SCISSOR
@@ -372,23 +330,18 @@ bool VulkanRender3D::CreatePipelines() {
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // 创建管线
     DrawTopology topologies[] = { DT_TRIANGLE, DT_TRIANGLE_WIREFRAME, DT_LINE, DT_POINT };
     for (auto topo : topologies) {
-        // 输入装配状态
         VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
         inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
         inputAssembly.primitiveRestartEnable = VK_FALSE;
 
-        // 光栅化状态（默认填充）
         VkPipelineRasterizationStateCreateInfo rasterizer{};
         rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
         rasterizer.depthClampEnable = VK_FALSE;
         rasterizer.rasterizerDiscardEnable = VK_FALSE;
         rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
         rasterizer.lineWidth = 1.0f;
-        // OBJ models may contain open surfaces that need to remain visible
-        // from either side, so the 3D pipelines render both face directions.
         rasterizer.cullMode = VK_CULL_MODE_NONE;
         rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
         rasterizer.depthBiasEnable = VK_FALSE;
@@ -413,19 +366,16 @@ bool VulkanRender3D::CreatePipelines() {
             break;
         }
 
-        // 视口状态
         VkPipelineViewportStateCreateInfo viewportState{};
         viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
         viewportState.viewportCount = 1;
         viewportState.scissorCount = 1;
 
-        // 多重采样
         VkPipelineMultisampleStateCreateInfo multisampling{};
         multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         multisampling.sampleShadingEnable = VK_FALSE;
         multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-        // 深度模板状态（3D 需要深度测试）
         VkPipelineDepthStencilStateCreateInfo depthStencil{};
         depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         depthStencil.depthTestEnable = VK_TRUE;
@@ -434,7 +384,6 @@ bool VulkanRender3D::CreatePipelines() {
         depthStencil.depthBoundsTestEnable = VK_FALSE;
         depthStencil.stencilTestEnable = VK_FALSE;
 
-        // 颜色混合
         VkPipelineColorBlendAttachmentState colorBlendAttachment{};
         colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                                VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -446,7 +395,6 @@ bool VulkanRender3D::CreatePipelines() {
         colorBlending.attachmentCount = 1;
         colorBlending.pAttachments = &colorBlendAttachment;
 
-        // 创建管线
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
         pipelineInfo.stageCount = 2;
@@ -470,19 +418,14 @@ bool VulkanRender3D::CreatePipelines() {
         }
     }
 
-    // 清理着色器模块
     vkDestroyShaderModule(m_device, fragShaderModule, nullptr);
     vkDestroyShaderModule(m_device, vertShaderModule, nullptr);
 
     return true;
 }
 
-// ============================================================================
-// 帧缓冲创建（颜色 + 深度）
-// ============================================================================
 
 bool VulkanRender3D::CreateFramebuffers() {
-    // 先创建深度资源
     if (!CreateDepthResources()) return false;
 
     m_swapchainFramebuffers.resize(m_swapchainImageViews.size());
@@ -511,9 +454,6 @@ bool VulkanRender3D::CreateFramebuffers() {
     return true;
 }
 
-// ============================================================================
-// 深度缓冲
-// ============================================================================
 
 VkFormat VulkanRender3D::FindDepthFormat() {
     return FindSupportedFormat(
@@ -546,7 +486,6 @@ bool VulkanRender3D::HasStencilComponent(VkFormat format) {
 bool VulkanRender3D::CreateDepthResources() {
     VkFormat depthFormat = FindDepthFormat();
 
-    // 创建深度图像
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -567,7 +506,6 @@ bool VulkanRender3D::CreateDepthResources() {
         return false;
     }
 
-    // 分配深度图像内存
     VkMemoryRequirements memRequirements;
     vkGetImageMemoryRequirements(m_device, m_depthImage, &memRequirements);
 
@@ -586,7 +524,6 @@ bool VulkanRender3D::CreateDepthResources() {
 
     vkBindImageMemory(m_device, m_depthImage, m_depthImageMemory, 0);
 
-    // 创建深度图像视图
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = m_depthImage;
@@ -622,9 +559,6 @@ void VulkanRender3D::DestroyDepthResources() {
     }
 }
 
-// ============================================================================
-// 描述符集和 UBO
-// ============================================================================
 
 bool VulkanRender3D::CreateDescriptorSetLayout() {
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
@@ -681,10 +615,8 @@ bool VulkanRender3D::CreateUniformBuffers() {
 
         vkBindBufferMemory(m_device, m_uniformBuffers[i], m_uniformBuffersMemory[i], 0);
 
-        // 持久映射方便更新
         vkMapMemory(m_device, m_uniformBuffersMemory[i], 0, bufferSize, 0, &m_uniformBuffersMapped[i]);
 
-        // 初始化为单位矩阵
         UniformBufferObject3D ubo{};
         InitIdentityMatrix(ubo.model);
         InitIdentityMatrix(ubo.view);
@@ -772,7 +704,6 @@ void VulkanRender3D::DestroyUniformBuffers() {
 void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
 
-    // 相机保持在 +Z 方向，模型自身坐标系通过 model 矩阵旋转。
     const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
     const glm::mat4 model = glm::translate(glm::mat4(1.0f), m_panOffset)
         * glm::mat4_cast(m_modelRotation)
@@ -783,7 +714,6 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     const float verticalFov = glm::radians(45.0f);
     glm::mat4 proj;
     if (m_orthographicEnabled) {
-        // 使用与当前透视距离相同的可视高度，切换时模型屏幕尺寸保持稳定。
         const float halfHeight = m_orbitDistance * std::tan(verticalFov * 0.5f);
         const float halfWidth = halfHeight * aspect;
         proj = glm::orthoRH_ZO(-halfWidth, halfWidth,
@@ -815,8 +745,6 @@ void VulkanRender3D::SetGrayEnabled(bool enabled) {
 
 void VulkanRender3D::SetOrthographicEnabled(bool enabled) {
     if (enabled && !m_orthographicEnabled) {
-        // Orthographic mode always starts from the model's front plane rather
-        // than projecting from the current perspective orientation.
         m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         m_mouseButton = -1;
         m_lastMouse = glm::vec2(0.0f);
@@ -848,8 +776,6 @@ void VulkanRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
         return;
     }
 
-    // OBJ 导入时执行 normalized = (source - center) * scale。
-    // 状态栏需要源文件坐标，因此保存其逆变换供深度拾取结果使用。
     const glm::mat4 translateToSource = glm::translate(
         glm::mat4(1.0f),
         glm::vec3(sourceCenter.x, sourceCenter.y, sourceCenter.z));
@@ -866,9 +792,6 @@ void VulkanRender3D::InitIdentityMatrix(float mat[4][4]) {
     mat[3][3] = 1.0f;
 }
 
-// ============================================================================
-// 世界坐标拾取（深度回读）
-// ============================================================================
 
 bool VulkanRender3D::CreateDepthReadbackResources() {
     VkDeviceSize bufferSize = sizeof(float);
@@ -1008,15 +931,12 @@ void VulkanRender3D::ProcessDepthReadback(uint32_t frameIndex) {
     const glm::mat4 renderToSource = m_frameRenderToSource[frameIndex];
     glm::vec4 worldPos{};
     if (std::isfinite(depth) && depth >= 0.0f && depth < 0.999f) {
-        // 光标位于模型表面：使用深度缓冲反投影到真实表面位置。
         const glm::vec4 clipPos(x_ndc, y_ndc, depth, 1.0f);
         glm::vec4 renderPos = invViewProj * clipPos;
         renderPos /= renderPos.w;
         worldPos = renderToSource * renderPos;
         worldPos /= worldPos.w;
     } else {
-        // 背景没有可用深度。把近、远裁剪点还原到 OBJ 世界坐标，
-        // 再与世界 Z=0 平面求交。
         glm::vec4 nearRender = invViewProj * glm::vec4(x_ndc, y_ndc, 0.0f, 1.0f);
         glm::vec4 farRender  = invViewProj * glm::vec4(x_ndc, y_ndc, 1.0f, 1.0f);
         nearRender /= nearRender.w;

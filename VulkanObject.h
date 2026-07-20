@@ -5,7 +5,6 @@
 #include "VertexTypes.h"
 #include <cstdint>
 
-// Vulkan可编辑对象基类
 class VulkanObject {
 public:
     VulkanObject();
@@ -14,7 +13,6 @@ public:
 
     VulkanObject& operator=(const VulkanObject& obj);
 
-    // 对象类型枚举
     enum ObjectType {
         OT_OBJECT = 0,
         OT_LINE,
@@ -46,22 +44,18 @@ public:
     void SetColor(float r, float g, float b, float a);
     Vec4 GetColor() const;
 
-    //纯虚函数，子类实现具体绘制逻辑
     virtual void Render(int iMode = 0) = 0;
 
-    // Vulkan缓冲区管理
 void CreateVertexBuffer(const std::vector<Vertex3D>& vertices);  // 创建顶点缓冲区
 void CreateIndexBuffer(const std::vector<uint32_t>& indices);        // 创建索引缓冲区
 void UpdateVertexBuffer(const std::vector<Vertex3D>& vertices);  // 更新顶点缓冲区
     void UpdateIndexBuffer(const std::vector<uint32_t>& indices);        // 更新索引缓冲区
     void DestroyBuffers();  // 销毁缓冲区
 
-    // 缓冲区获取
     VkBuffer GetVertexBuffer() const;
     VkBuffer GetIndexBuffer() const;
     uint32_t GetIndexCount() const;
 
-    // 缓冲区操作辅助函数
     void CreateBufferHelper(VkDeviceSize size, VkBufferUsageFlags usage,
                            VkMemoryPropertyFlags properties,
                            VkBuffer& buffer, VkDeviceMemory& bufferMemory);
@@ -79,7 +73,6 @@ protected:
 
     uint32_t m_uClr = 0xFFFFFFFF;
 
-    // Vulkan GPU缓冲区
     VkBuffer m_vertexBuffer = VK_NULL_HANDLE;           // 顶点缓冲区
     VkDeviceMemory m_vertexBufferMemory = VK_NULL_HANDLE;  // 顶点缓冲区内存
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;            // 索引缓冲区

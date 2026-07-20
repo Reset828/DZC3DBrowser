@@ -1,4 +1,4 @@
-#include "MainWindow.h"
+﻿#include "MainWindow.h"
 #include "QWindowVulkan.h"
 #include "render/VulkanRender.h"
 #include "VulkanLayer.h"
@@ -16,7 +16,6 @@
 #include <QWidget>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QMessageBox>
 #include <QTimer>
 #include <QCloseEvent>
 #include <QThreadPool>
@@ -30,7 +29,6 @@
 #include <QTreeWidgetItem>
 #include <QStyleFactory>
 #include <QStyle>
-#include <QPlainTextEdit>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -79,7 +77,6 @@ MainWindow::MainWindow(QWidget* parent)
         QTreeWidget::item:hover { background-color: #2a2d2e; }
         QTreeWidget::item:selected { background-color: #094771; }
         QHeaderView::section { background-color: #2d2d2d; color: #d4d4d4; border: none; padding: 4px; }
-        QPlainTextEdit { background-color: #1e1e1e; color: #d4d4d4; border: none; }
         QSplitter::handle { background-color: #3c3c3c; }
         QMenuBar { background-color: #2d2d2d; color: #d4d4d4; border: none; padding: 2px; }
         QToolBar { background-color: #252526; border: none; spacing: 8px; padding: 2px 4px; }
@@ -224,12 +221,6 @@ void MainWindow::SetupVulkan() {
         }
     });
 
-    m_outputWindow = new QPlainTextEdit();
-    m_outputWindow->setReadOnly(true);
-    m_outputWindow->setPlaceholderText(QStringLiteral("输出"));
-    m_outputWindow->setMaximumBlockCount(1000);
-    m_outputWindow->setMinimumHeight(60);
-
     QSplitter* hSplitter = new QSplitter(Qt::Horizontal);
     hSplitter->setHandleWidth(1);
     hSplitter->addWidget(m_projectPanel);
@@ -237,18 +228,11 @@ void MainWindow::SetupVulkan() {
     hSplitter->setStretchFactor(0, 1);
     hSplitter->setStretchFactor(1, 2);
 
-    QSplitter* vSplitter = new QSplitter(Qt::Vertical);
-    vSplitter->setHandleWidth(1);
-    vSplitter->addWidget(hSplitter);
-    vSplitter->addWidget(m_outputWindow);
-    vSplitter->setStretchFactor(0, 4);
-    vSplitter->setStretchFactor(1, 1);
-
     QWidget* central = new QWidget();
     QVBoxLayout* layout = new QVBoxLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    layout->addWidget(vSplitter);
+    layout->addWidget(hSplitter);
     setCentralWidget(central);
 
     connect(m_vulkanWindow, &QWindowVulkan::vulkanReady, this, &MainWindow::StartRenderLoop);
@@ -338,17 +322,6 @@ void MainWindow::onOpenFile() {
             if (loadGeneration != m_loadGeneration) return;
             if (!m_renderer || m_renderer->IsShuttingDown()) return;
             AddLoadedModel(filePath, std::move(vertices), std::move(indices));
-        },
-        [this, filePath, loadGeneration](const std::string& message, bool isError) {
-            if (loadGeneration != m_loadGeneration) return;
-            const QString text = QStringLiteral("%1: %2")
-                .arg(QFileInfo(filePath).fileName(), QString::fromStdString(message));
-            if (m_outputWindow) {
-                m_outputWindow->appendPlainText(text);
-            }
-            if (isError) {
-                QMessageBox::warning(this, QStringLiteral("OBJ 加载失败"), text);
-            }
         });
 
 
@@ -405,7 +378,6 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
 }
 
 void MainWindow::ClearLoadedModels() {
-    // Invalidate OBJ parse callbacks that were started before this clear.
     ++m_loadGeneration;
 
     if (m_renderer && m_renderer->IsInitialized()) {
@@ -554,7 +526,6 @@ void MainWindow::RebuildSceneMeshes() {
     m_sceneSourceCenter[2] = center.z;
     m_sceneNormalizationScale = scale;
 
-    // 按默认朝向计算能容纳总体包围盒的透视距离。
     const float aspect = static_cast<float>(std::max(1, m_vulkanWindow->width())) /
                          static_cast<float>(std::max(1, m_vulkanWindow->height()));
     constexpr float verticalHalfFov = 0.3926990817f; // 45° / 2
@@ -576,7 +547,6 @@ void MainWindow::RebuildSceneMeshes() {
         render3D->SetCoordinateNormalization(center, scale);
     }
 
-    // SetMeshData 会替换旧 GPU 缓冲区，先确保正在显示的帧已完成。
     m_renderer->WaitForIdle();
 
     for (LoadedModel& model : m_loadedModels) {

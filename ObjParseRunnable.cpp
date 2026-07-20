@@ -1,4 +1,4 @@
-#include "ObjParseRunnable.h"
+﻿#include "ObjParseRunnable.h"
 
 #include <QApplication>
 #include <QMetaObject>
@@ -349,8 +349,6 @@ void ObjParseRunnable::run() {
         std::vector<Vertex3D> vertices;
         std::vector<uint32_t> indices;
         std::unordered_map<VertexKey, uint32_t, VertexKeyHash> vertexLookup;
-        // 常见的大型地形 OBJ 只有 v + f。该表直接把位置索引映射到
-        // 输出顶点，避免为每个三角形角点执行 unordered_map 哈希。
         std::vector<uint32_t> positionOnlyLookup;
 
         positions.reserve(static_cast<size_t>(fileSize) / 48);
@@ -423,7 +421,6 @@ void ObjParseRunnable::run() {
                     addWarning(lineNumber, "纹理坐标无效，已跳过");
                     continue;
                 }
-                // OBJ 允许只有一个纹理坐标分量，缺失的 V 保持为 0。
                 const char* optional = ptr;
                 ParseFloat(optional, lineEnd, texCoord.v);
                 texCoords.push_back(texCoord);
@@ -460,10 +457,6 @@ void ObjParseRunnable::run() {
                     continue;
                 }
 
-                // 如果整个面都带有有效法线，就使用 OBJ 法线。否则将该面的
-                // 法线统一标记为缺失，并在片元着色器中按三角面重建硬边法线。
-                // 缺失法线不再使用“每面唯一键”，因此大型网格可以继续复用
-                // 位置/纹理坐标相同的顶点，避免顶点数量膨胀到索引数量。
                 const bool faceHasCompleteNormals = std::all_of(
                     face.begin(), face.end(), [&](const FaceVertex& vertex) {
                         return vertex.normal >= 0 &&
@@ -531,8 +524,6 @@ void ObjParseRunnable::run() {
                         indices.push_back(found->second);
                 };
 
-                // 三角形是大型扫描/地形 OBJ 的主流格式，直接发射索引，
-                // 避免每个面都为三角化结果创建一个临时 vector。
                 if (face.size() == 3) {
                     emitCorner(0);
                     emitCorner(1);

@@ -2,9 +2,6 @@
 #include <algorithm>
 #include <shared_mutex>
 
-// ============================================================================
-// VulkanLayer 构造和析构
-// ============================================================================
 
 VulkanLayer::VulkanLayer() {
     m_uType = OT_LAYER;
@@ -14,9 +11,6 @@ VulkanLayer::~VulkanLayer() {
     Clear();
 }
 
-// ============================================================================
-// 子对象查询
-// ============================================================================
 
 bool VulkanLayer::IsEmpty() const {
     std::shared_lock lock(m_mutex);
@@ -56,9 +50,6 @@ int VulkanLayer::FindChild(const VulkanObject* pObject) const {
     return -1;
 }
 
-// ============================================================================
-// 子对象管理
-// ============================================================================
 
 void VulkanLayer::Clear() {
     std::unique_lock lock(m_mutex);

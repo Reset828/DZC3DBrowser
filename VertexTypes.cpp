@@ -1,8 +1,5 @@
-#include "VertexTypes.h"
+﻿#include "VertexTypes.h"
 
-// ============================================================================
-// Vertex2D
-// ============================================================================
 
 VkVertexInputBindingDescription Vertex2D::GetBindingDescription() {
     VkVertexInputBindingDescription desc{};
@@ -33,9 +30,6 @@ std::vector<VkVertexInputAttributeDescription> Vertex2D::GetAttributeDescription
     return attrs;
 }
 
-// ============================================================================
-// Vertex3D
-// ============================================================================
 
 VkVertexInputBindingDescription Vertex3D::GetBindingDescription() {
     VkVertexInputBindingDescription desc{};

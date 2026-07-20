@@ -7,9 +7,6 @@ VulkanRender2D::VulkanRender2D() {}
 
 VulkanRender2D::~VulkanRender2D() {}
 
-// ============================================================================
-// 相机控制
-// ============================================================================
 
 void VulkanRender2D::OnMouseDown(float nx, float ny, int button) {
     m_mouseButton = button;
@@ -39,9 +36,6 @@ void VulkanRender2D::OnMouseWheel(float delta) {
     m_zoomLevel = glm::clamp(m_zoomLevel, 0.01f, 100.0f);
 }
 
-// ============================================================================
-// 虚钩子
-// ============================================================================
 
 bool VulkanRender2D::OnInitialize() {
     m_clearValueCount = 1;
@@ -75,9 +69,6 @@ void VulkanRender2D::OnBeginFrame() {
 
 void VulkanRender2D::OnEndFrame() {}
 
-// ============================================================================
-// 管线创建
-// ============================================================================
 
 bool VulkanRender2D::CreatePipelines() {
     auto vertShaderCode = ReadShaderFile("shaders/2d_vert.spv");
@@ -110,7 +101,6 @@ bool VulkanRender2D::CreatePipelines() {
     vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
-    // 管线布局（含描述符集布局）
     {
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -194,9 +184,6 @@ bool VulkanRender2D::CreatePipelines() {
     return true;
 }
 
-// ============================================================================
-// 描述符集和 UBO
-// ============================================================================
 
 bool VulkanRender2D::CreateDescriptorSetLayout() {
     VkDescriptorSetLayoutBinding uboLayoutBinding{};

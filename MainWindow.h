@@ -1,4 +1,4 @@
-#ifndef __MAIN_WINDOW_H__
+﻿#ifndef __MAIN_WINDOW_H__
 #define __MAIN_WINDOW_H__
 
 #include <QMainWindow>
@@ -14,7 +14,6 @@ class QTimer;
 class QWidget;
 class QTreeWidget;
 class QTreeWidgetItem;
-class QPlainTextEdit;
 class QCheckBox;
 class QLabel;
 class QString;
@@ -66,7 +65,6 @@ private:
     QTimer* m_renderTimer;
     QTreeWidget* m_projectPanel;
     QTreeWidgetItem* m_modelsTreeItem;
-    QPlainTextEdit* m_outputWindow;
 
     std::vector<LoadedModel> m_loadedModels;
     uint64_t m_loadGeneration = 0;

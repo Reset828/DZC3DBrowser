@@ -39,7 +39,6 @@ BufferUploadRunnable::BufferUploadRunnable(
 BufferUploadRunnable::~BufferUploadRunnable() = default;
 
 void BufferUploadRunnable::run() {
-    // --- 0. 计算总大小（多段） ---
     VkDeviceSize totalSize = m_size;
     if (m_isMulti) {
         totalSize = 0;
@@ -51,7 +50,6 @@ void BufferUploadRunnable::run() {
         }
     }
 
-    // --- 1. 创建 staging buffer ---
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = totalSize;
@@ -63,11 +61,9 @@ void BufferUploadRunnable::run() {
         throw std::runtime_error("BufferUploadRunnable: 创建 staging buffer 失败");
     }
 
-    // --- 2. 获取内存要求 ---
     VkMemoryRequirements memReq;
     vkGetBufferMemoryRequirements(m_device, stagingBuffer, &memReq);
 
-    // --- 3. 查找 HOST_VISIBLE | HOST_COHERENT 内存类型 ---
     VkPhysicalDeviceMemoryProperties memProps;
     vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
 
@@ -87,7 +83,6 @@ void BufferUploadRunnable::run() {
         throw std::runtime_error("BufferUploadRunnable: 未找到可用内存类型");
     }
 
-    // --- 4. 分配并绑定 staging 内存 ---
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocInfo.allocationSize = memReq.size;
@@ -101,7 +96,6 @@ void BufferUploadRunnable::run() {
 
     vkBindBufferMemory(m_device, stagingBuffer, stagingMemory, 0);
 
-    // --- 5. 映射并拷贝数据 ---
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMemory, 0, totalSize, 0, &mapped);
 
@@ -116,7 +110,6 @@ void BufferUploadRunnable::run() {
 
     vkUnmapMemory(m_device, stagingMemory);
 
-    // --- 6. 回调主线程处理 device-local 创建和 GPU 拷贝 ---
     auto staging = stagingBuffer;
     auto memory = stagingMemory;
 

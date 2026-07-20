@@ -62,12 +62,10 @@ protected:
                                   VkFormatFeatureFlags features);
     bool HasStencilComponent(VkFormat format);
 
-    // 线框模式
     bool m_wireframeMode = false;
     bool m_grayEnabled = false;
     bool m_orthographicEnabled = false;
 
-    // 模型局部坐标系旋转：初始 X 向右、Y 向上、Z 朝屏幕外。
     glm::quat m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     glm::vec3 m_orbitCenter = glm::vec3(0.0f);
     glm::vec3 m_panOffset = glm::vec3(0.0f);
@@ -76,7 +74,6 @@ protected:
     glm::vec2 m_lastMouse = glm::vec2(0.0f);
     glm::vec3 m_lastVerticalLocalAxis = glm::vec3(1.0f, 0.0f, 0.0f);
 
-    // 深度回读（世界坐标拾取）
     bool CreateDepthReadbackResources();
     void DestroyDepthReadbackResources();
     void ProcessDepthReadback(uint32_t frameIndex);
@@ -97,12 +94,10 @@ protected:
     glm::mat4 m_normalizedToWorld = glm::mat4(1.0f);
 
 protected:
-    // 深度缓冲
     VkImage m_depthImage = VK_NULL_HANDLE;
     VkDeviceMemory m_depthImageMemory = VK_NULL_HANDLE;
     VkImageView m_depthImageView = VK_NULL_HANDLE;
 
-    // 描述符集
     VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> m_descriptorSets;

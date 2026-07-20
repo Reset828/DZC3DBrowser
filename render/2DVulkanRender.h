@@ -1,4 +1,4 @@
-#ifndef __2D_VULKAN_RENDER_H__
+﻿#ifndef __2D_VULKAN_RENDER_H__
 #define __2D_VULKAN_RENDER_H__
 
 #include "VulkanRender.h"

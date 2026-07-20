@@ -13,15 +13,11 @@ VulkanMesh::~VulkanMesh() {
     *m_alive = false; // 标记已销毁，阻止未执行的异步回调继续
 }
 
-// ============================================================================
-// 公有接口
-// ============================================================================
 
 void VulkanMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
                               std::vector<uint32_t>&& indices) {
     if (!m_pRender || vertices.empty() || indices.empty()) return;
 
-    // 清理旧缓冲
     DestroyBuffers();
     m_buffersReady = false;
 
@@ -32,18 +28,14 @@ void VulkanMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
     VkDeviceSize idxSize  = indices.size()  * sizeof(uint32_t);
     m_indexCount = static_cast<uint32_t>(indices.size());
 
-    // 保持原始数据在 QRunnable 执行期间存活
     auto vertData = std::make_shared<std::vector<Vertex3D>>(std::move(vertices));
     auto idxData  = std::make_shared<std::vector<uint32_t>>(std::move(indices));
 
-    // 生命周期令牌（值拷贝，使 lambda 可拷贝）
     auto alive = m_alive;
 
-    // 递增上传代号，旧回调将因代号不匹配而跳过
     ++m_uploadGeneration;
     uint64_t gen = m_uploadGeneration;
 
-    // 合并上传：同一 staging buffer 容纳顶点和索引数据
     std::vector<BufferUploadRunnable::UploadSegment> segments;
     segments.push_back({ vertData->data(), vertSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT });
     segments.push_back({ idxData->data(),  idxSize,  VK_BUFFER_USAGE_INDEX_BUFFER_BIT });
@@ -102,15 +94,11 @@ void VulkanMesh::Render(int /*mode*/) {
     m_pRender->DrawIndexed(m_indexCount);
 }
 
-// ============================================================================
-// 私有实现
-// ============================================================================
 
 void VulkanMesh::OnVertexBufferUploaded(VkBuffer staging, VkDeviceMemory stagingMem,
                                          VkDeviceSize bufferSize) {
     VkDevice device = m_pRender->GetDevice();
 
-    // 创建 device-local 顶点缓冲
     VkBufferCreateInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bi.size = bufferSize;
@@ -139,14 +127,12 @@ void VulkanMesh::OnVertexBufferUploaded(VkBuffer staging, VkDeviceMemory staging
     }
     vkBindBufferMemory(device, devBuf, devMem, 0);
 
-    // staging → device-local
     VkCommandBuffer cmd = m_pRender->BeginSingleTimeCommands();
     VkBufferCopy region{};
     region.size = bufferSize;
     vkCmdCopyBuffer(cmd, staging, devBuf, 1, &region);
     m_pRender->EndSingleTimeCommands(cmd);
 
-    // 清理 staging
     vkDestroyBuffer(device, staging, nullptr);
     vkFreeMemory(device, stagingMem, nullptr);
 
@@ -208,7 +194,6 @@ void VulkanMesh::OnCombinedBuffersUploaded(
     if (segments.size() < 2) return;
     VkDevice device = m_pRender->GetDevice();
 
-    // 辅助：从 staging buffer 的某个偏移创建 device-local buffer 并拷贝
     auto createDevBuf = [&](const BufferUploadRunnable::UploadSegment& seg,
                             VkBuffer& outBuf, VkDeviceMemory& outMem) {
         VkBufferCreateInfo bi{};
@@ -250,7 +235,6 @@ void VulkanMesh::OnCombinedBuffersUploaded(
     bool vertOk = createDevBuf(segments[0], m_vertexBuffer, m_vertexBufferMemory);
     bool idxOk  = createDevBuf(segments[1], m_indexBuffer, m_indexBufferMemory);
 
-    // 清理 staging buffer
     vkDestroyBuffer(device, staging, nullptr);
     vkFreeMemory(device, stagingMem, nullptr);
 
