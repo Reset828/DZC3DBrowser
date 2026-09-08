@@ -732,6 +732,7 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     memcpy(ubo.view, glm::value_ptr(view), sizeof(float) * 16);
     memcpy(ubo.proj, glm::value_ptr(proj), sizeof(float) * 16);
     ubo.displayOptions[0] = m_grayEnabled ? 1.0f : 0.0f;
+    ubo.displayOptions[1] = m_dyeEnabled ? 1.0f : 0.0f;
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
@@ -741,6 +742,10 @@ void VulkanRender3D::SetWireframeEnabled(bool enabled) {
 
 void VulkanRender3D::SetGrayEnabled(bool enabled) {
     m_grayEnabled = enabled;
+}
+
+void VulkanRender3D::SetDyeEnabled(bool enabled) {
+    m_dyeEnabled = enabled;
 }
 
 void VulkanRender3D::SetOrthographicEnabled(bool enabled) {
@@ -967,3 +972,8 @@ bool VulkanRender3D::HasNewWorldCoord() const {
     m_newCoordAvailable = false;
     return v;
 }
+
+
+float VulkanRender3D::GetLastWorldX() const { return m_lastWorldCoord[0]; }
+float VulkanRender3D::GetLastWorldY() const { return m_lastWorldCoord[1]; }
+float VulkanRender3D::GetLastWorldZ() const { return m_lastWorldCoord[2]; }

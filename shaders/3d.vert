@@ -15,16 +15,21 @@ layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec3 fragViewPosition;
 layout(location = 2) flat out float grayEnabled;
 layout(location = 3) out vec3 fragViewNormal;
+layout(location = 4) out vec3 fragWorldPosition;
+layout(location = 5) flat out float dyeEnabled;
 
 void main() {
-    vec4 viewPosition = ubo.view * ubo.model * vec4(inPosition, 1.0);
+    vec4 worldPosition = ubo.model * vec4(inPosition, 1.0);
+    vec4 viewPosition = ubo.view * worldPosition;
     gl_Position = ubo.proj * viewPosition;
     gl_PointSize = 8.0;
 
-    // 榛樿鏄剧ず绾粦鑹层€?    fragColor = vec3(0.0);
+    fragColor = vec3(0.0);
     fragViewPosition = viewPosition.xyz;
+    fragWorldPosition = worldPosition.xyz;
     grayEnabled = ubo.displayOptions.x;
+    dyeEnabled = ubo.displayOptions.y;
 
     mat3 normalMatrix = transpose(inverse(mat3(ubo.view * ubo.model)));
-    // 闂嗚泛鎮滈柌蹇氥€冪粈?OBJ 閺堫亝褰佹笟娑欑《缁惧尅绱濋悧鍥у帗閻偓閼规彃娅掔亸鍡樺瘻娑撳顫楅棃銏ゅ櫢瀵ょ儤纭剁痪瑁も偓?    fragViewNormal = normalMatrix * inNormal;
+    fragViewNormal = normalMatrix * inNormal;
 }

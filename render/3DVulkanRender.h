@@ -21,6 +21,7 @@ public:
     void OnMouseWheel(float delta) override;
     void SetWireframeEnabled(bool enabled);
     void SetGrayEnabled(bool enabled);
+    void SetDyeEnabled(bool enabled);
     void SetOrthographicEnabled(bool enabled);
     void SetOrbitCenter(const Vec3& normalizedCenter);
     void ResetView(float orbitDistance = 3.0f);
@@ -29,9 +30,9 @@ public:
 
     void RequestCoordReadback(float ndcX, float ndcY);
     bool HasNewWorldCoord() const;
-    float GetLastWorldX() const { return m_lastWorldCoord[0]; }
-    float GetLastWorldY() const { return m_lastWorldCoord[1]; }
-    float GetLastWorldZ() const { return m_lastWorldCoord[2]; }
+    float GetLastWorldX() const;
+    float GetLastWorldY() const;
+    float GetLastWorldZ() const;
 
 protected:
     bool OnInitialize() override;
@@ -64,6 +65,7 @@ protected:
 
     bool m_wireframeMode = false;
     bool m_grayEnabled = false;
+    bool m_dyeEnabled = false;
     bool m_orthographicEnabled = false;
 
     glm::quat m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);

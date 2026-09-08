@@ -59,6 +59,12 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
+    connect(m_dyeCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+            render3D->SetDyeEnabled(checked);
+        }
+    });
+
     connect(m_orthographicCheck, &QCheckBox::toggled, this, [this](bool checked) {
         if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
             render3D->SetOrthographicEnabled(checked);
@@ -132,6 +138,10 @@ void MainWindow::SetupToolBar() {
     m_grayCheck = new QCheckBox(QStringLiteral("显示灰色"));
     m_grayCheck->setLayoutDirection(Qt::RightToLeft);
     toolbar->addWidget(m_grayCheck);
+
+    m_dyeCheck = new QCheckBox(QStringLiteral("染色"));
+    m_dyeCheck->setLayoutDirection(Qt::RightToLeft);
+    toolbar->addWidget(m_dyeCheck);
 
     m_orthographicCheck = new QCheckBox(QStringLiteral("正射模式"));
     m_orthographicCheck->setLayoutDirection(Qt::RightToLeft);

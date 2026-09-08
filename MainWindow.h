@@ -74,6 +74,7 @@ private:
 
     QCheckBox* m_borderCheck = nullptr;
     QCheckBox* m_grayCheck = nullptr;
+    QCheckBox* m_dyeCheck = nullptr;
     QCheckBox* m_orthographicCheck = nullptr;
 
     QLabel* m_coordX = nullptr;
