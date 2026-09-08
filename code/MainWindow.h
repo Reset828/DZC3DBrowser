@@ -55,6 +55,7 @@ private:
     void StartRenderLoop();
     void SwitchTo2D();
     void SwitchTo3D();
+    void ApplyLightAnalysisToRenderer();
     void AddLoadedModel(const QString& filePath,
                         std::vector<Vertex3D>&& vertices,
                         std::vector<uint32_t>&& indices);

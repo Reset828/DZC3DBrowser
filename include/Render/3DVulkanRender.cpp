@@ -1,4 +1,5 @@
 ﻿#include "3DVulkanRender.h"
+#include "Light/SolarPosition.h"
 #include <iostream>
 #include <cstring>
 #include <cmath>
@@ -12,7 +13,9 @@
 #include <glm/gtc/matrix_inverse.hpp>
 
 
-VulkanRender3D::VulkanRender3D() {}
+VulkanRender3D::VulkanRender3D() {
+    UpdateSunDirection();
+}
 
 VulkanRender3D::~VulkanRender3D() {
 }
@@ -743,6 +746,52 @@ void VulkanRender3D::SetGrayEnabled(bool enabled) {
 
 void VulkanRender3D::SetDyeEnabled(bool enabled) {
     m_dyeEnabled = enabled;
+}
+
+void VulkanRender3D::SetLightAnalysisEnabled(bool enabled) {
+    m_lightAnalysisEnabled = enabled;
+}
+
+void VulkanRender3D::SetShadowTextureSize(uint32_t size) {
+    m_shadowTextureSize = size;
+}
+
+void VulkanRender3D::SetLatitude(float latitude) {
+    m_latitude = latitude;
+    UpdateSunDirection();
+}
+
+void VulkanRender3D::SetLightDate(int year, int month, int day) {
+    m_lightYear = year;
+    m_lightMonth = month;
+    m_lightDay = day;
+    UpdateSunDirection();
+}
+
+void VulkanRender3D::SetLightTimeMinutes(int minutes) {
+    m_lightTimeMinutes = minutes;
+    UpdateSunDirection();
+}
+
+glm::vec3 VulkanRender3D::GetSunDirection() const {
+    return m_sunDirection;
+}
+
+bool VulkanRender3D::IsSunAboveHorizon() const {
+    return m_sunAboveHorizon;
+}
+
+void VulkanRender3D::UpdateSunDirection() {
+    SolarPositionQuery query{};
+    query.latitudeDegrees = m_latitude;
+    query.year = m_lightYear;
+    query.month = m_lightMonth;
+    query.day = m_lightDay;
+    query.trueSolarTimeHours = 6.0f + static_cast<float>(m_lightTimeMinutes) / 60.0f;
+
+    const SolarPosition sun = ComputeSolarPosition(query);
+    m_sunDirection = glm::vec3(sun.directionX, sun.directionY, sun.directionZ);
+    m_sunAboveHorizon = sun.aboveHorizon;
 }
 
 void VulkanRender3D::SetOrthographicEnabled(bool enabled) {

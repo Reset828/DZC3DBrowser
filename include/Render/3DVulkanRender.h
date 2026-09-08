@@ -22,6 +22,13 @@ public:
     void SetWireframeEnabled(bool enabled);
     void SetGrayEnabled(bool enabled);
     void SetDyeEnabled(bool enabled);
+    void SetLightAnalysisEnabled(bool enabled);
+    void SetShadowTextureSize(uint32_t size);
+    void SetLatitude(float latitude);
+    void SetLightDate(int year, int month, int day);
+    void SetLightTimeMinutes(int minutes);
+    glm::vec3 GetSunDirection() const;
+    bool IsSunAboveHorizon() const;
     void SetOrthographicEnabled(bool enabled);
     void SetOrbitCenter(const Vec3& normalizedCenter);
     void ResetView(float orbitDistance = 3.0f);
@@ -51,6 +58,7 @@ protected:
     bool CreateDescriptorSets();
     void DestroyUniformBuffers();
     void UpdateUniformBuffer(uint32_t currentImage);
+    void UpdateSunDirection();
     glm::vec3 ProjectToVirtualSphere(float nx, float ny) const;
     void ApplyConstrainedLocalRotation(const glm::vec3& localAxis, float angle);
     static void InitIdentityMatrix(float mat[4][4]);
@@ -66,6 +74,15 @@ protected:
     bool m_wireframeMode = false;
     bool m_grayEnabled = false;
     bool m_dyeEnabled = false;
+    bool m_lightAnalysisEnabled = false;
+    uint32_t m_shadowTextureSize = 2048;
+    float m_latitude = 36.0f;
+    int m_lightYear = 2000;
+    int m_lightMonth = 3;
+    int m_lightDay = 20;
+    int m_lightTimeMinutes = 360;
+    glm::vec3 m_sunDirection = glm::vec3(0.0f, -1.0f, 0.0f);
+    bool m_sunAboveHorizon = true;
     bool m_orthographicEnabled = false;
 
     glm::quat m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);

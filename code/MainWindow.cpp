@@ -40,6 +40,7 @@
 #include <QDial>
 #include <QDate>
 #include <QTime>
+#include <QtGlobal>
 #include <QSignalBlocker>
 #include <QSettings>
 #include <QMessageBox>
@@ -276,10 +277,21 @@ void MainWindow::SetupVulkan() {
     m_pLatitudeEdit = new QLineEdit(QStringLiteral("36"), m_lightAnalysisPanel);
     pFormLayout->addRow(QStringLiteral("纬度"), m_pLatitudeEdit);
 
+    connect(m_pComboTexSize, QOverload<const QString&>::of(&QComboBox::currentIndexChanged),
+            this, [this](const QString&) {
+        ApplyLightAnalysisToRenderer();
+    });
+    connect(m_pLatitudeEdit, &QLineEdit::textChanged, this, [this](const QString&) {
+        ApplyLightAnalysisToRenderer();
+    });
+
     m_pDateEdit = new QDateEdit(QDate::currentDate(), m_lightAnalysisPanel);
     m_pDateEdit->setDateRange(QDate::currentDate().addYears(-20), QDate::currentDate().addYears(50));
     m_pDateEdit->setCalendarPopup(true);
     pFormLayout->addRow(QStringLiteral("日期"), m_pDateEdit);
+    connect(m_pDateEdit, &QDateEdit::dateChanged, this, [this](const QDate&) {
+        ApplyLightAnalysisToRenderer();
+    });
 
     m_pTimeEdit = new QTimeEdit(QTime(12, 0), m_lightAnalysisPanel);
     m_pTimeEdit->setTimeRange(QTime(6, 0), QTime(18, 0));
@@ -302,6 +314,7 @@ void MainWindow::SetupVulkan() {
             const QSignalBlocker blocker(m_pTimeDial);
             m_pTimeDial->setValue(v);
         }
+        ApplyLightAnalysisToRenderer();
     });
     connect(m_pTimeDial, &QDial::valueChanged, this, [this](int v) {
         const QTime t = QTime(6, 0).addSecs(v * 60);
@@ -309,9 +322,11 @@ void MainWindow::SetupVulkan() {
             const QSignalBlocker blocker(m_pTimeEdit);
             m_pTimeEdit->setTime(t);
         }
+        ApplyLightAnalysisToRenderer();
     });
 
     m_lightAnalysisPanel->setVisible(false);
+    ApplyLightAnalysisToRenderer();
 
     QWidget* viewportHost = new QWidget();
     QHBoxLayout* viewportLayout = new QHBoxLayout(viewportHost);
@@ -410,6 +425,40 @@ void MainWindow::onLightAnalysis() {
         m_lightAnalysisButton->setStyleSheet(open
             ? QStringLiteral("background-color: #0078d4; color: #ffffff;")
             : QString());
+    }
+    ApplyLightAnalysisToRenderer();
+}
+
+void MainWindow::ApplyLightAnalysisToRenderer() {
+    auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer);
+    if (!render3D) return;
+
+    render3D->SetLightAnalysisEnabled(
+        m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible());
+
+    if (m_pComboTexSize) {
+        const uint32_t size = m_pComboTexSize->currentText().toUInt();
+        if (size == 1024 || size == 2048 || size == 4096 || size == 8192) {
+            render3D->SetShadowTextureSize(size);
+        }
+    }
+
+    if (m_pLatitudeEdit) {
+        bool ok = false;
+        const float latitude = m_pLatitudeEdit->text().toFloat(&ok);
+        if (ok) {
+            render3D->SetLatitude(latitude);
+        }
+    }
+
+    if (m_pDateEdit) {
+        const QDate d = m_pDateEdit->date();
+        render3D->SetLightDate(d.year(), d.month(), d.day());
+    }
+
+    if (m_pTimeEdit) {
+        const QTime t = m_pTimeEdit->time();
+        render3D->SetLightTimeMinutes((t.hour() - 6) * 60 + t.minute());
     }
 }
 
@@ -766,6 +815,7 @@ void MainWindow::SwitchTo3D() {
         auto* render3D = static_cast<VulkanRender3D*>(m_renderer);
         render3D->SetGrayEnabled(m_grayCheck && m_grayCheck->isChecked());
         render3D->SetWireframeEnabled(m_borderCheck && m_borderCheck->isChecked());
+        ApplyLightAnalysisToRenderer();
         RebuildSceneMeshes();
         m_renderTimer->start(16);
     }

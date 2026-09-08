@@ -39,6 +39,9 @@
     <ClInclude Include="..\include\VertexType\VertexTypes.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="..\include\Light\SolarPosition.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="..\include\Render\2DVulkanRender.h">
       <Filter>渲染器</Filter>
     </ClInclude>
@@ -80,6 +83,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="..\include\VertexType\VertexTypes.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\Light\SolarPosition.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="..\include\Render\2DVulkanRender.cpp">
