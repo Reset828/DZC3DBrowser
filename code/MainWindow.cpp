@@ -11,6 +11,7 @@
 #include <QMenuBar>
 #include <QToolBar>
 #include <QCheckBox>
+#include <QPushButton>
 #include <QLabel>
 #include <QStatusBar>
 #include <QWidget>
@@ -30,6 +31,19 @@
 #include <QStyleFactory>
 #include <QStyle>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QFormLayout>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QDateEdit>
+#include <QTimeEdit>
+#include <QDial>
+#include <QDate>
+#include <QTime>
+#include <QSignalBlocker>
+#include <QSettings>
+#include <QMessageBox>
+#include <QFile>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -127,6 +141,12 @@ void MainWindow::SetupToolBar() {
 
     QMenu* fileMenu = mb->addMenu(QStringLiteral("文件"));
     fileMenu->addAction(QStringLiteral("打开文件"), this, &MainWindow::onOpenFile);
+ 
+    m_recentMenu = new QMenu(QStringLiteral("最近打开文件"), this);
+    m_recentMenu->setToolTipsVisible(true);
+    fileMenu->addMenu(m_recentMenu);
+    LoadRecentFiles();
+    RebuildRecentMenu();
 
     QToolBar* toolbar = addToolBar(QStringLiteral("工具"));
     toolbar->setMovable(false);
@@ -147,6 +167,10 @@ void MainWindow::SetupToolBar() {
     m_orthographicCheck->setLayoutDirection(Qt::RightToLeft);
     m_orthographicCheck->setChecked(false);
     toolbar->addWidget(m_orthographicCheck);
+
+    m_lightAnalysisButton = new QPushButton(QStringLiteral("光照分析"));
+    toolbar->addWidget(m_lightAnalysisButton);
+    connect(m_lightAnalysisButton, &QPushButton::clicked, this, &MainWindow::onLightAnalysis);
 }
 
 void MainWindow::SetupStatusBar() {
@@ -231,10 +255,75 @@ void MainWindow::SetupVulkan() {
         }
     });
 
+    m_lightAnalysisPanel = new QWidget();
+    m_lightAnalysisPanel->setFixedWidth(250);
+    m_lightAnalysisPanel->setAutoFillBackground(true);
+    m_lightAnalysisPanel->setStyleSheet(QStringLiteral("background-color: #252526; border: 1px solid #3c3c3c;"));
+
+    QVBoxLayout* pTopLayout = new QVBoxLayout(m_lightAnalysisPanel);
+    pTopLayout->setContentsMargins(0, 0, 0, 0);
+    pTopLayout->setAlignment(Qt::AlignTop);
+
+    QFormLayout* pFormLayout = new QFormLayout;
+    pTopLayout->addLayout(pFormLayout);
+
+    m_pComboTexSize = new QComboBox;
+    m_pComboTexSize->addItems(QStringList() << QStringLiteral("1024") << QStringLiteral("2048")
+                                           << QStringLiteral("4096") << QStringLiteral("8192"));
+    m_pComboTexSize->setCurrentIndex(1);
+    pFormLayout->addRow(QStringLiteral("阴影纹理大小"), m_pComboTexSize);
+
+    m_pLatitudeEdit = new QLineEdit(QStringLiteral("36"), m_lightAnalysisPanel);
+    pFormLayout->addRow(QStringLiteral("纬度"), m_pLatitudeEdit);
+
+    m_pDateEdit = new QDateEdit(QDate::currentDate(), m_lightAnalysisPanel);
+    m_pDateEdit->setDateRange(QDate::currentDate().addYears(-20), QDate::currentDate().addYears(50));
+    m_pDateEdit->setCalendarPopup(true);
+    pFormLayout->addRow(QStringLiteral("日期"), m_pDateEdit);
+
+    m_pTimeEdit = new QTimeEdit(QTime(12, 0), m_lightAnalysisPanel);
+    m_pTimeEdit->setTimeRange(QTime(6, 0), QTime(18, 0));
+    m_pTimeEdit->setDisplayFormat(QStringLiteral("H:mm"));
+    pFormLayout->addRow(QStringLiteral("时间"), m_pTimeEdit);
+
+    m_pTimeDial = new QDial(m_lightAnalysisPanel);
+    m_pTimeDial->setFocusPolicy(Qt::StrongFocus);
+    m_pTimeDial->setMinimum(0);
+    m_pTimeDial->setMaximum(720);
+    m_pTimeDial->setPageStep(12);
+    m_pTimeDial->setNotchTarget(15);
+    m_pTimeDial->setNotchesVisible(true);
+    m_pTimeDial->setValue((m_pTimeEdit->time().hour() - 6) * 60 + m_pTimeEdit->time().minute());
+    pTopLayout->addWidget(m_pTimeDial, 1, Qt::AlignHCenter);
+
+    connect(m_pTimeEdit, &QTimeEdit::timeChanged, this, [this](const QTime& t) {
+        const int v = (t.hour() - 6) * 60 + t.minute();
+        if (m_pTimeDial->value() != v) {
+            const QSignalBlocker blocker(m_pTimeDial);
+            m_pTimeDial->setValue(v);
+        }
+    });
+    connect(m_pTimeDial, &QDial::valueChanged, this, [this](int v) {
+        const QTime t = QTime(6, 0).addSecs(v * 60);
+        if (m_pTimeEdit->time() != t) {
+            const QSignalBlocker blocker(m_pTimeEdit);
+            m_pTimeEdit->setTime(t);
+        }
+    });
+
+    m_lightAnalysisPanel->setVisible(false);
+
+    QWidget* viewportHost = new QWidget();
+    QHBoxLayout* viewportLayout = new QHBoxLayout(viewportHost);
+    viewportLayout->setContentsMargins(0, 0, 0, 0);
+    viewportLayout->setSpacing(0);
+    viewportLayout->addWidget(m_container, 1);
+    viewportLayout->addWidget(m_lightAnalysisPanel, 0);
+
     QSplitter* hSplitter = new QSplitter(Qt::Horizontal);
     hSplitter->setHandleWidth(1);
     hSplitter->addWidget(m_projectPanel);
-    hSplitter->addWidget(m_container);
+    hSplitter->addWidget(viewportHost);
     hSplitter->setStretchFactor(0, 1);
     hSplitter->setStretchFactor(1, 2);
 
@@ -313,6 +402,17 @@ void MainWindow::StartRenderLoop() {
     m_renderTimer->start(16);
 }
 
+void MainWindow::onLightAnalysis() {
+    if (!m_lightAnalysisPanel) return;
+    const bool open = !m_lightAnalysisPanel->isVisible();
+    m_lightAnalysisPanel->setVisible(open);
+    if (m_lightAnalysisButton) {
+        m_lightAnalysisButton->setStyleSheet(open
+            ? QStringLiteral("background-color: #0078d4; color: #ffffff;")
+            : QString());
+    }
+}
+
 void MainWindow::onOpenFile() {
     QString filePath = QFileDialog::getOpenFileName(this,
         QStringLiteral("选择 OBJ 文件"),
@@ -320,6 +420,16 @@ void MainWindow::onOpenFile() {
         QStringLiteral("OBJ 文件 (*.obj)"));
 
     if (filePath.isEmpty()) return;
+    LoadFile(filePath);
+}
+
+void MainWindow::LoadFile(const QString& filePath) {
+    if (filePath.isEmpty()) return;
+    if (!QFile::exists(filePath)) {
+        QMessageBox::warning(this, QStringLiteral("打开失败"),
+            QStringLiteral("无法打开文件:\n%1").arg(filePath));
+        return;
+    }
 
     const uint64_t loadGeneration = m_loadGeneration;
 
@@ -334,8 +444,53 @@ void MainWindow::onOpenFile() {
             AddLoadedModel(filePath, std::move(vertices), std::move(indices));
         });
 
-
     QThreadPool::globalInstance()->start(runnable);
+}
+
+void MainWindow::onRecentFileTriggered() {
+    auto* action = qobject_cast<QAction*>(sender());
+    if (!action) return;
+    LoadFile(action->data().toString());
+}
+
+void MainWindow::AddRecentFile(const QString& filePath) {
+    if (filePath.isEmpty()) return;
+    m_recentFiles.removeAll(filePath);
+    m_recentFiles.prepend(filePath);
+    while (m_recentFiles.size() > 5) {
+        m_recentFiles.removeLast();
+    }
+    SaveRecentFiles();
+    RebuildRecentMenu();
+}
+
+void MainWindow::LoadRecentFiles() {
+    QSettings settings;
+    m_recentFiles = settings.value(QStringLiteral("recentFiles")).toStringList();
+    while (m_recentFiles.size() > 5) {
+        m_recentFiles.removeLast();
+    }
+}
+
+void MainWindow::SaveRecentFiles() {
+    QSettings settings;
+    settings.setValue(QStringLiteral("recentFiles"), m_recentFiles);
+}
+
+void MainWindow::RebuildRecentMenu() {
+    if (!m_recentMenu) return;
+    m_recentMenu->clear();
+    if (m_recentFiles.isEmpty()) {
+        QAction* emptyAction = m_recentMenu->addAction(QStringLiteral("无最近文件"));
+        emptyAction->setEnabled(false);
+        return;
+    }
+    for (const QString& path : m_recentFiles) {
+        QAction* action = m_recentMenu->addAction(path);
+        action->setData(path);
+        action->setToolTip(path);
+        connect(action, &QAction::triggered, this, &MainWindow::onRecentFileTriggered);
+    }
 }
 
 void MainWindow::AddLoadedModel(const QString& filePath,
@@ -352,6 +507,7 @@ void MainWindow::AddLoadedModel(const QString& filePath,
 
     m_loadedModels.push_back(std::move(model));
     RebuildSceneMeshes();
+    AddRecentFile(filePath);
 }
 
 void MainWindow::SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible) {

@@ -5,6 +5,7 @@
 #include "VertexType/VertexTypes.h"
 #include <vector>
 #include <cstdint>
+#include <QStringList>
 
 class QWindowVulkan;
 class VulkanRender;
@@ -17,6 +18,13 @@ class QTreeWidgetItem;
 class QCheckBox;
 class QLabel;
 class QString;
+class QPushButton;
+class QComboBox;
+class QLineEdit;
+class QDateEdit;
+class QTimeEdit;
+class QDial;
+class QMenu;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -32,9 +40,16 @@ private slots:
     void onOpenFile();
     void on2DController();
     void on3DController();
+    void onLightAnalysis();
+    void onRecentFileTriggered();
 
 private:
     void SetupToolBar();
+    void LoadFile(const QString& filePath);
+    void AddRecentFile(const QString& filePath);
+    void LoadRecentFiles();
+    void SaveRecentFiles();
+    void RebuildRecentMenu();
     void SetupStatusBar();
     void SetupVulkan();
     void StartRenderLoop();
@@ -76,10 +91,20 @@ private:
     QCheckBox* m_grayCheck = nullptr;
     QCheckBox* m_dyeCheck = nullptr;
     QCheckBox* m_orthographicCheck = nullptr;
+    QPushButton* m_lightAnalysisButton = nullptr;
+    QWidget* m_lightAnalysisPanel = nullptr;
+    QComboBox* m_pComboTexSize = nullptr;
+    QLineEdit* m_pLatitudeEdit = nullptr;
+    QDateEdit* m_pDateEdit = nullptr;
+    QTimeEdit* m_pTimeEdit = nullptr;
+    QDial* m_pTimeDial = nullptr;
 
     QLabel* m_coordX = nullptr;
     QLabel* m_coordY = nullptr;
     QLabel* m_coordZ = nullptr;
+
+    QMenu* m_recentMenu = nullptr;
+    QStringList m_recentFiles;
 };
 
 #endif // __MAIN_WINDOW_H__
