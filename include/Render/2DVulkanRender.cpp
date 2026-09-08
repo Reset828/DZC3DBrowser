@@ -71,8 +71,8 @@ void VulkanRender2D::OnEndFrame() {}
 
 
 bool VulkanRender2D::CreatePipelines() {
-    auto vertShaderCode = ReadShaderFile("shaders/2d_vert.spv");
-    auto fragShaderCode = ReadShaderFile("shaders/2d_frag.spv");
+    auto vertShaderCode = ReadShaderFile("res/2d_vert.spv");
+    auto fragShaderCode = ReadShaderFile("res/2d_frag.spv");
 
     VkShaderModule vertShaderModule = CreateShaderModuleHelper(vertShaderCode);
     VkShaderModule fragShaderModule = CreateShaderModuleHelper(fragShaderCode);

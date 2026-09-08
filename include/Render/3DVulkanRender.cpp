@@ -280,8 +280,8 @@ bool VulkanRender3D::CreateRenderPass() {
 
 
 bool VulkanRender3D::CreatePipelines() {
-    auto vertShaderCode = ReadShaderFile("shaders/3d_vert.spv");
-    auto fragShaderCode = ReadShaderFile("shaders/3d_frag.spv");
+    auto vertShaderCode = ReadShaderFile("res/3d_vert.spv");
+    auto fragShaderCode = ReadShaderFile("res/3d_frag.spv");
 
     VkShaderModule vertShaderModule = CreateShaderModuleHelper(vertShaderCode);
     VkShaderModule fragShaderModule = CreateShaderModuleHelper(fragShaderCode);

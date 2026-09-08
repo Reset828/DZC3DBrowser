@@ -35,7 +35,9 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <Import Project="$(QtMsBuild)\qt_defaults.props" Condition="Exists('$(QtMsBuild)\qt_defaults.props')" />
-  <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" />
+  <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <QtModules>core;gui;widgets</QtModules>
+  </PropertyGroup>
   <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='Release|x64'" />
   <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') OR !Exists('$(QtMsBuild)\Qt.props')">
     <Message Importance="High" Text="QtMsBuild: could not locate qt.targets, qt.props; project may not build correctly." />
@@ -54,6 +56,12 @@
     <Import Project="$(QtMsBuild)\Qt.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>D:\projects\Vulkan-Reference\windows</OutDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>D:\projects\Vulkan-Reference\windows</OutDir>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -62,13 +70,13 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>GeneratedFiles\$(ConfigurationName);GeneratedFiles;D:\qt5.12.12\msvc2022_64\include;D:\qt5.12.12\msvc2022_64\include\QtWidgets;D:\qt5.12.12\msvc2022_64\include\QtGui;D:\qt5.12.12\msvc2022_64\include\QtCore;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\include;GeneratedFiles\$(ConfigurationName);GeneratedFiles;D:\qt5.12.12\msvc2022_64\include;D:\qt5.12.12\msvc2022_64\include\QtWidgets;D:\qt5.12.12\msvc2022_64\include\QtGui;D:\qt5.12.12\msvc2022_64\include\QtCore;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>D:\qt5.12.12\msvc2022_64\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>D:\qt_2\5.12.12\msvc2022_64\lib;D:\vualkan-sdk\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>Qt5Widgetsd.lib;Qt5Guid.lib;Qt5Cored.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
     </Link>
@@ -83,13 +91,13 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>GeneratedFiles\$(ConfigurationName);GeneratedFiles;D:\qt5.12.12\msvc2022_64\include;D:\qt5.12.12\msvc2022_64\include\QtWidgets;D:\qt5.12.12\msvc2022_64\include\QtGui;D:\qt5.12.12\msvc2022_64\include\QtCore;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\include;GeneratedFiles\$(ConfigurationName);GeneratedFiles;D:\qt5.12.12\msvc2022_64\include;D:\qt5.12.12\msvc2022_64\include\QtWidgets;D:\qt5.12.12\msvc2022_64\include\QtGui;D:\qt5.12.12\msvc2022_64\include\QtCore;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>D:\qt5.12.12\msvc2022_64\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>D:\qt5.12.12\msvc2022_64\lib;D:\vualkan-sdk\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>Qt5Widgets.lib;Qt5Gui.lib;Qt5Core.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
     </Link>
@@ -97,13 +105,13 @@
   <ItemGroup>
     <ClInclude Include="BufferUploadRunnable.h" />
     <ClInclude Include="ObjParseRunnable.h" />
-    <ClInclude Include="VertexTypes.h" />
-    <ClInclude Include="VulkanLayer.h" />
     <ClInclude Include="VulkanMesh.h" />
-    <ClInclude Include="VulkanObject.h" />
-    <ClInclude Include="render\VulkanRender.h" />
-    <ClInclude Include="render\2DVulkanRender.h" />
-    <ClInclude Include="render\3DVulkanRender.h" />
+    <ClInclude Include="..\include\VertexType\VertexTypes.h" />
+    <ClInclude Include="..\include\Layer\VulkanLayer.h" />
+    <ClInclude Include="..\include\Object\VulkanObject.h" />
+    <ClInclude Include="..\include\Render\VulkanRender.h" />
+    <ClInclude Include="..\include\Render\2DVulkanRender.h" />
+    <ClInclude Include="..\include\Render\3DVulkanRender.h" />
     <QtMoc Include="QWindowVulkan.h" />
     <QtMoc Include="MainWindow.h" />
   </ItemGroup>
@@ -113,19 +121,19 @@
     <ClCompile Include="MainWindow.cpp" />
     <ClCompile Include="ObjParseRunnable.cpp" />
     <ClCompile Include="QWindowVulkan.cpp" />
-    <ClCompile Include="render\VulkanRender.cpp" />
-    <ClCompile Include="VertexTypes.cpp" />
-    <ClCompile Include="VulkanLayer.cpp" />
     <ClCompile Include="VulkanMesh.cpp" />
-    <ClCompile Include="VulkanObject.cpp" />
-    <ClCompile Include="render\2DVulkanRender.cpp" />
-    <ClCompile Include="render\3DVulkanRender.cpp" />
+    <ClCompile Include="..\include\VertexType\VertexTypes.cpp" />
+    <ClCompile Include="..\include\Layer\VulkanLayer.cpp" />
+    <ClCompile Include="..\include\Object\VulkanObject.cpp" />
+    <ClCompile Include="..\include\Render\VulkanRender.cpp" />
+    <ClCompile Include="..\include\Render\2DVulkanRender.cpp" />
+    <ClCompile Include="..\include\Render\3DVulkanRender.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="shaders\2d.frag" />
-    <None Include="shaders\2d.vert" />
-    <None Include="shaders\3d.frag" />
-    <None Include="shaders\3d.vert" />
+    <None Include="res\shaders\2d.frag" />
+    <None Include="res\shaders\2d.vert" />
+    <None Include="res\shaders\3d.frag" />
+    <None Include="res\shaders\3d.vert" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="$(QtMsBuild)\qt.targets" Condition="Exists('$(QtMsBuild)\qt.targets')" />

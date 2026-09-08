@@ -1,11 +1,11 @@
 ﻿#include "MainWindow.h"
 #include "QWindowVulkan.h"
-#include "render/VulkanRender.h"
-#include "VulkanLayer.h"
+#include "Render/VulkanRender.h"
+#include "Layer/VulkanLayer.h"
 #include "VulkanMesh.h"
 #include "ObjParseRunnable.h"
-#include "render/3DVulkanRender.h"
-#include "render/2DVulkanRender.h"
+#include "Render/3DVulkanRender.h"
+#include "Render/2DVulkanRender.h"
 #include <QString>
 #include <QAction>
 #include <QMenuBar>

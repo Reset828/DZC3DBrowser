@@ -4,8 +4,8 @@
 #include <functional>
 #include <string>
 #include <vector>
-#include "render/VulkanRender.h"
-#include "VertexTypes.h"
+#include "Render/VulkanRender.h"
+#include "VertexType/VertexTypes.h"
 
 class ObjParseRunnable : public QRunnable {
 public:

@@ -1,7 +1,7 @@
 ﻿#pragma once
 
-#include "VulkanObject.h"
-#include "VertexTypes.h"
+#include "Object/VulkanObject.h"
+#include "VertexType/VertexTypes.h"
 #include "BufferUploadRunnable.h"
 #include <memory>
 #include <atomic>

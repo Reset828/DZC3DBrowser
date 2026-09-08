@@ -1,8 +1,8 @@
 ﻿#ifndef __VULKAN_OBJECT_H__
 #define __VULKAN_OBJECT_H__
 
-#include "render/VulkanRender.h"
-#include "VertexTypes.h"
+#include "Render/VulkanRender.h"
+#include "VertexType/VertexTypes.h"
 #include <cstdint>
 
 class VulkanObject {

@@ -18,13 +18,13 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="VulkanLayer.h">
+    <ClInclude Include="..\include\Layer\VulkanLayer.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="VulkanObject.h">
+    <ClInclude Include="..\include\Object\VulkanObject.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="render\VulkanRender.h">
+    <ClInclude Include="..\include\Render\VulkanRender.h">
       <Filter>渲染器</Filter>
     </ClInclude>
     <ClInclude Include="BufferUploadRunnable.h">
@@ -36,13 +36,13 @@
     <ClInclude Include="VulkanMesh.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="VertexTypes.h">
+    <ClInclude Include="..\include\VertexType\VertexTypes.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="render\2DVulkanRender.h">
+    <ClInclude Include="..\include\Render\2DVulkanRender.h">
       <Filter>渲染器</Filter>
     </ClInclude>
-    <ClInclude Include="render\3DVulkanRender.h">
+    <ClInclude Include="..\include\Render\3DVulkanRender.h">
       <Filter>渲染器</Filter>
     </ClInclude>
   </ItemGroup>
@@ -55,10 +55,10 @@
     </QtMoc>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="VulkanLayer.cpp">
+    <ClCompile Include="..\include\Layer\VulkanLayer.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="VulkanObject.cpp">
+    <ClCompile Include="..\include\Object\VulkanObject.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp">
@@ -79,23 +79,23 @@
     <ClCompile Include="VulkanMesh.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="VertexTypes.cpp">
+    <ClCompile Include="..\include\VertexType\VertexTypes.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="render\2DVulkanRender.cpp">
+    <ClCompile Include="..\include\Render\2DVulkanRender.cpp">
       <Filter>渲染器</Filter>
     </ClCompile>
-    <ClCompile Include="render\3DVulkanRender.cpp">
+    <ClCompile Include="..\include\Render\3DVulkanRender.cpp">
       <Filter>渲染器</Filter>
     </ClCompile>
-    <ClCompile Include="render\VulkanRender.cpp">
+    <ClCompile Include="..\include\Render\VulkanRender.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <None Include="shaders\2d.frag" />
-    <None Include="shaders\2d.vert" />
-    <None Include="shaders\3d.frag" />
-    <None Include="shaders\3d.vert" />
+    <None Include="res\shaders\2d.frag" />
+    <None Include="res\shaders\2d.vert" />
+    <None Include="res\shaders\3d.frag" />
+    <None Include="res\shaders\3d.vert" />
   </ItemGroup>
 </Project>

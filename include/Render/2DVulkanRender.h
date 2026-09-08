@@ -2,7 +2,7 @@
 #define __2D_VULKAN_RENDER_H__
 
 #include "VulkanRender.h"
-#include "VertexTypes.h"
+#include "VertexType/VertexTypes.h"
 #include <glm/glm.hpp>
 #include <vector>
 

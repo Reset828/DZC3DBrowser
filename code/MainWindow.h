@@ -2,7 +2,7 @@
 #define __MAIN_WINDOW_H__
 
 #include <QMainWindow>
-#include "VertexTypes.h"
+#include "VertexType/VertexTypes.h"
 #include <vector>
 #include <cstdint>
 
