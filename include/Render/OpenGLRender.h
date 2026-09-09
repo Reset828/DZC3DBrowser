@@ -53,6 +53,7 @@ public:
 
     QOpenGLFunctions_4_2_Core* GetFunctions() const;
     unsigned int GetCurrentProgram() const;
+    virtual unsigned int GetShadowProgram() const { return 0; }
 
     void WaitForIdle();
     void SubmitAsync(QRunnable* task);

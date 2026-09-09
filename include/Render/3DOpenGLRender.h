@@ -4,6 +4,7 @@
 #include "OpenGLRender.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <string>
 
 class OpenGLRender3D : public OpenGLRender {
 public:
@@ -22,12 +23,19 @@ public:
     void SetDyeEnabled(bool enabled);
     void SetLightAnalysisEnabled(bool enabled);
     void SetShadowTextureSize(uint32_t size);
+    uint32_t GetShadowTextureSize() const;
+    bool IsShadowMapReady() const;
+    std::string TakeShadowMapStatus();
+    void SetShadowSceneBounds(const Vec3& boundsMin, const Vec3& boundsMax, bool valid);
+    bool BeginShadowPass();
+    void EndShadowPass();
     void SetLatitude(float latitude);
     void SetLightDate(int year, int month, int day);
     void SetLightTimeMinutes(int minutes);
     glm::vec3 GetSunDirection() const;
     bool IsSunAboveHorizon() const;
     void SetOrthographicEnabled(bool enabled);
+    unsigned int GetShadowProgram() const override { return m_shadowProgram; }
     void SetOrbitCenter(const Vec3& normalizedCenter);
     void ResetView(float orbitDistance = 3.0f);
     void SetCoordinateNormalization(const Vec3& sourceCenter, float normalizationScale);
@@ -58,6 +66,16 @@ protected:
     unsigned int CompileShader(unsigned int type, const char* source);
     unsigned int LinkProgram(unsigned int vert, unsigned int frag);
     void UpdateSunDirection();
+    bool CreateDummyShadowMap();
+    void DestroyDummyShadowMap();
+    bool CreateShadowMap(uint32_t size);
+    void DestroyShadowMap();
+    bool EnsureShadowMapForAnalysis();
+    bool TryAllocateShadowMap(uint32_t size);
+    glm::mat4 ComputeLightViewProj() const;
+    bool ShouldRenderShadows() const;
+    void SetShadowMapStatus(const std::string& message);
+    void BindShadowTexture();
     glm::vec3 ProjectToVirtualSphere(float nx, float ny) const;
     void ApplyConstrainedLocalRotation(const glm::vec3& localAxis, float angle);
 
@@ -69,6 +87,14 @@ protected:
     bool m_dyeEnabled = false;
     bool m_lightAnalysisEnabled = false;
     uint32_t m_shadowTextureSize = 2048;
+    uint32_t m_allocatedShadowTextureSize = 0;
+    bool m_shadowMapReady = false;
+    bool m_shadowPassActive = false;
+    bool m_shadowBoundsValid = false;
+    glm::vec3 m_shadowBoundsMin = glm::vec3(-1.0f);
+    glm::vec3 m_shadowBoundsMax = glm::vec3(1.0f);
+    glm::mat4 m_lightViewProj = glm::mat4(1.0f);
+    std::string m_shadowMapStatus;
     float m_latitude = 36.0f;
     int m_lightYear = 2000;
     int m_lightMonth = 3;
@@ -98,7 +124,11 @@ protected:
     glm::mat4 m_normalizedToWorld = glm::mat4(1.0f);
 
     unsigned int m_program = 0;
+    unsigned int m_shadowProgram = 0;
     unsigned int m_ubo = 0;
+    unsigned int m_dummyShadowTexture = 0;
+    unsigned int m_shadowTexture = 0;
+    unsigned int m_shadowFbo = 0;
 };
 
 #endif //__3D_OPENGL_RENDER_H__

@@ -5,6 +5,8 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     mat4 proj;
     vec4 displayOptions;
     vec4 sunDirection;
+    mat4 lightViewProj;
+    vec4 shadowOptions;
 } ubo;
 
 layout(location = 0) in vec3 inPosition;

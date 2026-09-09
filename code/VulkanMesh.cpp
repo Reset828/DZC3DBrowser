@@ -75,16 +75,22 @@ void VulkanMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
     m_buffersReady = true;
 }
 
-void VulkanMesh::Render(int /*mode*/) {
+void VulkanMesh::Render(int mode) {
     if (!IsVisible() || !m_buffersReady || !m_pRender) return;
     if (m_indexCount == 0) return;
 
     VkCommandBuffer cmd = m_pRender->GetCurrentCommandBuffer();
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    if (mode == SceneObject::RM_SHADOW) {
+        pipeline = m_pRender->GetShadowPipeline();
+    } else {
+        pipeline = m_pRender->GetPipeline(m_pRender->IsWireframeEnabled()
+            ? VulkanRender::DT_TRIANGLE_WIREFRAME
+            : VulkanRender::DT_TRIANGLE);
+    }
+    if (pipeline == VK_NULL_HANDLE) return;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      m_pRender->GetPipeline(m_pRender->IsWireframeEnabled()
-                          ? VulkanRender::DT_TRIANGLE_WIREFRAME
-                          : VulkanRender::DT_TRIANGLE));
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
     VkBuffer vb[] = { m_vertexBuffer };
     VkDeviceSize offsets[] = { 0 };

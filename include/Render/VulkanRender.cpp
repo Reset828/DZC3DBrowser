@@ -45,6 +45,9 @@ bool VulkanRender::Initialize(const char* appName, uint32_t width, uint32_t heig
     if (!CreateSwapchain()) return false;
     if (!CreateImageViews()) return false;
 
+    m_shuttingDown = false;
+    m_frameRecording = false;
+
     if (!OnInitialize()) return false;
 
     if (!CreateRenderPass()) return false;
@@ -89,8 +92,12 @@ void VulkanRender::Shutdown() {
         vkDestroyCommandPool(m_device, m_singleTimeCommandPool, nullptr);
         m_singleTimeCommandPool = VK_NULL_HANDLE;
     }
-    vkDestroyCommandPool(m_device, m_commandPool, nullptr);
+    if (m_commandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(m_device, m_commandPool, nullptr);
+        m_commandPool = VK_NULL_HANDLE;
+    }
 
+    OnDestroyPipelines();
     for (int i = 0; i < DT_COUNT; i++) {
         if (m_pipelines[i] != VK_NULL_HANDLE) {
             vkDestroyPipeline(m_device, m_pipelines[i], nullptr);
@@ -108,18 +115,35 @@ void VulkanRender::Shutdown() {
 
     OnShutdown();
 
-    vkDestroyDevice(m_device, nullptr);
+    if (m_device != VK_NULL_HANDLE) {
+        vkDestroyDevice(m_device, nullptr);
+        m_device = VK_NULL_HANDLE;
+    }
+    m_physicalDevice = VK_NULL_HANDLE;
+    m_graphicsQueue = VK_NULL_HANDLE;
+    m_presentQueue = VK_NULL_HANDLE;
+    m_commandPool = VK_NULL_HANDLE;
+    m_commandBuffers.clear();
+    m_imageAvailableSemaphores.clear();
+    m_renderFinishedSemaphores.clear();
+    m_inFlightFences.clear();
+    m_currentFrame = 0;
+    m_imageIndex = 0;
+    m_frameRecording = false;
 
-    if (m_enableValidationLayers) {
+    if (m_debugMessenger != VK_NULL_HANDLE) {
         auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT");
         if (func) func(m_instance, m_debugMessenger, nullptr);
+        m_debugMessenger = VK_NULL_HANDLE;
     }
 
-    if (!m_externalInstance) {
+    if (!m_externalInstance && m_instance != VK_NULL_HANDLE) {
         vkDestroyInstance(m_instance, nullptr);
+        m_instance = VK_NULL_HANDLE;
     }
 
     m_initialized = false;
+    m_shuttingDown = false;
 }
 
 
@@ -129,7 +153,9 @@ void VulkanRender::SetClearColor(float r, float g, float b, float a) {
 }
 
 
-bool VulkanRender::BeginFrame() {
+bool VulkanRender::EnsureFrameRecording() {
+    if (m_frameRecording) return true;
+
     vkWaitForFences(m_device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
 
     uint32_t imageIndex;
@@ -152,13 +178,17 @@ bool VulkanRender::BeginFrame() {
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(m_commandBuffers[m_currentFrame], &beginInfo);
+    m_frameRecording = true;
+    return true;
+}
 
+void VulkanRender::BeginColorRenderPass() {
     OnBeginFrame();
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = m_renderPass;
-    renderPassInfo.framebuffer = m_swapchainFramebuffers[imageIndex];
+    renderPassInfo.framebuffer = m_swapchainFramebuffers[m_imageIndex];
     renderPassInfo.renderArea.offset = { 0, 0 };
     renderPassInfo.renderArea.extent = m_swapchainExtent;
 
@@ -180,7 +210,12 @@ bool VulkanRender::BeginFrame() {
     scissor.offset = { 0, 0 };
     scissor.extent = m_swapchainExtent;
     vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
+}
 
+bool VulkanRender::BeginFrame() {
+    OnPrepareFrame();
+    if (!EnsureFrameRecording()) return false;
+    BeginColorRenderPass();
     return true;
 }
 
@@ -230,6 +265,7 @@ void VulkanRender::EndFrame() {
     }
 
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    m_frameRecording = false;
 }
 
 void VulkanRender::DrawIndexed(uint32_t indexCount, uint32_t instanceCount) {
@@ -769,7 +805,10 @@ void VulkanRender::CleanupSwapchain() {
     }
     m_swapchainImageViews.clear();
 
-    vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+    if (m_swapchain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+        m_swapchain = VK_NULL_HANDLE;
+    }
 }
 
 

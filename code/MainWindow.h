@@ -5,6 +5,7 @@
 #include "VertexType/VertexTypes.h"
 #include <vector>
 #include <cstdint>
+#include <string>
 #include <QStringList>
 
 class QWindowVulkan;
@@ -67,6 +68,9 @@ private:
     void SwitchOpenGLTo2D();
     void SwitchOpenGLTo3D();
     void ApplyLightAnalysisToRenderer();
+    void UpdateShadowSceneBounds();
+    void SyncShadowTextureSizeCombo(uint32_t size);
+    void ShowShadowMapStatus(const std::string& message);
     void AddLoadedModel(const QString& filePath, std::vector<Vertex3D>&& vertices, std::vector<uint32_t>&& indices);
     void SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible);
     void RemoveLoadedModel(QTreeWidgetItem* treeItem);

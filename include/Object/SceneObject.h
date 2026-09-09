@@ -26,6 +26,11 @@ public:
         OT_LAYER
     };
 
+    enum RenderMode {
+        RM_DEFAULT = 0,
+        RM_SHADOW = 1
+    };
+
     enum FlagType {
         FT_VISIBLE = 1,
         FT_DIRTY = 16,

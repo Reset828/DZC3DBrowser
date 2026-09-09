@@ -12,7 +12,10 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <QOpenGLFunctions_4_2_Core>
+#include <QOpenGLContext>
+#include <QWindow>
 #include <iostream>
+#include <string>
 
 OpenGLRender3D::OpenGLRender3D() {
     UpdateSunDirection();
@@ -176,15 +179,21 @@ void OpenGLRender3D::OnMouseWheel(float delta) {
 bool OpenGLRender3D::OnInitialize() {
     if (!CreateShaderProgram()) return false;
     if (!CreateUniformBuffers()) return false;
+    if (!CreateDummyShadowMap()) return false;
     if (m_functions) {
         m_functions->glEnable(GL_DEPTH_TEST);
         m_functions->glDepthFunc(GL_LESS);
         m_functions->glDisable(GL_CULL_FACE);
     }
+    if (m_lightAnalysisEnabled) {
+        EnsureShadowMapForAnalysis();
+    }
     return true;
 }
 
 void OpenGLRender3D::OnShutdown() {
+    DestroyShadowMap();
+    DestroyDummyShadowMap();
     DestroyDepthReadbackResources();
     DestroyUniformBuffers();
     DestroyShaderProgram();
@@ -198,6 +207,7 @@ void OpenGLRender3D::OnBeginFrame() {
         m_currentProgram = m_program;
         m_functions->glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_ubo);
     }
+    BindShadowTexture();
     UpdateUniformBuffer();
 }
 
@@ -272,7 +282,23 @@ bool OpenGLRender3D::CreateShaderProgram() {
         m_program = LinkProgram(vert, frag);
         m_functions->glDeleteShader(vert);
         m_functions->glDeleteShader(frag);
-        return m_program != 0;
+        if (m_program == 0) return false;
+
+        const std::vector<char> shadowVertCode = ReadShaderFile("res/3d_shadow.vert");
+        const std::vector<char> shadowFragCode = ReadShaderFile("res/3d_shadow.frag");
+        std::string shadowVertSource(shadowVertCode.begin(), shadowVertCode.end());
+        std::string shadowFragSource(shadowFragCode.begin(), shadowFragCode.end());
+        unsigned int shadowVert = CompileShader(GL_VERTEX_SHADER, shadowVertSource.c_str());
+        unsigned int shadowFrag = CompileShader(GL_FRAGMENT_SHADER, shadowFragSource.c_str());
+        if (shadowVert == 0 || shadowFrag == 0) {
+            if (shadowVert) m_functions->glDeleteShader(shadowVert);
+            if (shadowFrag) m_functions->glDeleteShader(shadowFrag);
+            return false;
+        }
+        m_shadowProgram = LinkProgram(shadowVert, shadowFrag);
+        m_functions->glDeleteShader(shadowVert);
+        m_functions->glDeleteShader(shadowFrag);
+        return m_shadowProgram != 0;
     } catch (const std::exception& e) {
         std::cerr << "OpenGL 读取着色器失败: " << e.what() << std::endl;
         return false;
@@ -283,7 +309,11 @@ void OpenGLRender3D::DestroyShaderProgram() {
     if (m_functions && m_program != 0) {
         m_functions->glDeleteProgram(m_program);
     }
+    if (m_functions && m_shadowProgram != 0) {
+        m_functions->glDeleteProgram(m_shadowProgram);
+    }
     m_program = 0;
+    m_shadowProgram = 0;
     m_currentProgram = 0;
 }
 
@@ -296,6 +326,16 @@ bool OpenGLRender3D::CreateUniformBuffers() {
     unsigned int blockIndex = m_functions->glGetUniformBlockIndex(m_program, "UniformBufferObject");
     if (blockIndex != GL_INVALID_INDEX) {
         m_functions->glUniformBlockBinding(m_program, blockIndex, 0);
+    }
+    unsigned int shadowBlockIndex = m_functions->glGetUniformBlockIndex(m_shadowProgram, "UniformBufferObject");
+    if (shadowBlockIndex != GL_INVALID_INDEX) {
+        m_functions->glUniformBlockBinding(m_shadowProgram, shadowBlockIndex, 0);
+    }
+    int shadowMapLocation = m_functions->glGetUniformLocation(m_program, "shadowMap");
+    if (shadowMapLocation >= 0) {
+        m_functions->glUseProgram(m_program);
+        m_functions->glUniform1i(shadowMapLocation, 1);
+        m_functions->glUseProgram(0);
     }
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, 0);
     return true;
@@ -344,6 +384,12 @@ void OpenGLRender3D::UpdateUniformBuffer() {
     ubo.sunDirection[1] = m_sunDirection.y;
     ubo.sunDirection[2] = m_sunDirection.z;
     ubo.sunDirection[3] = 0.0f;
+    m_lightViewProj = ComputeLightViewProj();
+    memcpy(ubo.lightViewProj, glm::value_ptr(m_lightViewProj), sizeof(float) * 16);
+    ubo.shadowOptions[0] = ShouldRenderShadows() ? 1.0f : 0.0f;
+    ubo.shadowOptions[1] = 1.0f;
+    ubo.shadowOptions[2] = 0.0f;
+    ubo.shadowOptions[3] = 0.0f;
 
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, m_ubo);
     m_functions->glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(ubo), &ubo);
@@ -369,10 +415,280 @@ void OpenGLRender3D::SetDyeEnabled(bool enabled) {
 
 void OpenGLRender3D::SetLightAnalysisEnabled(bool enabled) {
     m_lightAnalysisEnabled = enabled;
+    if (!m_initialized) return;
+    if (m_context && m_window) {
+        m_context->makeCurrent(m_window);
+    }
+    if (!enabled) {
+        DestroyShadowMap();
+        m_shadowMapReady = false;
+        m_allocatedShadowTextureSize = 0;
+        return;
+    }
+    EnsureShadowMapForAnalysis();
 }
 
 void OpenGLRender3D::SetShadowTextureSize(uint32_t size) {
     m_shadowTextureSize = size;
+    if (m_initialized && m_lightAnalysisEnabled) {
+        if (m_context && m_window) {
+            m_context->makeCurrent(m_window);
+        }
+        EnsureShadowMapForAnalysis();
+    }
+}
+
+uint32_t OpenGLRender3D::GetShadowTextureSize() const {
+    return m_shadowTextureSize;
+}
+
+bool OpenGLRender3D::IsShadowMapReady() const {
+    return m_shadowMapReady;
+}
+
+std::string OpenGLRender3D::TakeShadowMapStatus() {
+    std::string message = std::move(m_shadowMapStatus);
+    m_shadowMapStatus.clear();
+    return message;
+}
+
+void OpenGLRender3D::SetShadowSceneBounds(const Vec3& boundsMin, const Vec3& boundsMax, bool valid) {
+    m_shadowBoundsValid = valid;
+    m_shadowBoundsMin = glm::vec3(boundsMin.x, boundsMin.y, boundsMin.z);
+    m_shadowBoundsMax = glm::vec3(boundsMax.x, boundsMax.y, boundsMax.z);
+}
+
+void OpenGLRender3D::SetShadowMapStatus(const std::string& message) {
+    m_shadowMapStatus = message;
+}
+
+bool OpenGLRender3D::ShouldRenderShadows() const {
+    return m_lightAnalysisEnabled && m_sunAboveHorizon && m_shadowMapReady && !m_shadowPassActive;
+}
+
+glm::mat4 OpenGLRender3D::ComputeLightViewProj() const {
+    glm::vec3 boundsMin = m_shadowBoundsMin;
+    glm::vec3 boundsMax = m_shadowBoundsMax;
+    if (!m_shadowBoundsValid) {
+        boundsMin = glm::vec3(-1.0f);
+        boundsMax = glm::vec3(1.0f);
+    }
+
+    glm::vec3 center = (boundsMin + boundsMax) * 0.5f;
+    glm::vec3 extent = (boundsMax - boundsMin) * 0.5f * 1.1f;
+    extent = glm::max(extent, glm::vec3(0.1f));
+
+    glm::vec3 sun = m_sunDirection;
+    const float sunLength = glm::length(sun);
+    if (sunLength <= 1.0e-6f) {
+        sun = glm::vec3(0.0f, 0.0f, 1.0f);
+    } else {
+        sun /= sunLength;
+    }
+
+    glm::vec3 up(0.0f, 0.0f, 1.0f);
+    if (std::abs(glm::dot(sun, up)) > 0.99f) {
+        up = glm::vec3(0.0f, 1.0f, 0.0f);
+    }
+
+    const float radius = glm::length(extent);
+    const glm::vec3 eye = center + sun * (radius + 0.1f);
+    const glm::mat4 lightView = glm::lookAt(eye, center, up);
+
+    glm::vec3 paddedMin = center - extent;
+    glm::vec3 paddedMax = center + extent;
+    glm::vec3 corners[8] = {
+        { paddedMin.x, paddedMin.y, paddedMin.z },
+        { paddedMax.x, paddedMin.y, paddedMin.z },
+        { paddedMin.x, paddedMax.y, paddedMin.z },
+        { paddedMax.x, paddedMax.y, paddedMin.z },
+        { paddedMin.x, paddedMin.y, paddedMax.z },
+        { paddedMax.x, paddedMin.y, paddedMax.z },
+        { paddedMin.x, paddedMax.y, paddedMax.z },
+        { paddedMax.x, paddedMax.y, paddedMax.z }
+    };
+
+    glm::vec3 viewMin(std::numeric_limits<float>::max());
+    glm::vec3 viewMax(std::numeric_limits<float>::lowest());
+    for (const glm::vec3& corner : corners) {
+        const glm::vec3 viewPos = glm::vec3(lightView * glm::vec4(corner, 1.0f));
+        viewMin = glm::min(viewMin, viewPos);
+        viewMax = glm::max(viewMax, viewPos);
+    }
+
+    float zNear = std::max(0.01f, -viewMax.z);
+    float zFar = std::max(zNear + 0.01f, -viewMin.z);
+    return glm::orthoRH_NO(viewMin.x, viewMax.x, viewMin.y, viewMax.y, zNear, zFar) * lightView;
+}
+
+void OpenGLRender3D::BindShadowTexture() {
+    if (!m_functions) return;
+    m_functions->glActiveTexture(GL_TEXTURE1);
+    unsigned int texture = m_dummyShadowTexture;
+    if (ShouldRenderShadows() && m_shadowTexture != 0) {
+        texture = m_shadowTexture;
+    }
+    m_functions->glBindTexture(GL_TEXTURE_2D, texture);
+    m_functions->glActiveTexture(GL_TEXTURE0);
+}
+
+bool OpenGLRender3D::CreateDummyShadowMap() {
+    if (!m_functions) return false;
+    m_functions->glGenTextures(1, &m_dummyShadowTexture);
+    m_functions->glBindTexture(GL_TEXTURE_2D, m_dummyShadowTexture);
+    m_functions->glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, 1, 1, 0,
+        GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    const float border[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    m_functions->glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LESS);
+    const float depth = 1.0f;
+    m_functions->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
+    m_functions->glBindTexture(GL_TEXTURE_2D, 0);
+    return m_dummyShadowTexture != 0;
+}
+
+void OpenGLRender3D::DestroyDummyShadowMap() {
+    if (m_functions && m_dummyShadowTexture != 0) {
+        m_functions->glDeleteTextures(1, &m_dummyShadowTexture);
+    }
+    m_dummyShadowTexture = 0;
+}
+
+bool OpenGLRender3D::CreateShadowMap(uint32_t size) {
+    if (!m_functions || size == 0) return false;
+    int maxSize = 0;
+    m_functions->glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxSize);
+    if (static_cast<int>(size) > maxSize) return false;
+
+    m_functions->glGenTextures(1, &m_shadowTexture);
+    m_functions->glBindTexture(GL_TEXTURE_2D, m_shadowTexture);
+    m_functions->glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+        static_cast<int>(size), static_cast<int>(size), 0,
+        GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    const float border[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    m_functions->glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LESS);
+
+    m_functions->glGenFramebuffers(1, &m_shadowFbo);
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFbo);
+    m_functions->glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m_shadowTexture, 0);
+    m_functions->glDrawBuffer(GL_NONE);
+    m_functions->glReadBuffer(GL_NONE);
+    const unsigned int status = m_functions->glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    m_functions->glBindTexture(GL_TEXTURE_2D, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        DestroyShadowMap();
+        return false;
+    }
+    const unsigned int error = m_functions->glGetError();
+    if (error != GL_NO_ERROR) {
+        DestroyShadowMap();
+        return false;
+    }
+    return true;
+}
+
+void OpenGLRender3D::DestroyShadowMap() {
+    if (m_functions && m_shadowFbo != 0) {
+        m_functions->glDeleteFramebuffers(1, &m_shadowFbo);
+    }
+    if (m_functions && m_shadowTexture != 0) {
+        m_functions->glDeleteTextures(1, &m_shadowTexture);
+    }
+    m_shadowFbo = 0;
+    m_shadowTexture = 0;
+    m_shadowMapReady = false;
+    m_allocatedShadowTextureSize = 0;
+}
+
+bool OpenGLRender3D::TryAllocateShadowMap(uint32_t size) {
+    DestroyShadowMap();
+    if (!CreateShadowMap(size)) return false;
+    m_shadowMapReady = true;
+    m_allocatedShadowTextureSize = size;
+    return true;
+}
+
+bool OpenGLRender3D::EnsureShadowMapForAnalysis() {
+    if (!m_initialized || !m_lightAnalysisEnabled) return false;
+    if (m_context && m_window) {
+        m_context->makeCurrent(m_window);
+    }
+    if (m_shadowMapReady && m_allocatedShadowTextureSize == m_shadowTextureSize) {
+        return true;
+    }
+
+    const uint32_t requested = m_shadowTextureSize;
+    const uint32_t previous = m_allocatedShadowTextureSize;
+    const bool hadPrevious = m_shadowMapReady && previous != 0;
+
+    if (TryAllocateShadowMap(requested)) {
+        return true;
+    }
+
+    if (hadPrevious && TryAllocateShadowMap(previous)) {
+        m_shadowTextureSize = previous;
+        SetShadowMapStatus("阴影贴图创建失败，已保留 " + std::to_string(previous));
+        return true;
+    }
+
+    if (requested != 2048 && previous != 2048 && TryAllocateShadowMap(2048)) {
+        m_shadowTextureSize = 2048;
+        SetShadowMapStatus("阴影贴图创建失败，已改用 2048");
+        return true;
+    }
+
+    m_shadowTextureSize = 2048;
+    m_shadowMapReady = false;
+    m_allocatedShadowTextureSize = 0;
+    SetShadowMapStatus("阴影贴图创建失败");
+    return false;
+}
+
+bool OpenGLRender3D::BeginShadowPass() {
+    if (!m_initialized || !m_lightAnalysisEnabled || !m_sunAboveHorizon) return false;
+    if (!m_context || !m_window || !m_context->makeCurrent(m_window)) return false;
+    if (!EnsureShadowMapForAnalysis() || !m_shadowMapReady || m_shadowFbo == 0) return false;
+    if (!m_functions) return false;
+
+    m_shadowPassActive = true;
+    UpdateUniformBuffer();
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFbo);
+    m_functions->glViewport(0, 0,
+        static_cast<int>(m_allocatedShadowTextureSize),
+        static_cast<int>(m_allocatedShadowTextureSize));
+    m_functions->glClear(GL_DEPTH_BUFFER_BIT);
+    m_functions->glEnable(GL_POLYGON_OFFSET_FILL);
+    m_functions->glPolygonOffset(1.75f, 1.25f);
+    if (m_shadowProgram != 0) {
+        m_functions->glUseProgram(m_shadowProgram);
+        m_currentProgram = m_shadowProgram;
+        m_functions->glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_ubo);
+    }
+    return true;
+}
+
+void OpenGLRender3D::EndShadowPass() {
+    if (!m_shadowPassActive) return;
+    if (m_functions) {
+        m_functions->glDisable(GL_POLYGON_OFFSET_FILL);
+        m_functions->glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        m_functions->glViewport(0, 0,
+            static_cast<int>(m_framebufferWidth),
+            static_cast<int>(m_framebufferHeight));
+    }
+    m_shadowPassActive = false;
 }
 
 void OpenGLRender3D::SetLatitude(float latitude) {

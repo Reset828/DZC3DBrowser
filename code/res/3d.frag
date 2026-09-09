@@ -1,4 +1,16 @@
 #version 450
+layout(std140, binding = 0) uniform UniformBufferObject {
+    mat4 model;
+    mat4 view;
+    mat4 proj;
+    vec4 displayOptions;
+    vec4 sunDirection;
+    mat4 lightViewProj;
+    vec4 shadowOptions;
+} ubo;
+
+layout(binding = 1) uniform sampler2DShadow shadowMap;
+
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec3 fragViewPosition;
 layout(location = 2) flat in float grayEnabled;
@@ -82,11 +94,41 @@ float SunLambert() {
     return max(dot(normal, sun), 0.0);
 }
 
+float ShadowFactor() {
+    if (ubo.shadowOptions.x < 0.5) {
+        return 1.0;
+    }
+
+    vec4 lightClip = ubo.lightViewProj * vec4(fragObjectPosition, 1.0);
+    if (lightClip.w <= 1.0e-6) {
+        return 1.0;
+    }
+
+    vec3 ndc = lightClip.xyz / lightClip.w;
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    float depth = mix(ndc.z, ndc.z * 0.5 + 0.5, ubo.shadowOptions.y);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 ||
+        depth < 0.0 || depth > 1.0) {
+        return 1.0;
+    }
+
+    const float bias = 0.002;
+    float ref = depth - bias;
+    vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
+    float shadow = 0.0;
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            shadow += texture(shadowMap, vec3(uv + vec2(float(x), float(y)) * texel, ref));
+        }
+    }
+    return shadow / 9.0;
+}
+
 float SunLighting() {
     if (sunAboveHorizon < 0.5) {
         return 0.03;
     }
-    return 0.04 + 0.96 * SunLambert();
+    return 0.04 + 0.96 * SunLambert() * ShadowFactor();
 }
 
 void main() {

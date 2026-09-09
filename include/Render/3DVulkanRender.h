@@ -5,6 +5,7 @@
 #include "VertexType/VertexTypes.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <string>
 #include <vector>
 
 class VulkanRender3D : public VulkanRender {
@@ -24,6 +25,13 @@ public:
     void SetDyeEnabled(bool enabled);
     void SetLightAnalysisEnabled(bool enabled);
     void SetShadowTextureSize(uint32_t size);
+    uint32_t GetShadowTextureSize() const;
+    bool IsShadowMapReady() const;
+    std::string TakeShadowMapStatus();
+    void SetShadowSceneBounds(const Vec3& boundsMin, const Vec3& boundsMax, bool valid);
+    bool BeginShadowPass();
+    void EndShadowPass();
+    VkPipeline GetShadowPipeline() const override;
     void SetLatitude(float latitude);
     void SetLightDate(int year, int month, int day);
     void SetLightTimeMinutes(int minutes);
@@ -44,8 +52,10 @@ public:
 protected:
     bool OnInitialize() override;
     void OnShutdown() override;
+    void OnPrepareFrame() override;
     void OnBeginFrame() override;
     void OnEndFrame() override;
+    void OnDestroyPipelines() override;
     void OnRecreateSwapchain() override;
 
     bool CreateRenderPass() override;
@@ -59,6 +69,24 @@ protected:
     void DestroyUniformBuffers();
     void UpdateUniformBuffer(uint32_t currentImage);
     void UpdateSunDirection();
+    void UpdateShadowDescriptors();
+    bool CreateShadowSampler();
+    bool CreateDummyShadowMap();
+    bool EnsureDummyShadowReady();
+    bool CreateShadowRenderPass();
+    bool CreateShadowPipeline();
+    bool CreateShadowMap(uint32_t size);
+    void DestroyShadowMap();
+    void DestroyDummyShadowMap();
+    void DestroyShadowSupport();
+    void TransitionDepthImage(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+                              VkAccessFlags srcAccess, VkAccessFlags dstAccess,
+                              VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage);
+    bool EnsureShadowMapForAnalysis();
+    bool TryAllocateShadowMap(uint32_t size);
+    glm::mat4 ComputeLightViewProj() const;
+    bool ShouldRenderShadows() const;
+    void SetShadowMapStatus(const std::string& message);
     glm::vec3 ProjectToVirtualSphere(float nx, float ny) const;
     void ApplyConstrainedLocalRotation(const glm::vec3& localAxis, float angle);
     static void InitIdentityMatrix(float mat[4][4]);
@@ -66,6 +94,7 @@ protected:
     bool CreateDepthResources();
     void DestroyDepthResources();
     VkFormat FindDepthFormat();
+    VkFormat FindShadowDepthFormat();
     VkFormat FindSupportedFormat(const std::vector<VkFormat>& candidates,
                                   VkImageTiling tiling,
                                   VkFormatFeatureFlags features);
@@ -76,6 +105,15 @@ protected:
     bool m_dyeEnabled = false;
     bool m_lightAnalysisEnabled = false;
     uint32_t m_shadowTextureSize = 2048;
+    uint32_t m_allocatedShadowTextureSize = 0;
+    bool m_shadowMapReady = false;
+    bool m_dummyShadowReady = false;
+    bool m_shadowPassActive = false;
+    bool m_shadowBoundsValid = false;
+    glm::vec3 m_shadowBoundsMin = glm::vec3(-1.0f);
+    glm::vec3 m_shadowBoundsMax = glm::vec3(1.0f);
+    glm::mat4 m_lightViewProj = glm::mat4(1.0f);
+    std::string m_shadowMapStatus;
     float m_latitude = 36.0f;
     int m_lightYear = 2000;
     int m_lightMonth = 3;
@@ -120,9 +158,22 @@ protected:
     VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> m_descriptorSets;
+    std::vector<VkDescriptorSet> m_shadowDescriptorSets;
     std::vector<VkBuffer> m_uniformBuffers;
     std::vector<VkDeviceMemory> m_uniformBuffersMemory;
     std::vector<void*> m_uniformBuffersMapped;
+
+    VkSampler m_shadowSampler = VK_NULL_HANDLE;
+    VkRenderPass m_shadowRenderPass = VK_NULL_HANDLE;
+    VkPipeline m_shadowPipeline = VK_NULL_HANDLE;
+    VkImage m_dummyShadowImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_dummyShadowMemory = VK_NULL_HANDLE;
+    VkImageView m_dummyShadowView = VK_NULL_HANDLE;
+    VkImage m_shadowImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_shadowMemory = VK_NULL_HANDLE;
+    VkImageView m_shadowView = VK_NULL_HANDLE;
+    VkFramebuffer m_shadowFramebuffer = VK_NULL_HANDLE;
+    VkFormat m_shadowDepthFormat = VK_FORMAT_UNDEFINED;
 };
 
 #endif //__3D_VULKAN_RENDER_H__

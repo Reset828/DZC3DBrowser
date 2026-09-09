@@ -62,6 +62,7 @@ public:
     virtual bool BeginFrame();                                    // 开始帧渲染，获取交换链图像
     virtual void EndFrame();                                      // 结束帧渲染，提交命令缓冲区
     virtual void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1);  // 索引绘制
+    virtual VkPipeline GetShadowPipeline() const { return VK_NULL_HANDLE; }
 
     VkDevice GetDevice() const;
     VkPhysicalDevice GetPhysicalDevice() const;
@@ -102,10 +103,15 @@ protected:
     virtual bool OnInitialize() { return true; }
     virtual void OnShutdown() {}
 
+    virtual void OnPrepareFrame() {}
     virtual void OnBeginFrame() {}
     virtual void OnEndFrame() {}
+    virtual void OnDestroyPipelines() {}
 
     virtual void OnRecreateSwapchain() {}
+
+    bool EnsureFrameRecording();
+    void BeginColorRenderPass();
 
     virtual bool CreateRenderPass();
     virtual bool CreatePipelines();
@@ -189,6 +195,7 @@ protected:
     uint32_t m_currentFrame = 0;                          // 当前帧索引
     uint32_t m_imageIndex = 0;                            // 当前交换链图像索引
     static const int MAX_FRAMES_IN_FLIGHT = 2;           // 最大飞行帧数（双缓冲）
+    bool m_frameRecording = false;
 
     bool m_framebufferResized = false;  // 帧缓冲区是否已调整大小
     bool m_externalInstance = false;    // 实例由外部管理（Qt 窗口）

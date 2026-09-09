@@ -55,6 +55,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -508,6 +509,15 @@ void MainWindow::StartRenderLoop() {
     connect(m_renderTimer, &QTimer::timeout, [this]() {
         if (IsOpenGLBackend()) {
             if (m_openglRenderer && m_openglRenderer->IsInitialized()) {
+                if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+                    if (m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
+                        render3D->IsSunAboveHorizon()) {
+                        if (render3D->BeginShadowPass()) {
+                            if (m_scene) m_scene->Render(SceneObject::RM_SHADOW);
+                            render3D->EndShadowPass();
+                        }
+                    }
+                }
                 if (m_openglRenderer->BeginFrame()) {
                     if (m_scene) m_scene->Render(0);
                     m_openglRenderer->EndFrame();
@@ -523,6 +533,15 @@ void MainWindow::StartRenderLoop() {
             return;
         }
         if (m_renderer && m_renderer->IsInitialized()) {
+            if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+                if (m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
+                    render3D->IsSunAboveHorizon()) {
+                    if (render3D->BeginShadowPass()) {
+                        if (m_scene) m_scene->Render(SceneObject::RM_SHADOW);
+                        render3D->EndShadowPass();
+                    }
+                }
+            }
             if (m_renderer->BeginFrame()) {
                 m_scene->Render(0);
                 m_renderer->EndFrame();
@@ -552,15 +571,8 @@ void MainWindow::onLightAnalysis() {
 }
 
 void MainWindow::ApplyLightAnalysisToRenderer() {
-    auto apply = [this](auto* render3D) {
+    auto applySun = [this](auto* render3D) {
         if (!render3D) return;
-        render3D->SetLightAnalysisEnabled(m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible());
-        if (m_pComboTexSize) {
-            const uint32_t size = m_pComboTexSize->currentText().toUInt();
-            if (size == 1024 || size == 2048 || size == 4096 || size == 8192) {
-                render3D->SetShadowTextureSize(size);
-            }
-        }
         if (m_pLatitudeEdit) {
             bool ok = false;
             const float latitude = m_pLatitudeEdit->text().toFloat(&ok);
@@ -577,8 +589,77 @@ void MainWindow::ApplyLightAnalysisToRenderer() {
             render3D->SetLightTimeMinutes((t.hour() - 6) * 60 + t.minute());
         }
     };
-    apply(dynamic_cast<VulkanRender3D*>(m_renderer));
-    apply(dynamic_cast<OpenGLRender3D*>(m_openglRenderer));
+    auto applyShadow = [this](auto* render3D) {
+        if (!render3D) return;
+        render3D->SetLightAnalysisEnabled(m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible());
+        if (m_pComboTexSize) {
+            const uint32_t size = m_pComboTexSize->currentText().toUInt();
+            if (size == 1024 || size == 2048 || size == 4096 || size == 8192) {
+                render3D->SetShadowTextureSize(size);
+            }
+        }
+        SyncShadowTextureSizeCombo(render3D->GetShadowTextureSize());
+        ShowShadowMapStatus(render3D->TakeShadowMapStatus());
+    };
+
+    auto* vulkan3D = dynamic_cast<VulkanRender3D*>(m_renderer);
+    auto* opengl3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer);
+    applySun(vulkan3D);
+    applySun(opengl3D);
+    if (IsOpenGLBackend()) {
+        applyShadow(opengl3D);
+    } else {
+        applyShadow(vulkan3D);
+    }
+    UpdateShadowSceneBounds();
+}
+
+void MainWindow::UpdateShadowSceneBounds() {
+    Vec3 bboxMin = { std::numeric_limits<float>::max(),
+                     std::numeric_limits<float>::max(),
+                     std::numeric_limits<float>::max() };
+    Vec3 bboxMax = { std::numeric_limits<float>::lowest(),
+                     std::numeric_limits<float>::lowest(),
+                     std::numeric_limits<float>::lowest() };
+    bool anyVisible = false;
+
+    for (const LoadedModel& model : m_loadedModels) {
+        if (!model.visible) continue;
+        for (const Vertex3D& vertex : model.sourceVertices) {
+            const float x = (vertex.position[0] - m_sceneSourceCenter[0]) * m_sceneNormalizationScale;
+            const float y = (vertex.position[1] - m_sceneSourceCenter[1]) * m_sceneNormalizationScale;
+            const float z = (vertex.position[2] - m_sceneSourceCenter[2]) * m_sceneNormalizationScale;
+            bboxMin.x = std::min(bboxMin.x, x);
+            bboxMin.y = std::min(bboxMin.y, y);
+            bboxMin.z = std::min(bboxMin.z, z);
+            bboxMax.x = std::max(bboxMax.x, x);
+            bboxMax.y = std::max(bboxMax.y, y);
+            bboxMax.z = std::max(bboxMax.z, z);
+            anyVisible = true;
+        }
+    }
+
+    if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+        render3D->SetShadowSceneBounds(bboxMin, bboxMax, anyVisible);
+    }
+    if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+        render3D->SetShadowSceneBounds(bboxMin, bboxMax, anyVisible);
+    }
+}
+
+void MainWindow::SyncShadowTextureSizeCombo(uint32_t size) {
+    if (!m_pComboTexSize) return;
+    const QString text = QString::number(size);
+    if (m_pComboTexSize->currentText() == text) return;
+    const int index = m_pComboTexSize->findText(text);
+    if (index < 0) return;
+    const QSignalBlocker blocker(m_pComboTexSize);
+    m_pComboTexSize->setCurrentIndex(index);
+}
+
+void MainWindow::ShowShadowMapStatus(const std::string& message) {
+    if (message.empty()) return;
+    statusBar()->showMessage(QString::fromStdString(message), 8000);
 }
 
 void MainWindow::onOpenFile() {
@@ -689,6 +770,7 @@ void MainWindow::SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible) 
     if (it->mesh) {
         it->mesh->SetVisible(visible);
     }
+    UpdateShadowSceneBounds();
 }
 
 void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
@@ -709,6 +791,7 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
     delete it->treeItem;
     it->treeItem = nullptr;
     m_loadedModels.erase(it);
+    UpdateShadowSceneBounds();
 }
 
 void MainWindow::ClearLoadedModels() {
@@ -752,6 +835,7 @@ void MainWindow::ClearLoadedModels() {
     m_coordX->setText(QStringLiteral("X: 0.000"));
     m_coordY->setText(QStringLiteral("Y: 0.000"));
     m_coordZ->setText(QStringLiteral("Z: 0.000"));
+    UpdateShadowSceneBounds();
 }
 
 void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
@@ -953,6 +1037,7 @@ void MainWindow::RebuildSceneMeshes() {
             vkMesh->SetMeshData(std::move(normalizedVertices), std::move(indices));
         }
     }
+    UpdateShadowSceneBounds();
 }
 
 void MainWindow::ResetLoadedMeshPointers() {
