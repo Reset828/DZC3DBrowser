@@ -12,11 +12,14 @@
 
 class QRunnable;  // Qt 线程池任务（仅指针使用，可前向声明）
 
+#ifndef __ENGINE_VEC_TYPES_H__
+#define __ENGINE_VEC_TYPES_H__
 struct Vec2 { float x, y; };
 struct Vec3 { float x, y, z; };
 struct Vec4 { float x, y, z, w; };
 struct Mat4 { float m[4][4]; };
 struct Rect2D { int x, y, width, height; };
+#endif
 
 struct VulkanQueueFamilyIndices {
     int graphicsFamily = -1;  // 图形队列族索引

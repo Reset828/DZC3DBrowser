@@ -1,8 +1,9 @@
 ﻿#include "VulkanObject.h"
 #include <algorithm>
 #include <stdexcept>
+#include <cstring>
 
-VulkanObject::VulkanObject() { }
+VulkanObject::VulkanObject() {}
 
 VulkanObject::VulkanObject(const VulkanObject& obj) {
     *this = obj;
@@ -14,15 +15,11 @@ VulkanObject::~VulkanObject() {
 
 VulkanObject& VulkanObject::operator=(const VulkanObject& obj) {
     if (this != &obj) {
-        m_pParent = obj.m_pParent;
+        SceneObject::operator=(obj);
         m_pRender = obj.m_pRender;
-        m_uType = obj.m_uType;
-        m_uFlag = obj.m_uFlag;
-        m_uClr = obj.m_uClr;
     }
     return *this;
 }
-
 
 void VulkanObject::SetRender(VulkanRender* pRender) {
     m_pRender = pRender;
@@ -31,75 +28,6 @@ void VulkanObject::SetRender(VulkanRender* pRender) {
 VulkanRender* VulkanObject::GetRender() const {
     return m_pRender;
 }
-
-
-void VulkanObject::SetParent(VulkanObject* pParent) {
-    m_pParent = pParent;
-}
-
-VulkanObject* VulkanObject::GetParent() const {
-    return m_pParent;
-}
-
-void VulkanObject::SetDirty(bool bDirty) {
-    EnableFlag(FT_DIRTY, bDirty);
-}
-
-bool VulkanObject::IsDirty() const {
-    return IsFlagEnabled(FT_DIRTY);
-}
-
-
-uint32_t VulkanObject::GetType() const {
-    return m_uType;
-}
-
-
-void VulkanObject::SetVisible(bool bVisible) {
-    EnableFlag(FT_VISIBLE, bVisible);
-}
-
-bool VulkanObject::IsVisible() const {
-    return IsFlagEnabled(FT_VISIBLE);
-}
-
-
-void VulkanObject::SetColor(const Vec4& clr) {
-    uint8_t r = static_cast<uint8_t>(clr.x * 255.0f);
-    uint8_t g = static_cast<uint8_t>(clr.y * 255.0f);
-    uint8_t b = static_cast<uint8_t>(clr.z * 255.0f);
-    uint8_t a = static_cast<uint8_t>(clr.w * 255.0f);
-    m_uClr = (static_cast<uint32_t>(r)) |
-             (static_cast<uint32_t>(g) << 8) |
-             (static_cast<uint32_t>(b) << 16) |
-             (static_cast<uint32_t>(a) << 24);
-}
-
-void VulkanObject::SetColor(float r, float g, float b, float a) {
-    SetColor(Vec4{ r, g, b, a });
-}
-
-Vec4 VulkanObject::GetColor() const {
-    float r = static_cast<float>((m_uClr >> 0) & 0xFF) / 255.0f;
-    float g = static_cast<float>((m_uClr >> 8) & 0xFF) / 255.0f;
-    float b = static_cast<float>((m_uClr >> 16) & 0xFF) / 255.0f;
-    float a = static_cast<float>((m_uClr >> 24) & 0xFF) / 255.0f;
-    return Vec4{ r, g, b, a };
-}
-
-
-void VulkanObject::EnableFlag(FlagType ft, bool bEnable) {
-    if (bEnable) {
-        m_uFlag |= static_cast<uint8_t>(ft);
-    } else {
-        m_uFlag &= ~static_cast<uint8_t>(ft);
-    }
-}
-
-bool VulkanObject::IsFlagEnabled(FlagType ft) const {
-    return (m_uFlag & static_cast<uint8_t>(ft)) != 0;
-}
-
 
 void VulkanObject::CreateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     if (!m_pRender || vertices.empty()) return;
@@ -202,7 +130,6 @@ void VulkanObject::DestroyBuffers() {
         m_vertexBufferMemory = VK_NULL_HANDLE;
     }
 }
-
 
 void VulkanObject::CreateBufferHelper(VkDeviceSize size, VkBufferUsageFlags usage,
                                       VkMemoryPropertyFlags properties,

@@ -18,10 +18,16 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\include\Layer\VulkanLayer.h">
+    <ClInclude Include="..\include\Layer\Layer.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Object\SceneObject.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Object\VulkanObject.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Object\OpenGLObject.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Render\VulkanRender.h">
@@ -36,6 +42,9 @@
     <ClInclude Include="VulkanMesh.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="OpenGLMesh.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="..\include\VertexType\VertexTypes.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -48,9 +57,21 @@
     <ClInclude Include="..\include\Render\3DVulkanRender.h">
       <Filter>渲染器</Filter>
     </ClInclude>
+    <ClInclude Include="..\include\Render\OpenGLRender.h">
+      <Filter>渲染器</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Render\2DOpenGLRender.h">
+      <Filter>渲染器</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Render\3DOpenGLRender.h">
+      <Filter>渲染器</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="QWindowVulkan.h">
+      <Filter>头文件</Filter>
+    </QtMoc>
+    <QtMoc Include="QWindowOpenGL.h">
       <Filter>头文件</Filter>
     </QtMoc>
     <QtMoc Include="MainWindow.h">
@@ -58,10 +79,16 @@
     </QtMoc>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\include\Layer\VulkanLayer.cpp">
+    <ClCompile Include="..\include\Layer\Layer.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\Object\SceneObject.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="..\include\Object\VulkanObject.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\Object\OpenGLObject.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp">
@@ -73,6 +100,9 @@
     <ClCompile Include="QWindowVulkan.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="QWindowOpenGL.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="BufferUploadRunnable.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -80,6 +110,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="VulkanMesh.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="OpenGLMesh.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="..\include\VertexType\VertexTypes.cpp">
@@ -92,6 +125,15 @@
       <Filter>渲染器</Filter>
     </ClCompile>
     <ClCompile Include="..\include\Render\3DVulkanRender.cpp">
+      <Filter>渲染器</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\Render\OpenGLRender.cpp">
+      <Filter>渲染器</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\Render\2DOpenGLRender.cpp">
+      <Filter>渲染器</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\Render\3DOpenGLRender.cpp">
       <Filter>渲染器</Filter>
     </ClCompile>
     <ClCompile Include="..\include\Render\VulkanRender.cpp">

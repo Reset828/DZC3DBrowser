@@ -8,9 +8,11 @@
 #include <QStringList>
 
 class QWindowVulkan;
+class QWindowOpenGL;
 class VulkanRender;
-class VulkanLayer;
-class VulkanMesh;
+class OpenGLRender;
+class Layer;
+class SceneObject;
 class QTimer;
 class QWidget;
 class QTreeWidget;
@@ -20,6 +22,7 @@ class QLabel;
 class QString;
 class QPushButton;
 class QComboBox;
+class QHBoxLayout;
 class QLineEdit;
 class QDateEdit;
 class QTimeEdit;
@@ -42,6 +45,7 @@ private slots:
     void on3DController();
     void onLightAnalysis();
     void onRecentFileTriggered();
+    void onBackendEngineChanged(int index);
 
 private:
     void SetupToolBar();
@@ -55,6 +59,13 @@ private:
     void StartRenderLoop();
     void SwitchTo2D();
     void SwitchTo3D();
+    void SwitchToVulkan();
+    void SwitchToOpenGL();
+    bool IsOpenGLBackend() const;
+    void EnsureOpenGLWindow();
+    void EnsureOpenGLInitialized();
+    void SwitchOpenGLTo2D();
+    void SwitchOpenGLTo3D();
     void ApplyLightAnalysisToRenderer();
     void AddLoadedModel(const QString& filePath, std::vector<Vertex3D>&& vertices, std::vector<uint32_t>&& indices);
     void SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible);
@@ -67,15 +78,19 @@ private:
     struct LoadedModel {
         std::vector<Vertex3D> sourceVertices;
         std::vector<uint32_t> indices;
-        VulkanMesh* mesh = nullptr;             // 所有权属于场景
+        SceneObject* mesh = nullptr;            // 所有权属于场景
         QTreeWidgetItem* treeItem = nullptr;    // 所有权属于主面板
         bool visible = true;
     };
 
     VulkanRender* m_renderer;
+    OpenGLRender* m_openglRenderer = nullptr;
     QWindowVulkan* m_vulkanWindow;
+    QWindowOpenGL* m_openglWindow = nullptr;
     QWidget* m_container;
-    VulkanLayer* m_scene;
+    QWidget* m_openglContainer = nullptr;
+    QHBoxLayout* m_viewportLayout = nullptr;
+    Layer* m_scene;
     QTimer* m_renderTimer;
     QTreeWidget* m_projectPanel;
     QTreeWidgetItem* m_modelsTreeItem;
@@ -91,6 +106,7 @@ private:
     QCheckBox* m_dyeCheck = nullptr;
     QCheckBox* m_orthographicCheck = nullptr;
     QPushButton* m_lightAnalysisButton = nullptr;
+    QComboBox* m_backendEngineCombo = nullptr;
     QWidget* m_lightAnalysisPanel = nullptr;
     QComboBox* m_pComboTexSize = nullptr;
     QLineEdit* m_pLatitudeEdit = nullptr;

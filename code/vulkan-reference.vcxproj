@@ -110,14 +110,21 @@
     <ClInclude Include="BufferUploadRunnable.h" />
     <ClInclude Include="ObjParseRunnable.h" />
     <ClInclude Include="VulkanMesh.h" />
+    <ClInclude Include="OpenGLMesh.h" />
     <ClInclude Include="..\include\VertexType\VertexTypes.h" />
     <ClInclude Include="..\include\Light\SolarPosition.h" />
-    <ClInclude Include="..\include\Layer\VulkanLayer.h" />
+    <ClInclude Include="..\include\Layer\Layer.h" />
+    <ClInclude Include="..\include\Object\SceneObject.h" />
     <ClInclude Include="..\include\Object\VulkanObject.h" />
+    <ClInclude Include="..\include\Object\OpenGLObject.h" />
     <ClInclude Include="..\include\Render\VulkanRender.h" />
     <ClInclude Include="..\include\Render\2DVulkanRender.h" />
     <ClInclude Include="..\include\Render\3DVulkanRender.h" />
+    <ClInclude Include="..\include\Render\OpenGLRender.h" />
+    <ClInclude Include="..\include\Render\2DOpenGLRender.h" />
+    <ClInclude Include="..\include\Render\3DOpenGLRender.h" />
     <QtMoc Include="QWindowVulkan.h" />
+    <QtMoc Include="QWindowOpenGL.h" />
     <QtMoc Include="MainWindow.h" />
   </ItemGroup>
   <ItemGroup>
@@ -126,14 +133,21 @@
     <ClCompile Include="MainWindow.cpp" />
     <ClCompile Include="ObjParseRunnable.cpp" />
     <ClCompile Include="QWindowVulkan.cpp" />
+    <ClCompile Include="QWindowOpenGL.cpp" />
     <ClCompile Include="VulkanMesh.cpp" />
+    <ClCompile Include="OpenGLMesh.cpp" />
     <ClCompile Include="..\include\VertexType\VertexTypes.cpp" />
     <ClCompile Include="..\include\Light\SolarPosition.cpp" />
-    <ClCompile Include="..\include\Layer\VulkanLayer.cpp" />
+    <ClCompile Include="..\include\Layer\Layer.cpp" />
+    <ClCompile Include="..\include\Object\SceneObject.cpp" />
     <ClCompile Include="..\include\Object\VulkanObject.cpp" />
+    <ClCompile Include="..\include\Object\OpenGLObject.cpp" />
     <ClCompile Include="..\include\Render\VulkanRender.cpp" />
     <ClCompile Include="..\include\Render\2DVulkanRender.cpp" />
     <ClCompile Include="..\include\Render\3DVulkanRender.cpp" />
+    <ClCompile Include="..\include\Render\OpenGLRender.cpp" />
+    <ClCompile Include="..\include\Render\2DOpenGLRender.cpp" />
+    <ClCompile Include="..\include\Render\3DOpenGLRender.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="res\2d.frag" />
