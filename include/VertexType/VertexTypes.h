@@ -29,7 +29,8 @@ struct UniformBufferObject3D {
     alignas(16) float model[4][4];
     alignas(16) float view[4][4];
     alignas(16) float proj[4][4];
-    alignas(16) float displayOptions[4]; // x: 是否按局部 Z 显示灰度
+    alignas(16) float displayOptions[4]; // x: 灰度  y: 染色  z: 光照分析  w: 太阳在地平线以上
+    alignas(16) float sunDirection[4];   // xyz: 物体空间指向太阳（+X 东 +Y 北 +Z 上）
 };
 
 #endif //__VERTEX_TYPES_H__

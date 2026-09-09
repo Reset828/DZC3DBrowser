@@ -433,8 +433,7 @@ void MainWindow::ApplyLightAnalysisToRenderer() {
     auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer);
     if (!render3D) return;
 
-    render3D->SetLightAnalysisEnabled(
-        m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible());
+    render3D->SetLightAnalysisEnabled(m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible());
 
     if (m_pComboTexSize) {
         const uint32_t size = m_pComboTexSize->currentText().toUInt();

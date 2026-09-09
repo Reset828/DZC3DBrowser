@@ -733,6 +733,12 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     memcpy(ubo.proj, glm::value_ptr(proj), sizeof(float) * 16);
     ubo.displayOptions[0] = m_grayEnabled ? 1.0f : 0.0f;
     ubo.displayOptions[1] = m_dyeEnabled ? 1.0f : 0.0f;
+    ubo.displayOptions[2] = m_lightAnalysisEnabled ? 1.0f : 0.0f;
+    ubo.displayOptions[3] = m_sunAboveHorizon ? 1.0f : 0.0f;
+    ubo.sunDirection[0] = m_sunDirection.x;
+    ubo.sunDirection[1] = m_sunDirection.y;
+    ubo.sunDirection[2] = m_sunDirection.z;
+    ubo.sunDirection[3] = 0.0f;
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 

@@ -135,6 +135,12 @@
     <ClCompile Include="..\include\Render\2DVulkanRender.cpp" />
     <ClCompile Include="..\include\Render\3DVulkanRender.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="res\2d.frag" />
+    <None Include="res\2d.vert" />
+    <None Include="res\3d.frag" />
+    <None Include="res\3d.vert" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="$(QtMsBuild)\qt.targets" Condition="Exists('$(QtMsBuild)\qt.targets')" />
   <ImportGroup Label="ExtensionTargets">

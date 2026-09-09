@@ -99,9 +99,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <None Include="res\shaders\2d.frag" />
-    <None Include="res\shaders\2d.vert" />
-    <None Include="res\shaders\3d.frag" />
-    <None Include="res\shaders\3d.vert" />
+    <None Include="res\2d.frag" />
+    <None Include="res\2d.vert" />
+    <None Include="res\3d.frag" />
+    <None Include="res\3d.vert" />
   </ItemGroup>
 </Project>

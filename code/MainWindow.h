@@ -56,9 +56,7 @@ private:
     void SwitchTo2D();
     void SwitchTo3D();
     void ApplyLightAnalysisToRenderer();
-    void AddLoadedModel(const QString& filePath,
-                        std::vector<Vertex3D>&& vertices,
-                        std::vector<uint32_t>&& indices);
+    void AddLoadedModel(const QString& filePath, std::vector<Vertex3D>&& vertices, std::vector<uint32_t>&& indices);
     void SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible);
     void RemoveLoadedModel(QTreeWidgetItem* treeItem);
     void ClearLoadedModels();
