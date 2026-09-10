@@ -388,7 +388,7 @@ void OpenGLRender3D::UpdateUniformBuffer() {
     memcpy(ubo.lightViewProj, glm::value_ptr(m_lightViewProj), sizeof(float) * 16);
     ubo.shadowOptions[0] = ShouldRenderShadows() ? 1.0f : 0.0f;
     ubo.shadowOptions[1] = 1.0f;
-    ubo.shadowOptions[2] = 0.0f;
+    ubo.shadowOptions[2] = m_wireframeMode ? 1.0f : 0.0f;
     ubo.shadowOptions[3] = 0.0f;
 
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, m_ubo);

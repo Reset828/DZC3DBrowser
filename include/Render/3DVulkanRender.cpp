@@ -789,7 +789,7 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     memcpy(ubo.lightViewProj, glm::value_ptr(m_lightViewProj), sizeof(float) * 16);
     ubo.shadowOptions[0] = ShouldRenderShadows() ? 1.0f : 0.0f;
     ubo.shadowOptions[1] = 0.0f;
-    ubo.shadowOptions[2] = 0.0f;
+    ubo.shadowOptions[2] = m_wireframeMode ? 1.0f : 0.0f;
     ubo.shadowOptions[3] = 0.0f;
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }

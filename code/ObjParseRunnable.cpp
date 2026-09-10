@@ -350,6 +350,9 @@ void ObjParseRunnable::run() {
         std::vector<uint32_t> indices;
         std::unordered_map<VertexKey, uint32_t, VertexKeyHash> vertexLookup;
         std::vector<uint32_t> positionOnlyLookup;
+        // 缺少 OBJ vn 时按位置累加面法线，供线框片元使用稳定的物体空间法线。
+        std::vector<Vec3> generatedNormalSums;
+        std::vector<uint32_t> generatedVertexPositions;
 
         positions.reserve(static_cast<size_t>(fileSize) / 48);
         vertices.reserve(static_cast<size_t>(fileSize) / 48);
@@ -463,6 +466,20 @@ void ObjParseRunnable::run() {
                             LengthSquared(normals[vertex.normal]) >
                                 std::numeric_limits<float>::epsilon();
                     });
+                const Vec3 generatedFaceNormal = faceHasCompleteNormals
+                    ? Vec3{}
+                    : CalculateFaceNormal(face, positions);
+                if (!faceHasCompleteNormals) {
+                    if (generatedNormalSums.size() < positions.size()) {
+                        generatedNormalSums.resize(positions.size());
+                    }
+                    for (const FaceVertex& vertex : face) {
+                        Vec3& sum = generatedNormalSums[vertex.position];
+                        sum.x += generatedFaceNormal.x;
+                        sum.y += generatedFaceNormal.y;
+                        sum.z += generatedFaceNormal.z;
+                    }
+                }
 
                 auto createVertex = [&](const FaceVertex& source,
                                         bool useObjNormal) -> uint32_t {
@@ -491,37 +508,38 @@ void ObjParseRunnable::run() {
 
                     const uint32_t newIndex = static_cast<uint32_t>(vertices.size());
                     vertices.push_back(vertex);
+                    generatedVertexPositions.push_back(static_cast<uint32_t>(source.position));
                     return newIndex;
                 };
 
                 auto emitCorner = [&](size_t corner) {
-                        const FaceVertex& source = face[corner];
-                        if (!faceHasCompleteNormals && source.texCoord < 0) {
-                            if (positionOnlyLookup.size() < positions.size()) {
-                                positionOnlyLookup.resize(
-                                    positions.size(), std::numeric_limits<uint32_t>::max());
-                            }
-                            uint32_t& mappedIndex = positionOnlyLookup[source.position];
-                            if (mappedIndex == std::numeric_limits<uint32_t>::max()) {
-                                mappedIndex = createVertex(source, false);
-                            }
-                            indices.push_back(mappedIndex);
-                            return;
+                    const FaceVertex& source = face[corner];
+                    if (!faceHasCompleteNormals && source.texCoord < 0) {
+                        if (positionOnlyLookup.size() < positions.size()) {
+                            positionOnlyLookup.resize(
+                                positions.size(), std::numeric_limits<uint32_t>::max());
                         }
-
-                        const VertexKey key = {
-                            source.position,
-                            source.texCoord,
-                            faceHasCompleteNormals ? source.normal : -1
-                        };
-
-                        auto found = vertexLookup.find(key);
-                        if (found == vertexLookup.end()) {
-                            const uint32_t newIndex =
-                                createVertex(source, faceHasCompleteNormals);
-                            found = vertexLookup.emplace(key, newIndex).first;
+                        uint32_t& mappedIndex = positionOnlyLookup[source.position];
+                        if (mappedIndex == std::numeric_limits<uint32_t>::max()) {
+                            mappedIndex = createVertex(source, false);
                         }
-                        indices.push_back(found->second);
+                        indices.push_back(mappedIndex);
+                        return;
+                    }
+
+                    const VertexKey key = {
+                        source.position,
+                        source.texCoord,
+                        faceHasCompleteNormals ? source.normal : -1
+                    };
+
+                    auto found = vertexLookup.find(key);
+                    if (found == vertexLookup.end()) {
+                        const uint32_t newIndex =
+                            createVertex(source, faceHasCompleteNormals);
+                        found = vertexLookup.emplace(key, newIndex).first;
+                    }
+                    indices.push_back(found->second);
                 };
 
                 if (face.size() == 3) {
@@ -548,6 +566,24 @@ void ObjParseRunnable::run() {
         }
         if (vertices.empty() || indices.empty()) {
             throw std::runtime_error("OBJ 文件中没有可渲染的有效面");
+        }
+
+        for (size_t i = 0; i < vertices.size(); ++i) {
+            Vertex3D& vertex = vertices[i];
+            if (LengthSquared(Vec3{ vertex.normal[0], vertex.normal[1], vertex.normal[2] }) >
+                std::numeric_limits<float>::epsilon()) {
+                continue;
+            }
+            if (i >= generatedVertexPositions.size()) {
+                continue;
+            }
+            const uint32_t positionIndex = generatedVertexPositions[i];
+            const Vec3 normal = positionIndex < generatedNormalSums.size()
+                ? NormalizeOr(generatedNormalSums[positionIndex], {0.0f, 0.0f, 1.0f})
+                : Vec3{0.0f, 0.0f, 1.0f};
+            vertex.normal[0] = normal.x;
+            vertex.normal[1] = normal.y;
+            vertex.normal[2] = normal.z;
         }
 
         const Vec3 center = {(bboxMin.x + bboxMax.x) * 0.5f,

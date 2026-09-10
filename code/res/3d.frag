@@ -11,17 +11,11 @@ layout(std140, binding = 0) uniform UniformBufferObject {
 
 layout(binding = 1) uniform sampler2DShadow shadowMap;
 
-layout(location = 0) in vec3 fragColor;
-layout(location = 1) in vec3 fragViewPosition;
-layout(location = 2) flat in float grayEnabled;
-layout(location = 3) in vec3 fragViewNormal;
-layout(location = 4) in vec3 fragWorldPosition;
-layout(location = 5) flat in float dyeEnabled;
-layout(location = 6) flat in float lightAnalysisEnabled;
-layout(location = 7) flat in float sunAboveHorizon;
-layout(location = 8) flat in vec3 fragSunDirection;
-layout(location = 9) in vec3 fragObjectPosition;
-layout(location = 10) in vec3 fragObjectNormal;
+layout(location = 0) in vec3 fragViewPosition;
+layout(location = 1) in vec3 fragViewNormal;
+layout(location = 2) in vec3 fragWorldPosition;
+layout(location = 3) in vec3 fragObjectPosition;
+layout(location = 4) in vec3 fragObjectNormal;
 
 layout(location = 0) out vec4 outColor;
 
@@ -37,23 +31,54 @@ vec3 DyeColor() {
     return mix(color, white, smoothstep(0.65, 1.0, t));
 }
 
+bool WireframeEnabled() {
+    return ubo.shadowOptions.z > 0.5;
+}
+
 vec3 ShadedViewNormal() {
-    vec3 geometricNormal = normalize(
-        cross(dFdx(fragViewPosition), dFdy(fragViewPosition)));
     vec3 viewDirection = normalize(-fragViewPosition);
+
+    vec3 objNormal = vec3(0.0);
+    float objNormalLengthSquared = dot(fragViewNormal, fragViewNormal);
+    if (objNormalLengthSquared > 1.0e-12) {
+        objNormal = fragViewNormal * inversesqrt(objNormalLengthSquared);
+        if (dot(objNormal, viewDirection) < 0.0) {
+            objNormal = -objNormal;
+        }
+    }
+
+    // GL_LINE / VK_POLYGON_MODE_LINE fragments have degenerate screen
+    // derivatives, so gray would otherwise keep the lighting color.
+    if (WireframeEnabled()) {
+        if (objNormalLengthSquared > 1.0e-12) {
+            return objNormal;
+        }
+        return vec3(0.0, 0.0, 1.0);
+    }
+
+    vec3 dpdx = dFdx(fragViewPosition);
+    vec3 dpdy = dFdy(fragViewPosition);
+    vec3 geometricCross = cross(dpdx, dpdy);
+    float geometricLengthSquared = dot(geometricCross, geometricCross);
+
+    if (geometricLengthSquared <= 1.0e-20) {
+        if (objNormalLengthSquared > 1.0e-12) {
+            return objNormal;
+        }
+        return vec3(0.0, 0.0, 1.0);
+    }
+
+    vec3 geometricNormal = geometricCross * inversesqrt(geometricLengthSquared);
     if (dot(geometricNormal, viewDirection) < 0.0) {
         geometricNormal = -geometricNormal;
     }
-    vec3 normal = geometricNormal;
-    float objNormalLengthSquared = dot(fragViewNormal, fragViewNormal);
-    if (objNormalLengthSquared > 1.0e-12) {
-        vec3 objNormal = fragViewNormal * inversesqrt(objNormalLengthSquared);
-        if (dot(objNormal, geometricNormal) < 0.0) {
-            objNormal = -objNormal;
-        }
-        normal = normalize(mix(geometricNormal, objNormal, 0.58));
+    if (objNormalLengthSquared <= 1.0e-12) {
+        return geometricNormal;
     }
-    return normal;
+    if (dot(objNormal, geometricNormal) < 0.0) {
+        objNormal = -objNormal;
+    }
+    return normalize(mix(geometricNormal, objNormal, 0.58));
 }
 
 float ArtisticGray(vec3 normal) {
@@ -75,22 +100,48 @@ float ArtisticGray(vec3 normal) {
 }
 
 float SunLambert() {
-    vec3 geometricNormal = normalize(
-        cross(dFdx(fragObjectPosition), dFdy(fragObjectPosition)));
-    vec3 normal = geometricNormal;
-    float objNormalLengthSquared = dot(fragObjectNormal, fragObjectNormal);
-    if (objNormalLengthSquared > 1.0e-12) {
-        vec3 objNormal = fragObjectNormal * inversesqrt(objNormalLengthSquared);
-        if (dot(objNormal, geometricNormal) < 0.0) {
-            objNormal = -objNormal;
-        }
-        normal = normalize(mix(geometricNormal, objNormal, 0.58));
-    }
-    float sunLengthSquared = dot(fragSunDirection, fragSunDirection);
+    float sunLengthSquared = dot(ubo.sunDirection.xyz, ubo.sunDirection.xyz);
     if (sunLengthSquared <= 1.0e-12) {
         return 0.0;
     }
-    vec3 sun = fragSunDirection * inversesqrt(sunLengthSquared);
+    vec3 sun = ubo.sunDirection.xyz * inversesqrt(sunLengthSquared);
+
+    vec3 objNormal = vec3(0.0);
+    float objNormalLengthSquared = dot(fragObjectNormal, fragObjectNormal);
+    if (objNormalLengthSquared > 1.0e-12) {
+        objNormal = fragObjectNormal * inversesqrt(objNormalLengthSquared);
+    }
+
+    vec3 normal;
+    if (WireframeEnabled()) {
+        if (objNormalLengthSquared <= 1.0e-12) {
+            return 0.0;
+        }
+        normal = objNormal;
+    } else {
+        vec3 dpdx = dFdx(fragObjectPosition);
+        vec3 dpdy = dFdy(fragObjectPosition);
+        vec3 geometricCross = cross(dpdx, dpdy);
+        float geometricLengthSquared = dot(geometricCross, geometricCross);
+
+        if (geometricLengthSquared <= 1.0e-20) {
+            if (objNormalLengthSquared > 1.0e-12) {
+                normal = objNormal;
+            } else {
+                return 0.0;
+            }
+        } else {
+            vec3 geometricNormal = geometricCross * inversesqrt(geometricLengthSquared);
+            if (objNormalLengthSquared <= 1.0e-12) {
+                normal = geometricNormal;
+            } else {
+                if (dot(objNormal, geometricNormal) < 0.0) {
+                    objNormal = -objNormal;
+                }
+                normal = normalize(mix(geometricNormal, objNormal, 0.58));
+            }
+        }
+    }
     return max(dot(normal, sun), 0.0);
 }
 
@@ -125,13 +176,17 @@ float ShadowFactor() {
 }
 
 float SunLighting() {
-    if (sunAboveHorizon < 0.5) {
+    if (ubo.displayOptions.w < 0.5) {
         return 0.03;
     }
     return 0.04 + 0.96 * SunLambert() * ShadowFactor();
 }
 
 void main() {
+    const float grayEnabled = ubo.displayOptions.x;
+    const float dyeEnabled = ubo.displayOptions.y;
+    const float lightAnalysisEnabled = ubo.displayOptions.z;
+
     vec3 color;
     if (dyeEnabled > 0.5) {
         color = DyeColor();
@@ -143,7 +198,7 @@ void main() {
     } else if (lightAnalysisEnabled > 0.5) {
         color = vec3(0.75);
     } else {
-        color = fragColor;
+        color = vec3(0.0);
     }
 
     if (lightAnalysisEnabled > 0.5) {
