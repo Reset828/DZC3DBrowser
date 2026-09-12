@@ -1,14 +1,14 @@
-﻿#include "SceneObject.h"
+﻿#include "Object.h"
 
-SceneObject::SceneObject() {}
+Object::Object() {}
 
-SceneObject::SceneObject(const SceneObject& obj) {
+Object::Object(const Object& obj) {
     *this = obj;
 }
 
-SceneObject::~SceneObject() {}
+Object::~Object() {}
 
-SceneObject& SceneObject::operator=(const SceneObject& obj) {
+Object& Object::operator=(const Object& obj) {
     if (this != &obj) {
         m_pParent = obj.m_pParent;
         m_uType = obj.m_uType;
@@ -18,35 +18,35 @@ SceneObject& SceneObject::operator=(const SceneObject& obj) {
     return *this;
 }
 
-void SceneObject::SetParent(SceneObject* pParent) {
+void Object::SetParent(Object* pParent) {
     m_pParent = pParent;
 }
 
-SceneObject* SceneObject::GetParent() const {
+Object* Object::GetParent() const {
     return m_pParent;
 }
 
-void SceneObject::SetDirty(bool bDirty) {
+void Object::SetDirty(bool bDirty) {
     EnableFlag(FT_DIRTY, bDirty);
 }
 
-bool SceneObject::IsDirty() const {
+bool Object::IsDirty() const {
     return IsFlagEnabled(FT_DIRTY);
 }
 
-uint32_t SceneObject::GetType() const {
+uint32_t Object::GetType() const {
     return m_uType;
 }
 
-void SceneObject::SetVisible(bool bVisible) {
+void Object::SetVisible(bool bVisible) {
     EnableFlag(FT_VISIBLE, bVisible);
 }
 
-bool SceneObject::IsVisible() const {
+bool Object::IsVisible() const {
     return IsFlagEnabled(FT_VISIBLE);
 }
 
-void SceneObject::SetColor(const Vec4& clr) {
+void Object::SetColor(const Vec4& clr) {
     uint8_t r = static_cast<uint8_t>(clr.x * 255.0f);
     uint8_t g = static_cast<uint8_t>(clr.y * 255.0f);
     uint8_t b = static_cast<uint8_t>(clr.z * 255.0f);
@@ -57,11 +57,11 @@ void SceneObject::SetColor(const Vec4& clr) {
              (static_cast<uint32_t>(a) << 24);
 }
 
-void SceneObject::SetColor(float r, float g, float b, float a) {
+void Object::SetColor(float r, float g, float b, float a) {
     SetColor(Vec4{ r, g, b, a });
 }
 
-Vec4 SceneObject::GetColor() const {
+Vec4 Object::GetColor() const {
     float r = static_cast<float>((m_uClr >> 0) & 0xFF) / 255.0f;
     float g = static_cast<float>((m_uClr >> 8) & 0xFF) / 255.0f;
     float b = static_cast<float>((m_uClr >> 16) & 0xFF) / 255.0f;
@@ -69,7 +69,7 @@ Vec4 SceneObject::GetColor() const {
     return Vec4{ r, g, b, a };
 }
 
-void SceneObject::EnableFlag(FlagType ft, bool bEnable) {
+void Object::EnableFlag(FlagType ft, bool bEnable) {
     if (bEnable) {
         m_uFlag |= static_cast<uint8_t>(ft);
     } else {
@@ -77,6 +77,6 @@ void SceneObject::EnableFlag(FlagType ft, bool bEnable) {
     }
 }
 
-bool SceneObject::IsFlagEnabled(FlagType ft) const {
+bool Object::IsFlagEnabled(FlagType ft) const {
     return (m_uFlag & static_cast<uint8_t>(ft)) != 0;
 }

@@ -21,13 +21,13 @@
     <ClInclude Include="..\include\Layer\Layer.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="..\include\Object\SceneObject.h">
+    <ClInclude Include="..\include\Object\Object.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="..\include\Object\VulkanObject.h">
+    <ClInclude Include="..\include\Object\VKObject.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="..\include\Object\OpenGLObject.h">
+    <ClInclude Include="..\include\Object\GLObject.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Render\Render.h">
@@ -45,10 +45,10 @@
     <ClInclude Include="ObjParseRunnable.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="VulkanMesh.h">
+    <ClInclude Include="VKMesh.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="OpenGLMesh.h">
+    <ClInclude Include="GLMesh.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\include\VertexType\VertexTypes.h">
@@ -77,13 +77,13 @@
     <ClCompile Include="..\include\Layer\Layer.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="..\include\Object\SceneObject.cpp">
+    <ClCompile Include="..\include\Object\Object.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="..\include\Object\VulkanObject.cpp">
+    <ClCompile Include="..\include\Object\VKObject.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="..\include\Object\OpenGLObject.cpp">
+    <ClCompile Include="..\include\Object\GLObject.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp">
@@ -104,10 +104,10 @@
     <ClCompile Include="ObjParseRunnable.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="VulkanMesh.cpp">
+    <ClCompile Include="VKMesh.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="OpenGLMesh.cpp">
+    <ClCompile Include="GLMesh.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="..\include\VertexType\VertexTypes.cpp">

@@ -1,35 +1,35 @@
-﻿#include "VulkanObject.h"
+﻿#include "VKObject.h"
 #include <algorithm>
 #include <stdexcept>
 #include <cstring>
 
-VulkanObject::VulkanObject() {}
+VKObject::VKObject() {}
 
-VulkanObject::VulkanObject(const VulkanObject& obj) {
+VKObject::VKObject(const VKObject& obj) {
     *this = obj;
 }
 
-VulkanObject::~VulkanObject() {
+VKObject::~VKObject() {
     DestroyBuffers();
 }
 
-VulkanObject& VulkanObject::operator=(const VulkanObject& obj) {
+VKObject& VKObject::operator=(const VKObject& obj) {
     if (this != &obj) {
-        SceneObject::operator=(obj);
+        Object::operator=(obj);
         m_pRender = obj.m_pRender;
     }
     return *this;
 }
 
-void VulkanObject::SetRender(VKRender* pRender) {
+void VKObject::SetRender(VKRender* pRender) {
     m_pRender = pRender;
 }
 
-VKRender* VulkanObject::GetRender() const {
+VKRender* VKObject::GetRender() const {
     return m_pRender;
 }
 
-void VulkanObject::CreateVertexBuffer(const std::vector<Vertex3D>& vertices) {
+void VKObject::CreateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     if (!m_pRender || vertices.empty()) return;
 
     DestroyBuffers();
@@ -57,7 +57,7 @@ void VulkanObject::CreateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     vkFreeMemory(m_pRender->GetDevice(), stagingBufferMemory, nullptr);
 }
 
-void VulkanObject::CreateIndexBuffer(const std::vector<uint32_t>& indices) {
+void VKObject::CreateIndexBuffer(const std::vector<uint32_t>& indices) {
     if (!m_pRender || indices.empty()) return;
 
     m_indexCount = static_cast<uint32_t>(indices.size());
@@ -84,7 +84,7 @@ void VulkanObject::CreateIndexBuffer(const std::vector<uint32_t>& indices) {
     vkFreeMemory(m_pRender->GetDevice(), stagingBufferMemory, nullptr);
 }
 
-void VulkanObject::UpdateVertexBuffer(const std::vector<Vertex3D>& vertices) {
+void VKObject::UpdateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     if (!m_pRender || vertices.empty()) return;
 
     VkDeviceSize bufferSize = sizeof(Vertex3D) * vertices.size();
@@ -95,7 +95,7 @@ void VulkanObject::UpdateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     vkUnmapMemory(m_pRender->GetDevice(), m_vertexBufferMemory);
 }
 
-void VulkanObject::UpdateIndexBuffer(const std::vector<uint32_t>& indices) {
+void VKObject::UpdateIndexBuffer(const std::vector<uint32_t>& indices) {
     if (!m_pRender || indices.empty()) return;
 
     m_indexCount = static_cast<uint32_t>(indices.size());
@@ -107,7 +107,7 @@ void VulkanObject::UpdateIndexBuffer(const std::vector<uint32_t>& indices) {
     vkUnmapMemory(m_pRender->GetDevice(), m_indexBufferMemory);
 }
 
-void VulkanObject::DestroyBuffers() {
+void VKObject::DestroyBuffers() {
     if (!m_pRender) return;
 
     VkDevice device = m_pRender->GetDevice();
@@ -131,7 +131,7 @@ void VulkanObject::DestroyBuffers() {
     }
 }
 
-void VulkanObject::CreateBufferHelper(VkDeviceSize size, VkBufferUsageFlags usage,
+void VKObject::CreateBufferHelper(VkDeviceSize size, VkBufferUsageFlags usage,
                                       VkMemoryPropertyFlags properties,
                                       VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
     VkBufferCreateInfo bufferInfo{};
@@ -159,7 +159,7 @@ void VulkanObject::CreateBufferHelper(VkDeviceSize size, VkBufferUsageFlags usag
     vkBindBufferMemory(m_pRender->GetDevice(), buffer, bufferMemory, 0);
 }
 
-uint32_t VulkanObject::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+uint32_t VKObject::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(m_pRender->GetPhysicalDevice(), &memProperties);
 
@@ -172,7 +172,7 @@ uint32_t VulkanObject::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags
     throw std::runtime_error("未找到合适的内存类型");
 }
 
-void VulkanObject::CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+void VKObject::CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
     VkCommandBuffer commandBuffer = m_pRender->BeginSingleTimeCommands();
 
     VkBufferCopy copyRegion{};
@@ -182,8 +182,8 @@ void VulkanObject::CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSi
     m_pRender->EndSingleTimeCommands(commandBuffer);
 }
 
-VkBuffer VulkanObject::GetVertexBuffer() const { return m_vertexBuffer; }
+VkBuffer VKObject::GetVertexBuffer() const { return m_vertexBuffer; }
 
-VkBuffer VulkanObject::GetIndexBuffer() const { return m_indexBuffer; }
+VkBuffer VKObject::GetIndexBuffer() const { return m_indexBuffer; }
 
-uint32_t VulkanObject::GetIndexCount() const { return m_indexCount; }
+uint32_t VKObject::GetIndexCount() const { return m_indexCount; }

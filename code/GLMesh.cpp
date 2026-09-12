@@ -1,14 +1,14 @@
-﻿#include "OpenGLMesh.h"
+﻿#include "GLMesh.h"
 #include "Render/GLRender.h"
 #include <QOpenGLFunctions_4_2_Core>
 
-OpenGLMesh::OpenGLMesh() {
+GLMesh::GLMesh() {
     m_uType = OT_OBJECT;
 }
 
-OpenGLMesh::~OpenGLMesh() {}
+GLMesh::~GLMesh() {}
 
-void OpenGLMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
+void GLMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
                                  const std::vector<uint32_t>& indices) {
     if (!m_pRender || vertices.empty() || indices.empty()) return;
 
@@ -20,14 +20,14 @@ void OpenGLMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
     m_buffersReady = (m_vao != 0 && m_indexCount > 0);
 }
 
-void OpenGLMesh::Render(int mode) {
+void GLMesh::Render(int mode) {
     if (!IsVisible() || !m_buffersReady || !m_pRender) return;
     if (m_indexCount == 0 || m_vao == 0) return;
 
     QOpenGLFunctions_4_2_Core* gl = m_pRender->GetFunctions();
     if (!gl) return;
 
-    if (mode == SceneObject::RM_SHADOW) {
+    if (mode == Object::RM_SHADOW) {
         const unsigned int shadowProgram = m_pRender->GetShadowProgram();
         if (shadowProgram == 0) return;
         gl->glUseProgram(shadowProgram);

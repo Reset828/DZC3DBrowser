@@ -1,23 +1,23 @@
-﻿#include "OpenGLObject.h"
+﻿#include "GLObject.h"
 #include "Render/GLRender.h"
 #include <QOpenGLFunctions_4_2_Core>
 #include <cstddef>
 
-OpenGLObject::OpenGLObject() {}
+GLObject::GLObject() {}
 
-OpenGLObject::~OpenGLObject() {
+GLObject::~GLObject() {
     DestroyBuffers();
 }
 
-void OpenGLObject::SetRender(GLRender* pRender) {
+void GLObject::SetRender(GLRender* pRender) {
     m_pRender = pRender;
 }
 
-GLRender* OpenGLObject::GetRender() const {
+GLRender* GLObject::GetRender() const {
     return m_pRender;
 }
 
-void OpenGLObject::CreateVertexBuffer(const std::vector<Vertex3D>& vertices) {
+void GLObject::CreateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     if (!m_pRender || vertices.empty()) return;
     QOpenGLFunctions_4_2_Core* gl = m_pRender->GetFunctions();
     if (!gl) return;
@@ -51,7 +51,7 @@ void OpenGLObject::CreateVertexBuffer(const std::vector<Vertex3D>& vertices) {
     gl->glBindVertexArray(0);
 }
 
-void OpenGLObject::CreateIndexBuffer(const std::vector<uint32_t>& indices) {
+void GLObject::CreateIndexBuffer(const std::vector<uint32_t>& indices) {
     if (!m_pRender || indices.empty()) return;
     QOpenGLFunctions_4_2_Core* gl = m_pRender->GetFunctions();
     if (!gl) return;
@@ -72,7 +72,7 @@ void OpenGLObject::CreateIndexBuffer(const std::vector<uint32_t>& indices) {
     gl->glBindVertexArray(0);
 }
 
-void OpenGLObject::DestroyBuffers() {
+void GLObject::DestroyBuffers() {
     if (!m_pRender) return;
     QOpenGLFunctions_4_2_Core* gl = m_pRender->GetFunctions();
     if (!gl) return;
@@ -92,5 +92,5 @@ void OpenGLObject::DestroyBuffers() {
     m_indexCount = 0;
 }
 
-uint32_t OpenGLObject::GetVertexArray() const { return m_vao; }
-uint32_t OpenGLObject::GetIndexCount() const { return m_indexCount; }
+uint32_t GLObject::GetVertexArray() const { return m_vao; }
+uint32_t GLObject::GetIndexCount() const { return m_indexCount; }

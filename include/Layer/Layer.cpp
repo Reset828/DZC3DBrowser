@@ -20,7 +20,7 @@ uint32_t Layer::GetCount() const {
     return static_cast<uint32_t>(m_arrChild.size());
 }
 
-SceneObject* Layer::GetChild(uint32_t index) {
+Object* Layer::GetChild(uint32_t index) {
     std::shared_lock lock(m_mutex);
     if (index < m_arrChild.size()) {
         return m_arrChild[index];
@@ -28,7 +28,7 @@ SceneObject* Layer::GetChild(uint32_t index) {
     return nullptr;
 }
 
-const SceneObject* Layer::GetChild(uint32_t index) const {
+const Object* Layer::GetChild(uint32_t index) const {
     std::shared_lock lock(m_mutex);
     if (index < m_arrChild.size()) {
         return m_arrChild[index];
@@ -36,7 +36,7 @@ const SceneObject* Layer::GetChild(uint32_t index) const {
     return nullptr;
 }
 
-int Layer::FindChild(const SceneObject* pObject) const {
+int Layer::FindChild(const Object* pObject) const {
     if (!pObject) return -1;
 
     std::shared_lock lock(m_mutex);
@@ -58,7 +58,7 @@ void Layer::Clear() {
     m_arrChild.clear();
 }
 
-void Layer::AddChild(SceneObject* pObject) {
+void Layer::AddChild(Object* pObject) {
     if (!pObject) return;
 
     std::lock_guard<std::shared_mutex> lock(m_mutex);
@@ -71,14 +71,14 @@ void Layer::RemoveChild(uint32_t index) {
     std::unique_lock lock(m_mutex);
     if (index >= m_arrChild.size()) return;
 
-    SceneObject* child = m_arrChild[index];
+    Object* child = m_arrChild[index];
     if (child) {
         delete child;
     }
     m_arrChild.erase(m_arrChild.begin() + index);
 }
 
-void Layer::RemoveChild(SceneObject* pObject) {
+void Layer::RemoveChild(Object* pObject) {
     if (!pObject) return;
 
     std::unique_lock lock(m_mutex);

@@ -1,20 +1,20 @@
-﻿#include "VulkanMesh.h"
+﻿#include "VKMesh.h"
 #include "BufferUploadRunnable.h"
 #include <QApplication>
 #include <QMetaObject>
 
-VulkanMesh::VulkanMesh()
+VKMesh::VKMesh()
     : m_alive(std::make_shared<std::atomic<bool>>(true))
 {
     m_uType = OT_OBJECT;
 }
 
-VulkanMesh::~VulkanMesh() {
+VKMesh::~VKMesh() {
     *m_alive = false; // 标记已销毁，阻止未执行的异步回调继续
 }
 
 
-void VulkanMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
+void VKMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
                               std::vector<uint32_t>&& indices) {
     if (!m_pRender || vertices.empty() || indices.empty()) return;
 
@@ -63,7 +63,7 @@ void VulkanMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
     m_pRender->SubmitAsync(task);
 }
 
-void VulkanMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
+void VKMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
                                   const std::vector<uint32_t>& indices) {
     if (!m_pRender || vertices.empty() || indices.empty()) return;
 
@@ -75,13 +75,13 @@ void VulkanMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
     m_buffersReady = true;
 }
 
-void VulkanMesh::Render(int mode) {
+void VKMesh::Render(int mode) {
     if (!IsVisible() || !m_buffersReady || !m_pRender) return;
     if (m_indexCount == 0) return;
 
     VkCommandBuffer cmd = m_pRender->GetCurrentCommandBuffer();
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (mode == SceneObject::RM_SHADOW) {
+    if (mode == Object::RM_SHADOW) {
         pipeline = m_pRender->GetShadowPipeline();
     } else {
         pipeline = m_pRender->GetPipeline(m_pRender->IsWireframeEnabled()
@@ -101,7 +101,7 @@ void VulkanMesh::Render(int mode) {
 }
 
 
-void VulkanMesh::OnVertexBufferUploaded(VkBuffer staging, VkDeviceMemory stagingMem,
+void VKMesh::OnVertexBufferUploaded(VkBuffer staging, VkDeviceMemory stagingMem,
                                          VkDeviceSize bufferSize) {
     VkDevice device = m_pRender->GetDevice();
 
@@ -147,7 +147,7 @@ void VulkanMesh::OnVertexBufferUploaded(VkBuffer staging, VkDeviceMemory staging
     CheckBuffersReady();
 }
 
-void VulkanMesh::OnIndexBufferUploaded(VkBuffer staging, VkDeviceMemory stagingMem,
+void VKMesh::OnIndexBufferUploaded(VkBuffer staging, VkDeviceMemory stagingMem,
                                         VkDeviceSize bufferSize) {
     VkDevice device = m_pRender->GetDevice();
 
@@ -193,7 +193,7 @@ void VulkanMesh::OnIndexBufferUploaded(VkBuffer staging, VkDeviceMemory stagingM
     CheckBuffersReady();
 }
 
-void VulkanMesh::OnCombinedBuffersUploaded(
+void VKMesh::OnCombinedBuffersUploaded(
     VkBuffer staging, VkDeviceMemory stagingMem,
     const std::vector<BufferUploadRunnable::UploadSegment>& segments)
 {
@@ -249,13 +249,13 @@ void VulkanMesh::OnCombinedBuffersUploaded(
     }
 }
 
-void VulkanMesh::CheckBuffersReady() {
+void VKMesh::CheckBuffersReady() {
     if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
         m_buffersReady = true;
     }
 }
 
-void VulkanMesh::CleanupStaging(VkBuffer staging, VkDeviceMemory stagingMem) {
+void VKMesh::CleanupStaging(VkBuffer staging, VkDeviceMemory stagingMem) {
     if (!m_pRender) return;
     VkDevice device = m_pRender->GetDevice();
     if (staging != VK_NULL_HANDLE) vkDestroyBuffer(device, staging, nullptr);

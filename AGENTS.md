@@ -19,12 +19,12 @@ Windows-only Qt 5.12 + Vulkan 1.0 mesh viewer. MSVC v143, C++17, single VS solut
 code/                 app + vcxproj
   MainWindow.*        Qt UI, 2D/3D switch, OBJ load, scene rebuild
   QWindowVulkan.*     owns VkInstance + Win32 VkSurfaceKHR
-  VulkanMesh.*        VulkanObject that uploads/draws a mesh
+  VKMesh.*        VKObject that uploads/draws a mesh
   *Runnable.*         QRunnable: OBJ parse, staging-buffer upload
   res/                GLSL + SPIR-V (see Shaders)
 include/              reusable engine; .h and .cpp live together, compiled into the same exe
-  Object/             VulkanObject — scene node + GPU buffers
-  Layer/              VulkanLayer — child list
+  Object/             VKObject — scene node + GPU buffers
+  Layer/              Layer — backend-independent child list
   Render/             Render, GLRender/2D/3D, VKRender/2D/3D
   VertexType/         Vertex2D / Vertex3D / UBO layouts
 windows/              OutDir (exe). VS run CWD.
@@ -52,12 +52,12 @@ Include path is `$(ProjectDir)..\include`, so includes look like `"Render/VKRend
 | Reusable Vulkan / scene API | `include/` — search here first |
 | Instance, device, swapchain, pipelines | `include/Render/VKRender.*` |
 | 2D pan/zoom or 3D orbit/depth/readback | `include/Render/VKRender.*` (2D/3D classes) |
-| Scene node, vertex/index buffers | `include/Object/VulkanObject.*` |
-| Child list | `include/Layer/VulkanLayer.*` |
+| Scene node, vertex/index buffers | `include/Object/VKObject.*` |
+| Child list | `include/Layer/Layer.*` |
 | Vertex bindings (keep in sync with GLSL) | `include/VertexType/VertexTypes.*` |
 | Qt window / surface | `code/QWindowVulkan.*` |
 | UI, file open, 2D/3D switch | `code/MainWindow.*` |
-| Mesh upload / draw | `code/VulkanMesh.*` |
+| Mesh upload / draw | `code/VKMesh.*` |
 | OBJ parse | `code/ObjParseRunnable.*` |
 | Staging upload on thread pool | `code/BufferUploadRunnable.*` + `VKRender::SubmitAsync` |
 
@@ -65,18 +65,18 @@ Include path is `$(ProjectDir)..\include`, so includes look like `"Render/VKRend
 
 - `VKRender` — `Initialize` / `Shutdown` / `Quiesce`, `BeginFrame` / `EndFrame` / `DrawIndexed`, buffer helpers, `ReadShaderFile`, `SubmitAsync`, mouse hooks. Non-copyable.
 - `VKRender2D` / `VKRender3D` — both are declared and implemented in `VKRender.*`. Override `OnInitialize` / `CreatePipelines` / camera UBO. 3D also: depth, wireframe/gray/dye/ortho, world-coord readback.
-- `VulkanObject` — `SetRender` / parent / visible / color; `CreateVertexBuffer` / `CreateIndexBuffer` / `DestroyBuffers`. `Render()` is pure virtual.
-- `VulkanLayer` — `AddChild` / `RemoveChild` / `Clear`; `Render` walks children under `shared_mutex`.
+- `VKObject` — `SetRender` / parent / visible / color; `CreateVertexBuffer` / `CreateIndexBuffer` / `DestroyBuffers`. `Render()` is pure virtual.
+- `Layer` — `AddChild` / `RemoveChild` / `Clear`; `Render` walks `Object*` children under `shared_mutex`.
 - `Vertex2D` / `Vertex3D` — `GetBindingDescription` / `GetAttributeDescriptions`.
 
-App-only (keep out of `include/`): anything with `Q_OBJECT`, `MainWindow`, `QWindowVulkan`, `VulkanMesh`, the two `QRunnable`s.
+App-only (keep out of `include/`): anything with `Q_OBJECT`, `MainWindow`, `QWindowVulkan`, `VKMesh`, the two `QRunnable`s.
 
 ## Conventions
 
 - `Q_OBJECT` types must be `<QtMoc>` in `code/vulkan-reference.vcxproj`, not `ClInclude`. Only `MainWindow` and `QWindowVulkan` are moc'd today.
 - `include/` headers use `#ifndef __FOO_H__`. `code/` mixes `#pragma once`.
 - Debug builds enable `VK_LAYER_KHRONOS_validation`. `VK_CHECK_RESULT` exists only in `VKRender.cpp`.
-- Async work (`QThreadPool`, `SubmitAsync`): check `IsShuttingDown()`, load/upload generation, and `VulkanMesh::m_alive` before touching GPU or UI objects. `Quiesce` waits the pool, then `vkDeviceWaitIdle`.
+- Async work (`QThreadPool`, `SubmitAsync`): check `IsShuttingDown()`, load/upload generation, and `VKMesh::m_alive` before touching GPU or UI objects. `Quiesce` waits the pool, then `vkDeviceWaitIdle`.
 - New reusable module: new folder under `include/`, `.h`+`.cpp` together, add both to the vcxproj. Do not leak Qt widgets or `Q_OBJECT` into `include/`.
 
 ## Anti-patterns

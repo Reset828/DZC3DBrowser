@@ -5,8 +5,8 @@
 #include "Render/VKRender.h"
 #include "Render/GLRender.h"
 #include "Layer/Layer.h"
-#include "VulkanMesh.h"
-#include "OpenGLMesh.h"
+#include "VKMesh.h"
+#include "GLMesh.h"
 #include "ObjParseRunnable.h"
 #include <QWindow>
 #include <QString>
@@ -512,7 +512,7 @@ void MainWindow::StartRenderLoop() {
                     if (m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
                         render3D->IsSunAboveHorizon()) {
                         if (render3D->BeginShadowPass()) {
-                            if (m_scene) m_scene->Render(SceneObject::RM_SHADOW);
+                            if (m_scene) m_scene->Render(Object::RM_SHADOW);
                             render3D->EndShadowPass();
                         }
                     }
@@ -536,7 +536,7 @@ void MainWindow::StartRenderLoop() {
                 if (m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
                     render3D->IsSunAboveHorizon()) {
                     if (render3D->BeginShadowPass()) {
-                        if (m_scene) m_scene->Render(SceneObject::RM_SHADOW);
+                        if (m_scene) m_scene->Render(Object::RM_SHADOW);
                         render3D->EndShadowPass();
                     }
                 }
@@ -1018,9 +1018,9 @@ void MainWindow::RebuildSceneMeshes() {
         }
 
         if (useOpenGL) {
-            auto* glMesh = dynamic_cast<OpenGLMesh*>(model.mesh);
+            auto* glMesh = dynamic_cast<GLMesh*>(model.mesh);
             if (!glMesh) {
-                glMesh = new OpenGLMesh();
+                glMesh = new GLMesh();
                 glMesh->SetRender(glRenderer);
                 glMesh->SetVisible(model.visible);
                 model.mesh = glMesh;
@@ -1028,9 +1028,9 @@ void MainWindow::RebuildSceneMeshes() {
             }
             glMesh->SetMeshDataSync(normalizedVertices, model.indices);
         } else {
-            auto* vkMesh = dynamic_cast<VulkanMesh*>(model.mesh);
+            auto* vkMesh = dynamic_cast<VKMesh*>(model.mesh);
             if (!vkMesh) {
-                vkMesh = new VulkanMesh();
+                vkMesh = new VKMesh();
                 vkMesh->SetRender(vkRenderer);
                 vkMesh->SetVisible(model.visible);
                 model.mesh = vkMesh;

@@ -1,11 +1,11 @@
 ﻿#ifndef __LAYER_H__
 #define __LAYER_H__
 
-#include "Object/SceneObject.h"
+#include "Object/Object.h"
 #include <vector>
 #include <shared_mutex>
 
-class Layer : public SceneObject {
+class Layer : public Object {
 public:
     Layer();
     virtual ~Layer();
@@ -13,19 +13,19 @@ public:
     bool IsEmpty() const;
     uint32_t GetCount() const;
 
-    SceneObject* GetChild(uint32_t index);
-    const SceneObject* GetChild(uint32_t index) const;
-    int FindChild(const SceneObject* pObject) const;
+    Object* GetChild(uint32_t index);
+    const Object* GetChild(uint32_t index) const;
+    int FindChild(const Object* pObject) const;
 
     virtual void Clear();
-    virtual void AddChild(SceneObject* pObject);
+    virtual void AddChild(Object* pObject);
 
     virtual void RemoveChild(uint32_t index);
-    virtual void RemoveChild(SceneObject* pObject);
+    virtual void RemoveChild(Object* pObject);
 
     void Render(int iMode = 0) override;
 
-    std::vector<SceneObject*> m_arrChild;
+    std::vector<Object*> m_arrChild;
 
 protected:
     mutable std::shared_mutex m_mutex;

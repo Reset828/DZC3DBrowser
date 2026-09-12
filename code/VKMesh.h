@@ -1,15 +1,15 @@
 ﻿#pragma once
 
-#include "Object/VulkanObject.h"
+#include "Object/VKObject.h"
 #include "VertexType/VertexTypes.h"
 #include "BufferUploadRunnable.h"
 #include <memory>
 #include <atomic>
 
-class VulkanMesh : public VulkanObject {
+class VKMesh : public VKObject {
 public:
-    VulkanMesh();
-    ~VulkanMesh() override;
+    VKMesh();
+    ~VKMesh() override;
 
     void SetMeshData(std::vector<Vertex3D>&& vertices,
                      std::vector<uint32_t>&& indices);

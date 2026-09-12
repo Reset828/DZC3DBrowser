@@ -1,13 +1,13 @@
 ﻿#pragma once
 
-#include "Object/OpenGLObject.h"
+#include "Object/GLObject.h"
 #include "VertexType/VertexTypes.h"
 #include <vector>
 
-class OpenGLMesh : public OpenGLObject {
+class GLMesh : public GLObject {
 public:
-    OpenGLMesh();
-    ~OpenGLMesh() override;
+    GLMesh();
+    ~GLMesh() override;
 
     void SetMeshDataSync(const std::vector<Vertex3D>& vertices,
                          const std::vector<uint32_t>& indices);

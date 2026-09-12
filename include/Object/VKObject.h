@@ -1,19 +1,19 @@
-﻿#ifndef __VULKAN_OBJECT_H__
-#define __VULKAN_OBJECT_H__
+﻿#ifndef __VK_OBJECT_H__
+#define __VK_OBJECT_H__
 
-#include "Object/SceneObject.h"
+#include "Object/Object.h"
 #include "Render/VKRender.h"
 #include "VertexType/VertexTypes.h"
 #include <cstdint>
 #include <vector>
 
-class VulkanObject : public SceneObject {
+class VKObject : public Object {
 public:
-    VulkanObject();
-    VulkanObject(const VulkanObject& obj);
-    ~VulkanObject() override;
+    VKObject();
+    VKObject(const VKObject& obj);
+    ~VKObject() override;
 
-    VulkanObject& operator=(const VulkanObject& obj);
+    VKObject& operator=(const VKObject& obj);
 
     void SetRender(VKRender* pRender);
     VKRender* GetRender() const;
@@ -43,4 +43,4 @@ protected:
     uint32_t m_indexCount = 0;
 };
 
-#endif //__VULKAN_OBJECT_H__
+#endif //__VK_OBJECT_H__

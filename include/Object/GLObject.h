@@ -1,20 +1,20 @@
-﻿#ifndef __OPENGL_OBJECT_H__
-#define __OPENGL_OBJECT_H__
+﻿#ifndef __GL_OBJECT_H__
+#define __GL_OBJECT_H__
 
-#include "Object/SceneObject.h"
+#include "Object/Object.h"
 #include "VertexType/VertexTypes.h"
 #include <cstdint>
 #include <vector>
 
 class GLRender;
 
-class OpenGLObject : public SceneObject {
+class GLObject : public Object {
 public:
-    OpenGLObject();
-    ~OpenGLObject() override;
+    GLObject();
+    ~GLObject() override;
 
-    OpenGLObject(const OpenGLObject&) = delete;
-    OpenGLObject& operator=(const OpenGLObject&) = delete;
+    GLObject(const GLObject&) = delete;
+    GLObject& operator=(const GLObject&) = delete;
 
     void SetRender(GLRender* pRender);
     GLRender* GetRender() const;
@@ -34,4 +34,4 @@ protected:
     uint32_t m_indexCount = 0;
 };
 
-#endif //__OPENGL_OBJECT_H__
+#endif //__GL_OBJECT_H__

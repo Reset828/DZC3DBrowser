@@ -1,17 +1,17 @@
-﻿#ifndef __SCENE_OBJECT_H__
-#define __SCENE_OBJECT_H__
+﻿#ifndef __OBJECT_H__
+#define __OBJECT_H__
 
 #include <cstdint>
 #include "Math/EngineTypes.h"
 
 
-class SceneObject {
+class Object {
 public:
-    SceneObject();
-    SceneObject(const SceneObject& obj);
-    virtual ~SceneObject();
+    Object();
+    Object(const Object& obj);
+    virtual ~Object();
 
-    SceneObject& operator=(const SceneObject& obj);
+    Object& operator=(const Object& obj);
 
     enum ObjectType {
         OT_OBJECT = 0,
@@ -29,8 +29,8 @@ public:
         FT_DIRTY = 16,
     };
 
-    void SetParent(SceneObject* pParent);
-    SceneObject* GetParent() const;
+    void SetParent(Object* pParent);
+    Object* GetParent() const;
 
     void SetDirty(bool bDirty);
     bool IsDirty() const;
@@ -48,7 +48,7 @@ public:
 
 protected:
     uint8_t m_uType = OT_OBJECT;
-    SceneObject* m_pParent = nullptr;
+    Object* m_pParent = nullptr;
     uint8_t m_uFlag = FT_VISIBLE;
     uint32_t m_uClr = 0xFFFFFFFF;
 
@@ -57,4 +57,4 @@ private:
     bool IsFlagEnabled(FlagType ft) const;
 };
 
-#endif //__SCENE_OBJECT_H__
+#endif //__OBJECT_H__

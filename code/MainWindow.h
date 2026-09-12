@@ -12,7 +12,7 @@ class QWindowVulkan;
 class QWindowOpenGL;
 class Render;
 class Layer;
-class SceneObject;
+class Object;
 class QTimer;
 class QWidget;
 class QTreeWidget;
@@ -81,7 +81,7 @@ private:
     struct LoadedModel {
         std::vector<Vertex3D> sourceVertices;
         std::vector<uint32_t> indices;
-        SceneObject* mesh = nullptr;            // 所有权属于场景
+        Object* mesh = nullptr;            // 所有权属于场景
         QTreeWidgetItem* treeItem = nullptr;    // 所有权属于主面板
         bool visible = true;
     };
