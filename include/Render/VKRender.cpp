@@ -1,4 +1,1396 @@
-﻿#include "3DVulkanRender.h"
+﻿#include "VKRender.h"
+#include <iostream>
+#include <fstream>
+#include <set>
+#include <algorithm>
+#include <stdexcept>
+#include <cstring>
+#include <QRunnable>
+#include <QThreadPool>
+#include <QCoreApplication>
+#include <utility>
+
+namespace {
+
+class VKFunctionRunnable final : public QRunnable {
+public:
+    explicit VKFunctionRunnable(Render::AsyncTask task)
+        : m_task(std::move(task)) {}
+
+    void run() override {
+        if (m_task) m_task();
+    }
+
+private:
+    Render::AsyncTask m_task;
+};
+
+}
+
+#define VK_CHECK_RESULT(result, msg) \
+    if (result != VK_SUCCESS) { \
+        std::cerr << "Vulkan错误: " << msg << " (错误码: " << result << ")" << std::endl; \
+        return false; \
+    }
+
+bool VulkanQueueFamilyIndices::IsComplete() const { return graphicsFamily >= 0 && presentFamily >= 0; }
+
+
+VKRender::VKRender() {
+    m_clearValues[0].color = { 0.1f, 0.1f, 0.12f, 1.0f };
+    m_clearValueCount = 1;
+}
+
+VKRender::~VKRender() {
+    Shutdown();
+}
+
+
+bool VKRender::Initialize(const char* appName, uint32_t width, uint32_t height) {
+    m_framebufferWidth = width;
+    m_framebufferHeight = height;
+
+    if (m_instance == VK_NULL_HANDLE) {
+        if (!CreateInstance(appName)) return false;
+        m_externalInstance = false;
+    }
+    if (m_enableValidationLayers && m_debugMessenger == VK_NULL_HANDLE) {
+        if (!SetupDebugMessenger()) return false;
+    }
+
+    if (!PickPhysicalDevice()) return false;
+    if (!CreateLogicalDevice()) return false;
+    if (!CreateSwapchain()) return false;
+    if (!CreateImageViews()) return false;
+
+    m_shuttingDown = false;
+    m_frameRecording = false;
+
+    if (!OnInitialize()) return false;
+
+    if (!CreateRenderPass()) return false;
+
+    if (!CreatePipelines()) return false;
+
+    if (!CreateFramebuffers()) return false;
+
+    if (!CreateCommandPool()) return false;
+    if (!CreateCommandBuffers()) return false;
+    if (!CreateSyncObjects()) return false;
+
+    m_initialized = true;
+    return true;
+}
+
+void VKRender::Quiesce() {
+    if (!m_initialized) return;
+
+    m_shuttingDown = true;
+
+    QThreadPool::globalInstance()->waitForDone();
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
+    vkDeviceWaitIdle(m_device);
+}
+
+void VKRender::Shutdown() {
+    if (!m_initialized) return;
+
+    Quiesce();
+
+    CleanupSwapchain();
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroySemaphore(m_device, m_imageAvailableSemaphores[i], nullptr);
+        vkDestroySemaphore(m_device, m_renderFinishedSemaphores[i], nullptr);
+        vkDestroyFence(m_device, m_inFlightFences[i], nullptr);
+    }
+
+    if (m_singleTimeCommandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(m_device, m_singleTimeCommandPool, nullptr);
+        m_singleTimeCommandPool = VK_NULL_HANDLE;
+    }
+    if (m_commandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(m_device, m_commandPool, nullptr);
+        m_commandPool = VK_NULL_HANDLE;
+    }
+
+    OnDestroyPipelines();
+    for (int i = 0; i < DT_COUNT; i++) {
+        if (m_pipelines[i] != VK_NULL_HANDLE) {
+            vkDestroyPipeline(m_device, m_pipelines[i], nullptr);
+            m_pipelines[i] = VK_NULL_HANDLE;
+        }
+    }
+    if (m_pipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
+        m_pipelineLayout = VK_NULL_HANDLE;
+    }
+    if (m_renderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(m_device, m_renderPass, nullptr);
+        m_renderPass = VK_NULL_HANDLE;
+    }
+
+    OnShutdown();
+
+    if (m_device != VK_NULL_HANDLE) {
+        vkDestroyDevice(m_device, nullptr);
+        m_device = VK_NULL_HANDLE;
+    }
+    m_physicalDevice = VK_NULL_HANDLE;
+    m_graphicsQueue = VK_NULL_HANDLE;
+    m_presentQueue = VK_NULL_HANDLE;
+    m_commandPool = VK_NULL_HANDLE;
+    m_commandBuffers.clear();
+    m_imageAvailableSemaphores.clear();
+    m_renderFinishedSemaphores.clear();
+    m_inFlightFences.clear();
+    m_currentFrame = 0;
+    m_imageIndex = 0;
+    m_frameRecording = false;
+
+    if (m_debugMessenger != VK_NULL_HANDLE) {
+        auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT");
+        if (func) func(m_instance, m_debugMessenger, nullptr);
+        m_debugMessenger = VK_NULL_HANDLE;
+    }
+
+    if (!m_externalInstance && m_instance != VK_NULL_HANDLE) {
+        vkDestroyInstance(m_instance, nullptr);
+        m_instance = VK_NULL_HANDLE;
+    }
+
+    m_initialized = false;
+    m_shuttingDown = false;
+}
+
+
+
+
+
+bool VKRender::EnsureFrameRecording() {
+    if (m_frameRecording) return true;
+
+    vkWaitForFences(m_device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
+
+    uint32_t imageIndex;
+    VkResult result = vkAcquireNextImageKHR(
+        m_device, m_swapchain, UINT64_MAX,
+        m_imageAvailableSemaphores[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        RecreateSwapchain();
+        return false;
+    } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        throw std::runtime_error("获取交换链图像失败");
+    }
+
+    m_imageIndex = imageIndex;
+
+    vkResetFences(m_device, 1, &m_inFlightFences[m_currentFrame]);
+
+    vkResetCommandBuffer(m_commandBuffers[m_currentFrame], 0);
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    vkBeginCommandBuffer(m_commandBuffers[m_currentFrame], &beginInfo);
+    m_frameRecording = true;
+    return true;
+}
+
+void VKRender::BeginColorRenderPass() {
+    OnBeginFrame();
+
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = m_renderPass;
+    renderPassInfo.framebuffer = m_swapchainFramebuffers[m_imageIndex];
+    renderPassInfo.renderArea.offset = { 0, 0 };
+    renderPassInfo.renderArea.extent = m_swapchainExtent;
+
+    renderPassInfo.clearValueCount = m_clearValueCount;
+    renderPassInfo.pClearValues = m_clearValues;
+
+    vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(m_swapchainExtent.width);
+    viewport.height = static_cast<float>(m_swapchainExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = { 0, 0 };
+    scissor.extent = m_swapchainExtent;
+    vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
+}
+
+bool VKRender::BeginFrame() {
+    OnPrepareFrame();
+    if (!EnsureFrameRecording()) return false;
+    BeginColorRenderPass();
+    return true;
+}
+
+void VKRender::EndFrame() {
+    vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
+
+    OnEndFrame();
+
+    vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    VkSemaphore waitSemaphores[] = { m_imageAvailableSemaphores[m_currentFrame] };
+    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = waitSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &m_commandBuffers[m_currentFrame];
+
+    VkSemaphore signalSemaphores[] = { m_renderFinishedSemaphores[m_currentFrame] };
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = signalSemaphores;
+
+    if (vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, m_inFlightFences[m_currentFrame]) != VK_SUCCESS) {
+        throw std::runtime_error("提交命令缓冲区失败");
+    }
+
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = signalSemaphores;
+
+    VkSwapchainKHR swapChains[] = { m_swapchain };
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = swapChains;
+    presentInfo.pImageIndices = &m_imageIndex;
+
+    VkResult result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || m_framebufferResized) {
+        m_framebufferResized = false;
+        RecreateSwapchain();
+    } else if (result != VK_SUCCESS) {
+        throw std::runtime_error("呈现图像失败");
+    }
+
+    m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    m_frameRecording = false;
+}
+
+void VKRender::DrawIndexed(uint32_t indexCount, uint32_t instanceCount) {
+    vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], indexCount, instanceCount, 0, 0, 0);
+}
+
+
+VkBuffer VKRender::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties) {
+    VkBuffer buffer;
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+        throw std::runtime_error("创建缓冲区失败");
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(m_device, buffer, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
+
+    VkDeviceMemory bufferMemory;
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, buffer, nullptr);
+        throw std::runtime_error("分配缓冲区内存失败");
+    }
+
+    vkBindBufferMemory(m_device, buffer, bufferMemory, 0);
+
+    m_bufferMemoryMap[buffer] = bufferMemory;
+    return buffer;
+}
+
+void VKRender::DestroyBuffer(VkBuffer buffer) {
+    if (buffer == VK_NULL_HANDLE) return;
+
+    auto it = m_bufferMemoryMap.find(buffer);
+    if (it != m_bufferMemoryMap.end()) {
+        vkFreeMemory(m_device, it->second, nullptr);
+        m_bufferMemoryMap.erase(it);
+    }
+    vkDestroyBuffer(m_device, buffer, nullptr);
+}
+
+VkResult VKRender::MapBuffer(VkBuffer buffer, void** data) {
+    auto it = m_bufferMemoryMap.find(buffer);
+    if (it == m_bufferMemoryMap.end()) {
+        return VK_ERROR_MEMORY_MAP_FAILED;
+    }
+    return vkMapMemory(m_device, it->second, 0, VK_WHOLE_SIZE, 0, data);
+}
+
+void VKRender::UnmapBuffer(VkBuffer buffer) {
+    auto it = m_bufferMemoryMap.find(buffer);
+    if (it != m_bufferMemoryMap.end()) {
+        vkUnmapMemory(m_device, it->second);
+    }
+}
+
+VkDeviceMemory VKRender::AllocateMemory(VkMemoryRequirements memRequirements, VkMemoryPropertyFlags properties) {
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
+
+    VkDeviceMemory memory;
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &memory) != VK_SUCCESS) {
+        throw std::runtime_error("分配设备内存失败");
+    }
+
+    return memory;
+}
+
+
+VkCommandBuffer VKRender::BeginSingleTimeCommands() {
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = m_singleTimeCommandPool;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer commandBuffer;
+    vkAllocateCommandBuffers(m_device, &allocInfo, &commandBuffer);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+    return commandBuffer;
+}
+
+void VKRender::EndSingleTimeCommands(VkCommandBuffer commandBuffer) {
+    vkEndCommandBuffer(commandBuffer);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    vkFreeCommandBuffers(m_device, m_singleTimeCommandPool, 1, &commandBuffer);
+}
+
+void VKRender::WaitForIdle() {
+    vkDeviceWaitIdle(m_device);
+}
+
+
+bool VKRender::CheckValidationLayerSupport() {
+    uint32_t layerCount;
+    vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+
+    std::vector<VkLayerProperties> availableLayers(layerCount);
+    vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
+
+    for (const char* layerName : {"VK_LAYER_KHRONOS_validation"}) {
+        bool layerFound = false;
+        for (const auto& layerProperties : availableLayers) {
+            if (strcmp(layerName, layerProperties.layerName) == 0) {
+                layerFound = true;
+                break;
+            }
+        }
+        if (!layerFound) return false;
+    }
+    return true;
+}
+
+std::vector<const char*> VKRender::GetRequiredExtensions() {
+    std::vector<const char*> extensions;
+    extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    extensions.push_back("VK_KHR_win32_surface");
+
+#ifndef NDEBUG
+    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+#endif
+
+    return extensions;
+}
+
+
+bool VKRender::CreateInstance(const char* appName) {
+    if (m_enableValidationLayers && !CheckValidationLayerSupport()) {
+        std::cerr << "验证层不可用" << std::endl;
+        return false;
+    }
+
+    VkApplicationInfo appInfo{};
+    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.pApplicationName = appName;
+    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.pEngineName = "VulkanEngine";
+    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.apiVersion = VK_API_VERSION_1_0;
+
+    VkInstanceCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    createInfo.pApplicationInfo = &appInfo;
+
+    auto extensions = GetRequiredExtensions();
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+    createInfo.ppEnabledExtensionNames = extensions.data();
+
+    VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+    if (m_enableValidationLayers) {
+        createInfo.enabledLayerCount = static_cast<uint32_t>(m_validationLayers.size());
+        createInfo.ppEnabledLayerNames = m_validationLayers.data();
+
+        debugCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        debugCreateInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        debugCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                                     VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                                     VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        debugCreateInfo.pfnUserCallback = DebugCallback;
+
+        createInfo.pNext = &debugCreateInfo;
+    } else {
+        createInfo.enabledLayerCount = 0;
+        createInfo.pNext = nullptr;
+    }
+
+    VkResult result = vkCreateInstance(&createInfo, nullptr, &m_instance);
+    if (result != VK_SUCCESS) {
+        std::cerr << "创建Vulkan实例失败" << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+bool VKRender::SetupDebugMessenger() {
+    VkDebugUtilsMessengerCreateInfoEXT createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    createInfo.pfnUserCallback = DebugCallback;
+    createInfo.pUserData = nullptr;
+
+    auto func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT");
+    if (func) {
+        VkResult result = func(m_instance, &createInfo, nullptr, &m_debugMessenger);
+        if (result != VK_SUCCESS) {
+            std::cerr << "设置调试回调失败" << std::endl;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool VKRender::PickPhysicalDevice() {
+    uint32_t deviceCount = 0;
+    vkEnumeratePhysicalDevices(m_instance, &deviceCount, nullptr);
+
+    if (deviceCount == 0) {
+        std::cerr << "未找到支持Vulkan的GPU" << std::endl;
+        return false;
+    }
+
+    std::vector<VkPhysicalDevice> devices(deviceCount);
+    vkEnumeratePhysicalDevices(m_instance, &deviceCount, devices.data());
+
+    int bestScore = -1;
+    for (const auto& device : devices) {
+        int score = RateDevice(device);
+        if (score > bestScore && IsDeviceSuitable(device)) {
+            bestScore = score;
+            m_physicalDevice = device;
+        }
+    }
+
+    if (m_physicalDevice == VK_NULL_HANDLE) {
+        std::cerr << "未找到合适的GPU" << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+bool VKRender::CreateLogicalDevice() {
+    VulkanQueueFamilyIndices indices = FindQueueFamilies(m_physicalDevice);
+
+    std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+    std::set<int> uniqueQueueFamilies = { indices.graphicsFamily, indices.presentFamily };
+
+    float queuePriority = 1.0f;
+    for (int queueFamily : uniqueQueueFamilies) {
+        VkDeviceQueueCreateInfo queueCreateInfo{};
+        queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfo.queueFamilyIndex = queueFamily;
+        queueCreateInfo.queueCount = 1;
+        queueCreateInfo.pQueuePriorities = &queuePriority;
+        queueCreateInfos.push_back(queueCreateInfo);
+    }
+
+    VkPhysicalDeviceFeatures deviceFeatures{};
+    deviceFeatures.samplerAnisotropy = VK_TRUE;  // 启用各向异性过滤
+    deviceFeatures.fillModeNonSolid = VK_TRUE;   // 启用线框模式
+
+    VkDeviceCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+    createInfo.pQueueCreateInfos = queueCreateInfos.data();
+    createInfo.pEnabledFeatures = &deviceFeatures;
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(m_deviceExtensions.size());
+    createInfo.ppEnabledExtensionNames = m_deviceExtensions.data();
+
+    VkResult result = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
+    if (result != VK_SUCCESS) {
+        std::cerr << "创建逻辑设备失败" << std::endl;
+        return false;
+    }
+
+    vkGetDeviceQueue(m_device, indices.graphicsFamily, 0, &m_graphicsQueue);
+    vkGetDeviceQueue(m_device, indices.presentFamily, 0, &m_presentQueue);
+
+    return true;
+}
+
+bool VKRender::CreateSwapchain() {
+    VulkanSwapchainSupportDetails swapChainSupport = QuerySwapchainSupport(m_physicalDevice);
+
+    VkSurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(swapChainSupport.formats);
+    VkPresentModeKHR presentMode = ChooseSwapPresentMode(swapChainSupport.presentModes);
+    VkExtent2D extent = ChooseSwapExtent(swapChainSupport.capabilities);
+
+    uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
+    if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
+        imageCount = swapChainSupport.capabilities.maxImageCount;
+    }
+
+    VkSwapchainCreateInfoKHR createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    createInfo.surface = m_surface;
+    createInfo.minImageCount = imageCount;
+    createInfo.imageFormat = surfaceFormat.format;
+    createInfo.imageColorSpace = surfaceFormat.colorSpace;
+    createInfo.imageExtent = extent;
+    createInfo.imageArrayLayers = 1;
+    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+    VulkanQueueFamilyIndices indices = FindQueueFamilies(m_physicalDevice);
+    uint32_t queueFamilyIndices[] = { static_cast<uint32_t>(indices.graphicsFamily),
+                                       static_cast<uint32_t>(indices.presentFamily) };
+
+    if (indices.graphicsFamily != indices.presentFamily) {
+        createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        createInfo.queueFamilyIndexCount = 2;
+        createInfo.pQueueFamilyIndices = queueFamilyIndices;
+    } else {
+        createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+
+    createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+    createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    createInfo.presentMode = presentMode;
+    createInfo.clipped = VK_TRUE;
+    createInfo.oldSwapchain = VK_NULL_HANDLE;
+
+    VkResult result = vkCreateSwapchainKHR(m_device, &createInfo, nullptr, &m_swapchain);
+    if (result != VK_SUCCESS) {
+        std::cerr << "创建交换链失败" << std::endl;
+        return false;
+    }
+
+    vkGetSwapchainImagesKHR(m_device, m_swapchain, &imageCount, nullptr);
+    m_swapchainImages.resize(imageCount);
+    vkGetSwapchainImagesKHR(m_device, m_swapchain, &imageCount, m_swapchainImages.data());
+
+    m_swapchainImageFormat = surfaceFormat.format;
+    m_swapchainExtent = extent;
+
+    return true;
+}
+
+bool VKRender::RecreateSwapchain() {
+    vkDeviceWaitIdle(m_device);
+
+    CleanupSwapchain();
+
+    OnRecreateSwapchain();
+
+    if (!CreateSwapchain()) return false;
+    if (!CreateImageViews()) return false;
+    if (!CreateFramebuffers()) return false;
+
+    return true;
+}
+
+bool VKRender::CreateImageViews() {
+    m_swapchainImageViews.resize(m_swapchainImages.size());
+
+    for (size_t i = 0; i < m_swapchainImages.size(); i++) {
+        VkImageViewCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        createInfo.image = m_swapchainImages[i];
+        createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        createInfo.format = m_swapchainImageFormat;
+        createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        createInfo.subresourceRange.baseMipLevel = 0;
+        createInfo.subresourceRange.levelCount = 1;
+        createInfo.subresourceRange.baseArrayLayer = 0;
+        createInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &createInfo, nullptr, &m_swapchainImageViews[i]) != VK_SUCCESS) {
+            std::cerr << "创建图像视图失败" << std::endl;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool VKRender::CreateRenderPass() {
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = m_swapchainImageFormat;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;       // 渲染前清除
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;     // 渲染后存储
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference colorAttachmentRef{};
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
+        std::cerr << "创建渲染通道失败" << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+bool VKRender::CreatePipelines() {
+    return true;
+}
+
+bool VKRender::CreateFramebuffers() {
+    m_swapchainFramebuffers.resize(m_swapchainImageViews.size());
+
+    for (size_t i = 0; i < m_swapchainImageViews.size(); i++) {
+        VkImageView attachments[] = { m_swapchainImageViews[i] };
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = m_renderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.width = m_swapchainExtent.width;
+        framebufferInfo.height = m_swapchainExtent.height;
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_swapchainFramebuffers[i]) != VK_SUCCESS) {
+            std::cerr << "创建帧缓冲区失败" << std::endl;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool VKRender::CreateCommandPool() {
+    VulkanQueueFamilyIndices queueFamilyIndices = FindQueueFamilies(m_physicalDevice);
+
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
+
+    if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_commandPool) != VK_SUCCESS) {
+        std::cerr << "创建命令池失败" << std::endl;
+        return false;
+    }
+
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_singleTimeCommandPool) != VK_SUCCESS) {
+        std::cerr << "创建单次命令池失败" << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+bool VKRender::CreateCommandBuffers() {
+    m_commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = m_commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = static_cast<uint32_t>(m_commandBuffers.size());
+
+    if (vkAllocateCommandBuffers(m_device, &allocInfo, m_commandBuffers.data()) != VK_SUCCESS) {
+        std::cerr << "分配命令缓冲区失败" << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+bool VKRender::CreateSyncObjects() {
+    m_imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    m_renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    m_inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
+    VkSemaphoreCreateInfo semaphoreInfo{};
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;  // 初始状态为已信号
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_imageAvailableSemaphores[i]) != VK_SUCCESS ||
+            vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_renderFinishedSemaphores[i]) != VK_SUCCESS ||
+            vkCreateFence(m_device, &fenceInfo, nullptr, &m_inFlightFences[i]) != VK_SUCCESS) {
+            std::cerr << "创建同步对象失败" << std::endl;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void VKRender::CleanupSwapchain() {
+    for (auto framebuffer : m_swapchainFramebuffers) {
+        vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+    }
+    m_swapchainFramebuffers.clear();
+
+    for (auto imageView : m_swapchainImageViews) {
+        vkDestroyImageView(m_device, imageView, nullptr);
+    }
+    m_swapchainImageViews.clear();
+
+    if (m_swapchain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+        m_swapchain = VK_NULL_HANDLE;
+    }
+}
+
+
+VulkanQueueFamilyIndices VKRender::FindQueueFamilies(VkPhysicalDevice device) {
+    VulkanQueueFamilyIndices indices;
+
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+
+    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
+
+    int i = 0;
+    for (const auto& queueFamily : queueFamilies) {
+        if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+            indices.graphicsFamily = i;
+        }
+
+        VkBool32 presentSupport = false;
+        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &presentSupport);
+        if (presentSupport) {
+            indices.presentFamily = i;
+        }
+
+        if (indices.IsComplete()) break;
+        i++;
+    }
+
+    return indices;
+}
+
+VulkanSwapchainSupportDetails VKRender::QuerySwapchainSupport(VkPhysicalDevice device) {
+    VulkanSwapchainSupportDetails details;
+
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, m_surface, &details.capabilities);
+
+    uint32_t formatCount;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(device, m_surface, &formatCount, nullptr);
+    if (formatCount != 0) {
+        details.formats.resize(formatCount);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(device, m_surface, &formatCount, details.formats.data());
+    }
+
+    uint32_t presentModeCount;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(device, m_surface, &presentModeCount, nullptr);
+    if (presentModeCount != 0) {
+        details.presentModes.resize(presentModeCount);
+        vkGetPhysicalDeviceSurfacePresentModesKHR(device, m_surface, &presentModeCount, details.presentModes.data());
+    }
+
+    return details;
+}
+
+bool VKRender::IsDeviceSuitable(VkPhysicalDevice device) {
+    VulkanQueueFamilyIndices indices = FindQueueFamilies(device);
+
+    uint32_t extensionCount;
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+
+    std::vector<VkExtensionProperties> availableExtensions(extensionCount);
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
+
+    std::set<std::string> requiredExtensions(m_deviceExtensions.begin(), m_deviceExtensions.end());
+    for (const auto& extension : availableExtensions) {
+        requiredExtensions.erase(extension.extensionName);
+    }
+
+    bool extensionsSupported = requiredExtensions.empty();
+    bool swapChainAdequate = false;
+    if (extensionsSupported) {
+        VulkanSwapchainSupportDetails swapChainSupport = QuerySwapchainSupport(device);
+        swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
+    }
+
+    return indices.IsComplete() && extensionsSupported && swapChainAdequate;
+}
+
+int VKRender::RateDevice(VkPhysicalDevice device) {
+    VkPhysicalDeviceProperties deviceProperties;
+    vkGetPhysicalDeviceProperties(device, &deviceProperties);
+
+    VkPhysicalDeviceFeatures deviceFeatures;
+    vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
+
+    int score = 0;
+
+    if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+        score += 10000;
+    }
+
+    score += deviceProperties.limits.maxImageDimension2D;
+
+    if (!deviceFeatures.geometryShader) {
+        return 0;
+    }
+
+    return score;
+}
+
+
+VkSurfaceFormatKHR VKRender::ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
+    for (const auto& availableFormat : availableFormats) {
+        if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB &&
+            availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            return availableFormat;
+        }
+    }
+    return availableFormats[0];
+}
+
+VkPresentModeKHR VKRender::ChooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
+    for (const auto& availablePresentMode : availablePresentModes) {
+        if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
+            return availablePresentMode;
+        }
+    }
+    return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+VkExtent2D VKRender::ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
+    if (capabilities.currentExtent.width != UINT32_MAX) {
+        return capabilities.currentExtent;
+    } else {
+        int width, height;
+
+        width = static_cast<int>(m_framebufferWidth);
+        height = static_cast<int>(m_framebufferHeight);
+
+        VkExtent2D actualExtent = {
+            static_cast<uint32_t>(width),
+            static_cast<uint32_t>(height)
+        };
+
+        actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+        actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+
+        return actualExtent;
+    }
+}
+
+
+uint32_t VKRender::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProperties);
+
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            return i;
+        }
+    }
+
+    throw std::runtime_error("未找到合适的内存类型");
+}
+
+VkResult VKRender::CreateShaderModule(const std::vector<char>& code, VkShaderModule* shaderModule) {
+    VkShaderModuleCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.codeSize = code.size();
+    createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+
+    return vkCreateShaderModule(m_device, &createInfo, nullptr, shaderModule);
+}
+
+VKAPI_ATTR VkBool32 VKAPI_CALL VKRender::DebugCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+    VkDebugUtilsMessageTypeFlagsEXT type,
+    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+    void* pUserData) {
+    std::cerr << "验证层: " << pCallbackData->pMessage << std::endl;
+    return VK_FALSE;
+}
+
+
+std::vector<char> VKRender::ReadShaderFile(const std::string& filename) {
+    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+
+    if (!file.is_open()) {
+        throw std::runtime_error("无法打开着色器文件: " + filename);
+    }
+
+    size_t fileSize = static_cast<size_t>(file.tellg());
+    std::vector<char> buffer(fileSize);
+
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+    file.close();
+
+    return buffer;
+}
+
+VkShaderModule VKRender::CreateShaderModuleHelper(const std::vector<char>& code) {
+    VkShaderModule shaderModule;
+    if (CreateShaderModule(code, &shaderModule) != VK_SUCCESS) {
+        throw std::runtime_error("创建着色器模块失败");
+    }
+    return shaderModule;
+}
+
+void VKRender::SubmitAsync(Render::AsyncTask task) {
+    if (!task || IsShuttingDown()) return;
+    QThreadPool::globalInstance()->start(new VKFunctionRunnable(std::move(task)));
+}
+
+void VKRender::SubmitAsync(QRunnable* task) {
+    if (!task || IsShuttingDown()) return;
+    QThreadPool::globalInstance()->start(task);
+}
+
+
+VkDevice VKRender::GetDevice() const { return m_device; }
+VkPhysicalDevice VKRender::GetPhysicalDevice() const { return m_physicalDevice; }
+
+VkCommandBuffer VKRender::GetCurrentCommandBuffer() const { return m_commandBuffers[m_currentFrame]; }
+
+
+
+VkPipeline VKRender::GetPipeline(DrawTopology topology) const {
+    if (topology >= 0 && topology < DT_COUNT) {
+        return m_pipelines[topology];
+    }
+    return VK_NULL_HANDLE;
+}
+
+
+void VKRender::SetSurface(VkSurfaceKHR surface) { m_surface = surface; }
+void VKRender::SetInstance(VkInstance instance) { m_instance = instance; m_externalInstance = true; }
+
+#include <iostream>
+#include <cstring>
+#include <glm/gtc/matrix_transform.hpp>
+
+VKRender2D::VKRender2D() {}
+
+VKRender2D::~VKRender2D() {}
+
+
+void VKRender2D::OnMouseDown(float nx, float ny, int button) {
+    m_mouseButton = button;
+    m_lastMouse = glm::vec2(nx, ny);
+}
+
+void VKRender2D::OnMouseMove(float nx, float ny) {
+    if (m_mouseButton < 0) return;
+    glm::vec2 delta = glm::vec2(nx, ny) - m_lastMouse;
+    m_lastMouse = glm::vec2(nx, ny);
+
+    if (m_mouseButton == 0) {
+        float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
+        float worldW = 2.0f * aspect * m_zoomLevel;
+        float worldH = 2.0f * m_zoomLevel;
+        m_panOffset.x -= delta.x * worldW;
+        m_panOffset.y += delta.y * worldH;
+    }
+}
+
+void VKRender2D::OnMouseUp(int /*button*/) {
+    m_mouseButton = -1;
+}
+
+void VKRender2D::OnMouseWheel(float delta) {
+    m_zoomLevel *= (delta > 0.0f) ? 0.85f : 1.18f;
+    m_zoomLevel = glm::clamp(m_zoomLevel, 0.01f, 100.0f);
+}
+
+
+bool VKRender2D::OnInitialize() {
+    m_clearValueCount = 1;
+    m_clearValues[0].color = { m_clearColor.x, m_clearColor.y, m_clearColor.z, m_clearColor.w };
+
+    if (!CreateDescriptorSetLayout()) return false;
+    if (!CreateUniformBuffers()) return false;
+    if (!CreateDescriptorPool()) return false;
+    if (!CreateDescriptorSets()) return false;
+    return true;
+}
+
+void VKRender2D::OnShutdown() {
+    if (m_descriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
+        m_descriptorPool = VK_NULL_HANDLE;
+    }
+    DestroyUniformBuffers();
+    if (m_descriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
+        m_descriptorSetLayout = VK_NULL_HANDLE;
+    }
+}
+
+void VKRender2D::OnBeginFrame() {
+    UpdateCameraUBO();
+
+    vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+}
+
+void VKRender2D::OnEndFrame() {}
+
+
+bool VKRender2D::CreatePipelines() {
+    auto vertShaderCode = ReadShaderFile("res/2d_vert.spv");
+    auto fragShaderCode = ReadShaderFile("res/2d_frag.spv");
+
+    VkShaderModule vertShaderModule = CreateShaderModuleHelper(vertShaderCode);
+    VkShaderModule fragShaderModule = CreateShaderModuleHelper(fragShaderCode);
+
+    VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
+    vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertShaderStageInfo.module = vertShaderModule;
+    vertShaderStageInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
+    fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragShaderStageInfo.module = fragShaderModule;
+    fragShaderStageInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
+
+    auto bindingDescription = Vertex3D::GetBindingDescription();
+    auto attributeDescriptions = Vertex3D::GetAttributeDescriptions();
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+
+    {
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+        pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &m_descriptorSetLayout;
+        if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
+            std::cerr << "2D: 创建管线布局失败" << std::endl;
+            return false;
+        }
+    }
+
+    std::vector<VkDynamicState> dynamicStates = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.depthClampEnable = VK_FALSE;
+    rasterizer.rasterizerDiscardEnable = VK_FALSE;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.depthBiasEnable = VK_FALSE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.logicOpEnable = VK_FALSE;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = m_pipelineLayout;
+    pipelineInfo.renderPass = m_renderPass;
+    pipelineInfo.subpass = 0;
+
+    VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipelines[DT_TRIANGLE]);
+    if (result != VK_SUCCESS) {
+        std::cerr << "2D: 创建管线失败" << std::endl;
+        return false;
+    }
+
+    vkDestroyShaderModule(m_device, fragShaderModule, nullptr);
+    vkDestroyShaderModule(m_device, vertShaderModule, nullptr);
+
+    return true;
+}
+
+
+bool VKRender2D::CreateDescriptorSetLayout() {
+    VkDescriptorSetLayoutBinding uboLayoutBinding{};
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &uboLayoutBinding;
+
+    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
+        std::cerr << "2D: 创建描述符集布局失败" << std::endl;
+        return false;
+    }
+    return true;
+}
+
+bool VKRender2D::CreateUniformBuffers() {
+    VkDeviceSize bufferSize = sizeof(CameraUBO2D);
+
+    m_uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    m_uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+    m_uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = bufferSize;
+        bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_uniformBuffers[i]) != VK_SUCCESS) {
+            std::cerr << "2D: 创建统一缓冲区失败" << std::endl;
+            return false;
+        }
+
+        VkMemoryRequirements memRequirements;
+        vkGetBufferMemoryRequirements(m_device, m_uniformBuffers[i], &memRequirements);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memRequirements.size;
+        allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_uniformBuffersMemory[i]) != VK_SUCCESS) {
+            std::cerr << "2D: 分配统一缓冲区内存失败" << std::endl;
+            return false;
+        }
+
+        vkBindBufferMemory(m_device, m_uniformBuffers[i], m_uniformBuffersMemory[i], 0);
+
+        vkMapMemory(m_device, m_uniformBuffersMemory[i], 0, bufferSize, 0, &m_uniformBuffersMapped[i]);
+
+        CameraUBO2D ubo{};
+        ubo.projView = glm::mat4(1.0f);
+        memcpy(m_uniformBuffersMapped[i], &ubo, sizeof(ubo));
+    }
+
+    return true;
+}
+
+bool VKRender2D::CreateDescriptorPool() {
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
+        std::cerr << "2D: 创建描述符池失败" << std::endl;
+        return false;
+    }
+    return true;
+}
+
+bool VKRender2D::CreateDescriptorSets() {
+    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, m_descriptorSetLayout);
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_descriptorPool;
+    allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    allocInfo.pSetLayouts = layouts.data();
+
+    m_descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    if (vkAllocateDescriptorSets(m_device, &allocInfo, m_descriptorSets.data()) != VK_SUCCESS) {
+        std::cerr << "2D: 分配描述符集失败" << std::endl;
+        return false;
+    }
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = m_uniformBuffers[i];
+        bufferInfo.offset = 0;
+        bufferInfo.range = sizeof(CameraUBO2D);
+
+        VkWriteDescriptorSet descriptorWrite{};
+        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet = m_descriptorSets[i];
+        descriptorWrite.dstBinding = 0;
+        descriptorWrite.dstArrayElement = 0;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.pBufferInfo = &bufferInfo;
+
+        vkUpdateDescriptorSets(m_device, 1, &descriptorWrite, 0, nullptr);
+    }
+
+    return true;
+}
+
+void VKRender2D::DestroyUniformBuffers() {
+    for (size_t i = 0; i < m_uniformBuffers.size(); i++) {
+        if (m_uniformBuffersMapped[i] != nullptr) {
+            vkUnmapMemory(m_device, m_uniformBuffersMemory[i]);
+            m_uniformBuffersMapped[i] = nullptr;
+        }
+        if (m_uniformBuffers[i] != VK_NULL_HANDLE) {
+            vkDestroyBuffer(m_device, m_uniformBuffers[i], nullptr);
+            m_uniformBuffers[i] = VK_NULL_HANDLE;
+        }
+        if (m_uniformBuffersMemory[i] != VK_NULL_HANDLE) {
+            vkFreeMemory(m_device, m_uniformBuffersMemory[i], nullptr);
+            m_uniformBuffersMemory[i] = VK_NULL_HANDLE;
+        }
+    }
+    m_uniformBuffers.clear();
+    m_uniformBuffersMemory.clear();
+    m_uniformBuffersMapped.clear();
+}
+
+void VKRender2D::UpdateCameraUBO() {
+    float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
+    float halfW = aspect * m_zoomLevel;
+    float halfH = m_zoomLevel;
+
+    glm::mat4 proj = glm::ortho(-halfW, halfW, -halfH, halfH, -1.0f, 1.0f);
+    proj[1][1] *= -1.0f;
+
+    glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(-m_panOffset.x, -m_panOffset.y, 0.0f));
+
+    CameraUBO2D ubo;
+    ubo.projView = proj * view;
+    memcpy(m_uniformBuffersMapped[m_currentFrame], &ubo, sizeof(ubo));
+}
+
 #include "Light/SolarPosition.h"
 #include <iostream>
 #include <cstring>
@@ -14,21 +1406,21 @@
 #include <glm/gtc/matrix_inverse.hpp>
 
 
-VulkanRender3D::VulkanRender3D() {
+VKRender3D::VKRender3D() {
     UpdateSunDirection();
 }
 
-VulkanRender3D::~VulkanRender3D() {
+VKRender3D::~VKRender3D() {
 }
 
 
 
-void VulkanRender3D::OnMouseDown(float nx, float ny, int button) {
+void VKRender3D::OnMouseDown(float nx, float ny, int button) {
     m_mouseButton = button;
     m_lastMouse = glm::vec2(nx, ny);
 }
 
-void VulkanRender3D::OnMouseMove(float nx, float ny) {
+void VKRender3D::OnMouseMove(float nx, float ny) {
     if (m_mouseButton < 0) return;
     const glm::vec2 previousMouse = m_lastMouse;
     const glm::vec3 sphereFrom =
@@ -115,7 +1507,7 @@ void VulkanRender3D::OnMouseMove(float nx, float ny) {
     }
 }
 
-glm::vec3 VulkanRender3D::ProjectToVirtualSphere(float nx, float ny) const {
+glm::vec3 VKRender3D::ProjectToVirtualSphere(float nx, float ny) const {
     const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
     const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
     const float minExtent = std::min(width, height);
@@ -136,7 +1528,7 @@ glm::vec3 VulkanRender3D::ProjectToVirtualSphere(float nx, float ny) const {
     return glm::normalize(glm::vec3(x, y, z));
 }
 
-void VulkanRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
+void VKRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
                                                     float angle) {
     if (std::abs(angle) <= std::numeric_limits<float>::epsilon()) return;
 
@@ -167,17 +1559,17 @@ void VulkanRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
     m_modelRotation = rotationAt(allowed);
 }
 
-void VulkanRender3D::OnMouseUp(int /*button*/) {
+void VKRender3D::OnMouseUp(int /*button*/) {
     m_mouseButton = -1;
 }
 
-void VulkanRender3D::OnMouseWheel(float delta) {
+void VKRender3D::OnMouseWheel(float delta) {
     m_orbitDistance *= (delta > 0.0f) ? 0.9f : 1.1f;
     m_orbitDistance = glm::clamp(m_orbitDistance, 0.1f, 1000.0f);
 }
 
 
-bool VulkanRender3D::OnInitialize() {
+bool VKRender3D::OnInitialize() {
     m_clearValueCount = 2;
     m_clearValues[0].color = { m_clearColor.x, m_clearColor.y, m_clearColor.z, m_clearColor.w };
     m_clearValues[1].depthStencil = { 1.0f, 0 };
@@ -193,7 +1585,7 @@ bool VulkanRender3D::OnInitialize() {
     return true;
 }
 
-void VulkanRender3D::OnShutdown() {
+void VKRender3D::OnShutdown() {
     DestroyDepthReadbackResources();
     DestroyShadowMap();
     DestroyDummyShadowMap();
@@ -210,18 +1602,18 @@ void VulkanRender3D::OnShutdown() {
     }
 }
 
-void VulkanRender3D::OnDestroyPipelines() {
+void VKRender3D::OnDestroyPipelines() {
     if (m_shadowPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_shadowPipeline, nullptr);
         m_shadowPipeline = VK_NULL_HANDLE;
     }
 }
 
-void VulkanRender3D::OnPrepareFrame() {
+void VKRender3D::OnPrepareFrame() {
     EnsureDummyShadowReady();
 }
 
-void VulkanRender3D::OnBeginFrame() {
+void VKRender3D::OnBeginFrame() {
     ProcessDepthReadback(m_currentFrame);
     UpdateUniformBuffer(m_currentFrame);
 
@@ -229,12 +1621,12 @@ void VulkanRender3D::OnBeginFrame() {
         m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
 }
 
-void VulkanRender3D::OnRecreateSwapchain() {
+void VKRender3D::OnRecreateSwapchain() {
     DestroyDepthResources();
 }
 
 
-bool VulkanRender3D::CreateRenderPass() {
+bool VKRender3D::CreateRenderPass() {
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = m_swapchainImageFormat;
     colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -300,7 +1692,7 @@ bool VulkanRender3D::CreateRenderPass() {
 }
 
 
-bool VulkanRender3D::CreatePipelines() {
+bool VKRender3D::CreatePipelines() {
     auto vertShaderCode = ReadShaderFile("res/3d_vert.spv");
     auto fragShaderCode = ReadShaderFile("res/3d_frag.spv");
 
@@ -448,7 +1840,7 @@ bool VulkanRender3D::CreatePipelines() {
 }
 
 
-bool VulkanRender3D::CreateFramebuffers() {
+bool VKRender3D::CreateFramebuffers() {
     if (!CreateDepthResources()) return false;
 
     m_swapchainFramebuffers.resize(m_swapchainImageViews.size());
@@ -478,21 +1870,21 @@ bool VulkanRender3D::CreateFramebuffers() {
 }
 
 
-VkFormat VulkanRender3D::FindDepthFormat() {
+VkFormat VKRender3D::FindDepthFormat() {
     return FindSupportedFormat(
         { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT },
         VK_IMAGE_TILING_OPTIMAL,
         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
 }
 
-VkFormat VulkanRender3D::FindShadowDepthFormat() {
+VkFormat VKRender3D::FindShadowDepthFormat() {
     return FindSupportedFormat(
         { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT },
         VK_IMAGE_TILING_OPTIMAL,
         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
 }
 
-VkFormat VulkanRender3D::FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features) {
+VkFormat VKRender3D::FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features) {
     for (VkFormat format : candidates) {
         VkFormatProperties props;
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &props);
@@ -506,11 +1898,11 @@ VkFormat VulkanRender3D::FindSupportedFormat(const std::vector<VkFormat>& candid
     throw std::runtime_error("未找到支持的深度格式");
 }
 
-bool VulkanRender3D::HasStencilComponent(VkFormat format) {
+bool VKRender3D::HasStencilComponent(VkFormat format) {
     return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
 }
 
-bool VulkanRender3D::CreateDepthResources() {
+bool VKRender3D::CreateDepthResources() {
     VkFormat depthFormat = FindDepthFormat();
 
     VkImageCreateInfo imageInfo{};
@@ -571,7 +1963,7 @@ bool VulkanRender3D::CreateDepthResources() {
     return true;
 }
 
-void VulkanRender3D::DestroyDepthResources() {
+void VKRender3D::DestroyDepthResources() {
     if (m_depthImageView != VK_NULL_HANDLE) {
         vkDestroyImageView(m_device, m_depthImageView, nullptr);
         m_depthImageView = VK_NULL_HANDLE;
@@ -587,7 +1979,7 @@ void VulkanRender3D::DestroyDepthResources() {
 }
 
 
-bool VulkanRender3D::CreateDescriptorSetLayout() {
+bool VKRender3D::CreateDescriptorSetLayout() {
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -616,7 +2008,7 @@ bool VulkanRender3D::CreateDescriptorSetLayout() {
     return true;
 }
 
-bool VulkanRender3D::CreateUniformBuffers() {
+bool VKRender3D::CreateUniformBuffers() {
     VkDeviceSize bufferSize = sizeof(UniformBufferObject3D);
 
     m_uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
@@ -663,7 +2055,7 @@ bool VulkanRender3D::CreateUniformBuffers() {
     return true;
 }
 
-bool VulkanRender3D::CreateDescriptorPool() {
+bool VKRender3D::CreateDescriptorPool() {
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * 2);
@@ -683,7 +2075,7 @@ bool VulkanRender3D::CreateDescriptorPool() {
     return true;
 }
 
-bool VulkanRender3D::CreateDescriptorSets() {
+bool VKRender3D::CreateDescriptorSets() {
     std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT * 2, m_descriptorSetLayout);
 
     VkDescriptorSetAllocateInfo allocInfo{};
@@ -727,7 +2119,7 @@ bool VulkanRender3D::CreateDescriptorSets() {
     return true;
 }
 
-void VulkanRender3D::DestroyUniformBuffers() {
+void VKRender3D::DestroyUniformBuffers() {
     for (size_t i = 0; i < m_uniformBuffers.size(); i++) {
         if (m_uniformBuffersMapped[i] != nullptr) {
             vkUnmapMemory(m_device, m_uniformBuffersMemory[i]);
@@ -747,7 +2139,7 @@ void VulkanRender3D::DestroyUniformBuffers() {
     m_uniformBuffersMapped.clear();
 }
 
-void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
+void VKRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
 
     const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
@@ -794,19 +2186,19 @@ void VulkanRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
-void VulkanRender3D::SetWireframeEnabled(bool enabled) {
+void VKRender3D::SetWireframeEnabled(bool enabled) {
     m_wireframeMode = enabled;
 }
 
-void VulkanRender3D::SetGrayEnabled(bool enabled) {
+void VKRender3D::SetGrayEnabled(bool enabled) {
     m_grayEnabled = enabled;
 }
 
-void VulkanRender3D::SetDyeEnabled(bool enabled) {
+void VKRender3D::SetDyeEnabled(bool enabled) {
     m_dyeEnabled = enabled;
 }
 
-void VulkanRender3D::SetLightAnalysisEnabled(bool enabled) {
+void VKRender3D::SetLightAnalysisEnabled(bool enabled) {
     m_lightAnalysisEnabled = enabled;
     if (!m_initialized) return;
     if (!enabled) {
@@ -820,46 +2212,46 @@ void VulkanRender3D::SetLightAnalysisEnabled(bool enabled) {
     EnsureShadowMapForAnalysis();
 }
 
-void VulkanRender3D::SetShadowTextureSize(uint32_t size) {
+void VKRender3D::SetShadowTextureSize(uint32_t size) {
     m_shadowTextureSize = size;
     if (m_initialized && m_lightAnalysisEnabled) {
         EnsureShadowMapForAnalysis();
     }
 }
 
-uint32_t VulkanRender3D::GetShadowTextureSize() const {
+uint32_t VKRender3D::GetShadowTextureSize() const {
     return m_shadowTextureSize;
 }
 
-bool VulkanRender3D::IsShadowMapReady() const {
+bool VKRender3D::IsShadowMapReady() const {
     return m_shadowMapReady;
 }
 
-std::string VulkanRender3D::TakeShadowMapStatus() {
+std::string VKRender3D::TakeShadowMapStatus() {
     std::string message = std::move(m_shadowMapStatus);
     m_shadowMapStatus.clear();
     return message;
 }
 
-void VulkanRender3D::SetShadowSceneBounds(const Vec3& boundsMin, const Vec3& boundsMax, bool valid) {
+void VKRender3D::SetShadowSceneBounds(const Vec3& boundsMin, const Vec3& boundsMax, bool valid) {
     m_shadowBoundsValid = valid;
     m_shadowBoundsMin = glm::vec3(boundsMin.x, boundsMin.y, boundsMin.z);
     m_shadowBoundsMax = glm::vec3(boundsMax.x, boundsMax.y, boundsMax.z);
 }
 
-void VulkanRender3D::SetShadowMapStatus(const std::string& message) {
+void VKRender3D::SetShadowMapStatus(const std::string& message) {
     m_shadowMapStatus = message;
 }
 
-bool VulkanRender3D::ShouldRenderShadows() const {
+bool VKRender3D::ShouldRenderShadows() const {
     return m_lightAnalysisEnabled && m_sunAboveHorizon && m_shadowMapReady && !m_shadowPassActive;
 }
 
-VkPipeline VulkanRender3D::GetShadowPipeline() const {
+VkPipeline VKRender3D::GetShadowPipeline() const {
     return m_shadowPipeline;
 }
 
-glm::mat4 VulkanRender3D::ComputeLightViewProj() const {
+glm::mat4 VKRender3D::ComputeLightViewProj() const {
     glm::vec3 boundsMin = m_shadowBoundsMin;
     glm::vec3 boundsMax = m_shadowBoundsMax;
     if (!m_shadowBoundsValid) {
@@ -916,7 +2308,7 @@ glm::mat4 VulkanRender3D::ComputeLightViewProj() const {
     return lightProj * lightView;
 }
 
-void VulkanRender3D::UpdateShadowDescriptors() {
+void VKRender3D::UpdateShadowDescriptors() {
     if (m_device == VK_NULL_HANDLE || m_shadowSampler == VK_NULL_HANDLE) return;
 
     auto writeImage = [this](VkDescriptorSet set, VkImageView view) {
@@ -953,7 +2345,7 @@ void VulkanRender3D::UpdateShadowDescriptors() {
     }
 }
 
-void VulkanRender3D::TransitionDepthImage(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+void VKRender3D::TransitionDepthImage(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                                           VkAccessFlags srcAccess, VkAccessFlags dstAccess,
                                           VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage) {
     VkCommandBuffer cmd = BeginSingleTimeCommands();
@@ -978,7 +2370,7 @@ void VulkanRender3D::TransitionDepthImage(VkImage image, VkImageLayout oldLayout
     EndSingleTimeCommands(cmd);
 }
 
-bool VulkanRender3D::CreateShadowSampler() {
+bool VKRender3D::CreateShadowSampler() {
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_NEAREST;
@@ -998,7 +2390,7 @@ bool VulkanRender3D::CreateShadowSampler() {
     return true;
 }
 
-bool VulkanRender3D::CreateDummyShadowMap() {
+bool VKRender3D::CreateDummyShadowMap() {
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     try {
         depthFormat = FindShadowDepthFormat();
@@ -1058,7 +2450,7 @@ bool VulkanRender3D::CreateDummyShadowMap() {
     return true;
 }
 
-bool VulkanRender3D::EnsureDummyShadowReady() {
+bool VKRender3D::EnsureDummyShadowReady() {
     if (m_dummyShadowReady || m_dummyShadowImage == VK_NULL_HANDLE) return m_dummyShadowReady;
     TransitionDepthImage(m_dummyShadowImage,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1088,7 +2480,7 @@ bool VulkanRender3D::EnsureDummyShadowReady() {
     return true;
 }
 
-bool VulkanRender3D::CreateShadowRenderPass() {
+bool VKRender3D::CreateShadowRenderPass() {
     VkFormat depthFormat = m_shadowDepthFormat;
     if (depthFormat == VK_FORMAT_UNDEFINED) {
         try {
@@ -1146,7 +2538,7 @@ bool VulkanRender3D::CreateShadowRenderPass() {
     return true;
 }
 
-bool VulkanRender3D::CreateShadowPipeline() {
+bool VKRender3D::CreateShadowPipeline() {
     auto vertShaderCode = ReadShaderFile("res/3d_shadow_vert.spv");
     auto fragShaderCode = ReadShaderFile("res/3d_shadow_frag.spv");
     VkShaderModule vertShaderModule = CreateShaderModuleHelper(vertShaderCode);
@@ -1239,7 +2631,7 @@ bool VulkanRender3D::CreateShadowPipeline() {
     return true;
 }
 
-bool VulkanRender3D::CreateShadowMap(uint32_t size) {
+bool VKRender3D::CreateShadowMap(uint32_t size) {
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(m_physicalDevice, &properties);
     if (size == 0 || size > properties.limits.maxImageDimension2D) {
@@ -1341,7 +2733,7 @@ bool VulkanRender3D::CreateShadowMap(uint32_t size) {
     return true;
 }
 
-void VulkanRender3D::DestroyShadowMap() {
+void VKRender3D::DestroyShadowMap() {
     if (m_shadowFramebuffer != VK_NULL_HANDLE) {
         vkDestroyFramebuffer(m_device, m_shadowFramebuffer, nullptr);
         m_shadowFramebuffer = VK_NULL_HANDLE;
@@ -1362,7 +2754,7 @@ void VulkanRender3D::DestroyShadowMap() {
     m_allocatedShadowTextureSize = 0;
 }
 
-void VulkanRender3D::DestroyDummyShadowMap() {
+void VKRender3D::DestroyDummyShadowMap() {
     if (m_dummyShadowView != VK_NULL_HANDLE) {
         vkDestroyImageView(m_device, m_dummyShadowView, nullptr);
         m_dummyShadowView = VK_NULL_HANDLE;
@@ -1378,7 +2770,7 @@ void VulkanRender3D::DestroyDummyShadowMap() {
     m_dummyShadowReady = false;
 }
 
-void VulkanRender3D::DestroyShadowSupport() {
+void VKRender3D::DestroyShadowSupport() {
     if (m_shadowRenderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(m_device, m_shadowRenderPass, nullptr);
         m_shadowRenderPass = VK_NULL_HANDLE;
@@ -1389,7 +2781,7 @@ void VulkanRender3D::DestroyShadowSupport() {
     }
 }
 
-bool VulkanRender3D::TryAllocateShadowMap(uint32_t size) {
+bool VKRender3D::TryAllocateShadowMap(uint32_t size) {
     DestroyShadowMap();
     if (!CreateShadowMap(size)) {
         UpdateShadowDescriptors();
@@ -1401,7 +2793,7 @@ bool VulkanRender3D::TryAllocateShadowMap(uint32_t size) {
     return true;
 }
 
-bool VulkanRender3D::EnsureShadowMapForAnalysis() {
+bool VKRender3D::EnsureShadowMapForAnalysis() {
     if (!m_initialized || !m_lightAnalysisEnabled) return false;
     if (m_shadowMapReady && m_allocatedShadowTextureSize == m_shadowTextureSize) {
         return true;
@@ -1436,7 +2828,7 @@ bool VulkanRender3D::EnsureShadowMapForAnalysis() {
     return false;
 }
 
-bool VulkanRender3D::BeginShadowPass() {
+bool VKRender3D::BeginShadowPass() {
     if (!m_initialized || !m_lightAnalysisEnabled || !m_sunAboveHorizon) return false;
     EnsureDummyShadowReady();
     if (!EnsureShadowMapForAnalysis() || !m_shadowMapReady || m_shadowFramebuffer == VK_NULL_HANDLE) {
@@ -1474,38 +2866,38 @@ bool VulkanRender3D::BeginShadowPass() {
     return true;
 }
 
-void VulkanRender3D::EndShadowPass() {
+void VKRender3D::EndShadowPass() {
     if (!m_shadowPassActive) return;
     vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
     m_shadowPassActive = false;
 }
 
-void VulkanRender3D::SetLatitude(float latitude) {
+void VKRender3D::SetLatitude(float latitude) {
     m_latitude = latitude;
     UpdateSunDirection();
 }
 
-void VulkanRender3D::SetLightDate(int year, int month, int day) {
+void VKRender3D::SetLightDate(int year, int month, int day) {
     m_lightYear = year;
     m_lightMonth = month;
     m_lightDay = day;
     UpdateSunDirection();
 }
 
-void VulkanRender3D::SetLightTimeMinutes(int minutes) {
+void VKRender3D::SetLightTimeMinutes(int minutes) {
     m_lightTimeMinutes = minutes;
     UpdateSunDirection();
 }
 
-glm::vec3 VulkanRender3D::GetSunDirection() const {
+glm::vec3 VKRender3D::GetSunDirection() const {
     return m_sunDirection;
 }
 
-bool VulkanRender3D::IsSunAboveHorizon() const {
+bool VKRender3D::IsSunAboveHorizon() const {
     return m_sunAboveHorizon;
 }
 
-void VulkanRender3D::UpdateSunDirection() {
+void VKRender3D::UpdateSunDirection() {
     SolarPositionQuery query{};
     query.latitudeDegrees = m_latitude;
     query.year = m_lightYear;
@@ -1518,7 +2910,7 @@ void VulkanRender3D::UpdateSunDirection() {
     m_sunAboveHorizon = sun.aboveHorizon;
 }
 
-void VulkanRender3D::SetOrthographicEnabled(bool enabled) {
+void VKRender3D::SetOrthographicEnabled(bool enabled) {
     if (enabled && !m_orthographicEnabled) {
         m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         m_mouseButton = -1;
@@ -1528,12 +2920,12 @@ void VulkanRender3D::SetOrthographicEnabled(bool enabled) {
     m_orthographicEnabled = enabled;
 }
 
-void VulkanRender3D::SetOrbitCenter(const Vec3& normalizedCenter) {
+void VKRender3D::SetOrbitCenter(const Vec3& normalizedCenter) {
     m_orbitCenter = glm::vec3(
         normalizedCenter.x, normalizedCenter.y, normalizedCenter.z);
 }
 
-void VulkanRender3D::ResetView(float orbitDistance) {
+void VKRender3D::ResetView(float orbitDistance) {
     m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     m_panOffset = glm::vec3(0.0f);
     m_orbitDistance = std::isfinite(orbitDistance)
@@ -1544,7 +2936,7 @@ void VulkanRender3D::ResetView(float orbitDistance) {
     m_lastVerticalLocalAxis = glm::vec3(1.0f, 0.0f, 0.0f);
 }
 
-void VulkanRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
+void VKRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
                                                  float normalizationScale) {
     if (!std::isfinite(normalizationScale) || normalizationScale <= 0.0f) {
         m_normalizedToWorld = glm::mat4(1.0f);
@@ -1559,7 +2951,7 @@ void VulkanRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
     m_normalizedToWorld = translateToSource * undoScale;
 }
 
-void VulkanRender3D::InitIdentityMatrix(float mat[4][4]) {
+void VKRender3D::InitIdentityMatrix(float mat[4][4]) {
     memset(mat, 0, sizeof(float) * 16);
     mat[0][0] = 1.0f;
     mat[1][1] = 1.0f;
@@ -1568,7 +2960,7 @@ void VulkanRender3D::InitIdentityMatrix(float mat[4][4]) {
 }
 
 
-bool VulkanRender3D::CreateDepthReadbackResources() {
+bool VKRender3D::CreateDepthReadbackResources() {
     VkDeviceSize bufferSize = sizeof(float);
 
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -1605,7 +2997,7 @@ bool VulkanRender3D::CreateDepthReadbackResources() {
     return true;
 }
 
-void VulkanRender3D::DestroyDepthReadbackResources() {
+void VKRender3D::DestroyDepthReadbackResources() {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         if (m_depthReadbackMapped[i] != nullptr) {
             vkUnmapMemory(m_device, m_depthReadbackMemory[i]);
@@ -1623,13 +3015,13 @@ void VulkanRender3D::DestroyDepthReadbackResources() {
     }
 }
 
-void VulkanRender3D::RequestCoordReadback(float ndcX, float ndcY) {
+void VKRender3D::RequestCoordReadback(float ndcX, float ndcY) {
     m_depthReadbackRequested = true;
     m_requestedNDCX = ndcX;
     m_requestedNDCY = ndcY;
 }
 
-void VulkanRender3D::OnEndFrame() {
+void VKRender3D::OnEndFrame() {
     if (!m_depthReadbackRequested) return;
     if (m_depthImage == VK_NULL_HANDLE) return;
     m_depthReadbackRequested = false;
@@ -1691,7 +3083,7 @@ void VulkanRender3D::OnEndFrame() {
     m_pendingNDCY[m_currentFrame] = m_requestedNDCY;
 }
 
-void VulkanRender3D::ProcessDepthReadback(uint32_t frameIndex) {
+void VKRender3D::ProcessDepthReadback(uint32_t frameIndex) {
     if (!m_pendingReadback[frameIndex]) return;
     m_pendingReadback[frameIndex] = false;
 
@@ -1737,13 +3129,13 @@ void VulkanRender3D::ProcessDepthReadback(uint32_t frameIndex) {
     m_newCoordAvailable = true;
 }
 
-bool VulkanRender3D::HasNewWorldCoord() const {
+bool VKRender3D::HasNewWorldCoord() const {
     bool v = m_newCoordAvailable;
     m_newCoordAvailable = false;
     return v;
 }
 
 
-float VulkanRender3D::GetLastWorldX() const { return m_lastWorldCoord[0]; }
-float VulkanRender3D::GetLastWorldY() const { return m_lastWorldCoord[1]; }
-float VulkanRender3D::GetLastWorldZ() const { return m_lastWorldCoord[2]; }
+float VKRender3D::GetLastWorldX() const { return m_lastWorldCoord[0]; }
+float VKRender3D::GetLastWorldY() const { return m_lastWorldCoord[1]; }
+float VKRender3D::GetLastWorldZ() const { return m_lastWorldCoord[2]; }

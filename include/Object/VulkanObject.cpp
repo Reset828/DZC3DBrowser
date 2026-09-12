@@ -21,11 +21,11 @@ VulkanObject& VulkanObject::operator=(const VulkanObject& obj) {
     return *this;
 }
 
-void VulkanObject::SetRender(VulkanRender* pRender) {
+void VulkanObject::SetRender(VKRender* pRender) {
     m_pRender = pRender;
 }
 
-VulkanRender* VulkanObject::GetRender() const {
+VKRender* VulkanObject::GetRender() const {
     return m_pRender;
 }
 

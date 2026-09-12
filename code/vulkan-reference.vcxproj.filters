@@ -30,7 +30,13 @@
     <ClInclude Include="..\include\Object\OpenGLObject.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="..\include\Render\VulkanRender.h">
+    <ClInclude Include="..\include\Render\Render.h">
+      <Filter>渲染器</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Render\GLRender.h">
+      <Filter>渲染器</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Render\VKRender.h">
       <Filter>渲染器</Filter>
     </ClInclude>
     <ClInclude Include="BufferUploadRunnable.h">
@@ -48,24 +54,13 @@
     <ClInclude Include="..\include\VertexType\VertexTypes.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="..\include\Math\EngineTypes.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="..\include\Light\SolarPosition.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="..\include\Render\2DVulkanRender.h">
-      <Filter>渲染器</Filter>
-    </ClInclude>
-    <ClInclude Include="..\include\Render\3DVulkanRender.h">
-      <Filter>渲染器</Filter>
-    </ClInclude>
-    <ClInclude Include="..\include\Render\OpenGLRender.h">
-      <Filter>渲染器</Filter>
-    </ClInclude>
-    <ClInclude Include="..\include\Render\2DOpenGLRender.h">
-      <Filter>渲染器</Filter>
-    </ClInclude>
-    <ClInclude Include="..\include\Render\3DOpenGLRender.h">
-      <Filter>渲染器</Filter>
-    </ClInclude>
+
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="QWindowVulkan.h">
@@ -121,23 +116,14 @@
     <ClCompile Include="..\include\Light\SolarPosition.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="..\include\Render\2DVulkanRender.cpp">
+    <ClCompile Include="..\include\Render\Render.cpp">
       <Filter>渲染器</Filter>
     </ClCompile>
-    <ClCompile Include="..\include\Render\3DVulkanRender.cpp">
+    <ClCompile Include="..\include\Render\GLRender.cpp">
       <Filter>渲染器</Filter>
     </ClCompile>
-    <ClCompile Include="..\include\Render\OpenGLRender.cpp">
+    <ClCompile Include="..\include\Render\VKRender.cpp">
       <Filter>渲染器</Filter>
-    </ClCompile>
-    <ClCompile Include="..\include\Render\2DOpenGLRender.cpp">
-      <Filter>渲染器</Filter>
-    </ClCompile>
-    <ClCompile Include="..\include\Render\3DOpenGLRender.cpp">
-      <Filter>渲染器</Filter>
-    </ClCompile>
-    <ClCompile Include="..\include\Render\VulkanRender.cpp">
-      <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

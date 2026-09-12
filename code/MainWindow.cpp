@@ -1,16 +1,13 @@
 ﻿#include "MainWindow.h"
 #include "QWindowVulkan.h"
 #include "QWindowOpenGL.h"
-#include "Render/VulkanRender.h"
-#include "Render/OpenGLRender.h"
+#include "Render/Render.h"
+#include "Render/VKRender.h"
+#include "Render/GLRender.h"
 #include "Layer/Layer.h"
 #include "VulkanMesh.h"
 #include "OpenGLMesh.h"
 #include "ObjParseRunnable.h"
-#include "Render/3DVulkanRender.h"
-#include "Render/2DVulkanRender.h"
-#include "Render/3DOpenGLRender.h"
-#include "Render/2DOpenGLRender.h"
 #include <QWindow>
 #include <QString>
 #include <QAction>
@@ -59,7 +56,7 @@
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
-    , m_renderer(new VulkanRender3D())
+    , m_renderer(new VKRender3D())
     , m_openglRenderer(nullptr)
     , m_vulkanWindow(nullptr)
     , m_openglWindow(nullptr)
@@ -75,40 +72,40 @@ MainWindow::MainWindow(QWidget* parent)
     SetupVulkan();
 
     connect(m_borderCheck, &QCheckBox::toggled, this, [this](bool checked) {
-        if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+        if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
             render3D->SetWireframeEnabled(checked);
         }
-        if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+        if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
             render3D->SetWireframeEnabled(checked);
         }
     });
 
     connect(m_grayCheck, &QCheckBox::toggled, this, [this](bool checked) {
-        if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+        if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
             render3D->SetGrayEnabled(checked);
         }
-        if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+        if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
             render3D->SetGrayEnabled(checked);
         }
     });
 
     connect(m_dyeCheck, &QCheckBox::toggled, this, [this](bool checked) {
-        if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+        if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
             render3D->SetDyeEnabled(checked);
         }
-        if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+        if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
             render3D->SetDyeEnabled(checked);
         }
     });
 
     connect(m_orthographicCheck, &QCheckBox::toggled, this, [this](bool checked) {
-        if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+        if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
             render3D->SetOrthographicEnabled(checked);
             if (!checked) {
                 render3D->ResetView(m_sceneViewDistance);
             }
         }
-        if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+        if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
             render3D->SetOrthographicEnabled(checked);
             if (!checked) {
                 render3D->ResetView(m_sceneViewDistance);
@@ -254,7 +251,9 @@ void MainWindow::SetupStatusBar() {
 }
 
 void MainWindow::SetupVulkan() {
-    m_vulkanWindow = new QWindowVulkan(m_renderer);
+    auto* vkRenderer = dynamic_cast<VKRender*>(m_renderer);
+    if (!vkRenderer) return;
+    m_vulkanWindow = new QWindowVulkan(vkRenderer);
     m_container = QWidget::createWindowContainer(m_vulkanWindow);
     m_container->setMinimumSize(400, 300);
     m_container->setFocusPolicy(Qt::StrongFocus);
@@ -443,12 +442,12 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     auto dispatchMove = [&](float nx, float ny) {
         if (isOpenGL) {
             if (m_openglRenderer) m_openglRenderer->OnMouseMove(nx, ny);
-            if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+            if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
                 render3D->RequestCoordReadback(nx, ny);
             }
         } else if (m_renderer) {
             m_renderer->OnMouseMove(nx, ny);
-            if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+            if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
                 render3D->RequestCoordReadback(nx, ny);
             }
         }
@@ -509,7 +508,7 @@ void MainWindow::StartRenderLoop() {
     connect(m_renderTimer, &QTimer::timeout, [this]() {
         if (IsOpenGLBackend()) {
             if (m_openglRenderer && m_openglRenderer->IsInitialized()) {
-                if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+                if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
                     if (m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
                         render3D->IsSunAboveHorizon()) {
                         if (render3D->BeginShadowPass()) {
@@ -522,7 +521,7 @@ void MainWindow::StartRenderLoop() {
                     if (m_scene) m_scene->Render(0);
                     m_openglRenderer->EndFrame();
                 }
-                if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+                if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
                     if (render3D->HasNewWorldCoord()) {
                         m_coordX->setText(QStringLiteral("X: %1").arg(render3D->GetLastWorldX(), 0, 'f', 3));
                         m_coordY->setText(QStringLiteral("Y: %1").arg(render3D->GetLastWorldY(), 0, 'f', 3));
@@ -533,7 +532,7 @@ void MainWindow::StartRenderLoop() {
             return;
         }
         if (m_renderer && m_renderer->IsInitialized()) {
-            if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+            if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
                 if (m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
                     render3D->IsSunAboveHorizon()) {
                     if (render3D->BeginShadowPass()) {
@@ -546,7 +545,7 @@ void MainWindow::StartRenderLoop() {
                 m_scene->Render(0);
                 m_renderer->EndFrame();
             }
-            if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+            if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
                 if (render3D->HasNewWorldCoord()) {
                     m_coordX->setText(QStringLiteral("X: %1").arg(render3D->GetLastWorldX(), 0, 'f', 3));
                     m_coordY->setText(QStringLiteral("Y: %1").arg(render3D->GetLastWorldY(), 0, 'f', 3));
@@ -602,8 +601,8 @@ void MainWindow::ApplyLightAnalysisToRenderer() {
         ShowShadowMapStatus(render3D->TakeShadowMapStatus());
     };
 
-    auto* vulkan3D = dynamic_cast<VulkanRender3D*>(m_renderer);
-    auto* opengl3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer);
+    auto* vulkan3D = dynamic_cast<VKRender3D*>(m_renderer);
+    auto* opengl3D = dynamic_cast<GLRender3D*>(m_openglRenderer);
     applySun(vulkan3D);
     applySun(opengl3D);
     if (IsOpenGLBackend()) {
@@ -639,10 +638,10 @@ void MainWindow::UpdateShadowSceneBounds() {
         }
     }
 
-    if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+    if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
         render3D->SetShadowSceneBounds(bboxMin, bboxMax, anyVisible);
     }
-    if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+    if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
         render3D->SetShadowSceneBounds(bboxMin, bboxMax, anyVisible);
     }
 }
@@ -817,14 +816,14 @@ void MainWindow::ClearLoadedModels() {
     m_sceneSourceCenter[2] = 0.0f;
     m_sceneNormalizationScale = 1.0f;
 
-    if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+    if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
         render3D->SetOrbitCenter(Vec3{});
         render3D->ResetView(m_sceneViewDistance);
         render3D->SetCoordinateNormalization(Vec3{}, 1.0f);
         render3D->SetOrthographicEnabled(
             m_orthographicCheck && m_orthographicCheck->isChecked());
     }
-    if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+    if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
         render3D->SetOrbitCenter(Vec3{});
         render3D->ResetView(m_sceneViewDistance);
         render3D->SetCoordinateNormalization(Vec3{}, 1.0f);
@@ -910,13 +909,13 @@ void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
         m_sceneViewDistance = viewDistance;
     }
 
-    if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+    if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
         render3D->SetOrbitCenter(normalizedCenter);
         render3D->ResetView(viewDistance);
         render3D->SetOrthographicEnabled(
             m_orthographicCheck && m_orthographicCheck->isChecked());
     }
-    if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+    if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
         render3D->SetOrbitCenter(normalizedCenter);
         render3D->ResetView(viewDistance);
         render3D->SetOrthographicEnabled(
@@ -926,7 +925,7 @@ void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
 
 void MainWindow::RebuildSceneMeshes() {
     const bool useOpenGL = IsOpenGLBackend()
-        && dynamic_cast<OpenGLRender3D*>(m_openglRenderer) != nullptr;
+        && dynamic_cast<GLRender3D*>(m_openglRenderer) != nullptr;
     if (useOpenGL) {
         if (!m_openglRenderer || !m_openglRenderer->IsInitialized() || m_loadedModels.empty()) return;
     } else if (IsOpenGLBackend()) {
@@ -989,13 +988,13 @@ void MainWindow::RebuildSceneMeshes() {
 
     const bool orthographicEnabled =
         m_orthographicCheck && m_orthographicCheck->isChecked();
-    if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+    if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
         render3D->SetOrbitCenter(Vec3{});
         render3D->ResetView(m_sceneViewDistance);
         render3D->SetOrthographicEnabled(orthographicEnabled);
         render3D->SetCoordinateNormalization(center, scale);
     }
-    if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+    if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
         render3D->SetOrbitCenter(Vec3{});
         render3D->ResetView(m_sceneViewDistance);
         render3D->SetOrthographicEnabled(orthographicEnabled);
@@ -1005,6 +1004,10 @@ void MainWindow::RebuildSceneMeshes() {
     if (!useOpenGL && m_renderer) {
         m_renderer->WaitForIdle();
     }
+
+    GLRender* glRenderer = useOpenGL ? dynamic_cast<GLRender*>(m_openglRenderer) : nullptr;
+    VKRender* vkRenderer = useOpenGL ? nullptr : dynamic_cast<VKRender*>(m_renderer);
+    if ((useOpenGL && !glRenderer) || (!useOpenGL && !vkRenderer)) return;
 
     for (LoadedModel& model : m_loadedModels) {
         std::vector<Vertex3D> normalizedVertices = model.sourceVertices;
@@ -1018,7 +1021,7 @@ void MainWindow::RebuildSceneMeshes() {
             auto* glMesh = dynamic_cast<OpenGLMesh*>(model.mesh);
             if (!glMesh) {
                 glMesh = new OpenGLMesh();
-                glMesh->SetRender(m_openglRenderer);
+                glMesh->SetRender(glRenderer);
                 glMesh->SetVisible(model.visible);
                 model.mesh = glMesh;
                 m_scene->AddChild(glMesh);
@@ -1028,7 +1031,7 @@ void MainWindow::RebuildSceneMeshes() {
             auto* vkMesh = dynamic_cast<VulkanMesh*>(model.mesh);
             if (!vkMesh) {
                 vkMesh = new VulkanMesh();
-                vkMesh->SetRender(m_renderer);
+                vkMesh->SetRender(vkRenderer);
                 vkMesh->SetVisible(model.visible);
                 model.mesh = vkMesh;
                 m_scene->AddChild(vkMesh);
@@ -1052,7 +1055,7 @@ void MainWindow::SwitchTo3D() {
         return;
     }
     if (!m_renderer || !m_vulkanWindow) return;
-    if (dynamic_cast<VulkanRender3D*>(m_renderer)) return;
+    if (dynamic_cast<VKRender3D*>(m_renderer)) return;
 
     m_renderTimer->stop();
     m_scene->Clear();
@@ -1065,14 +1068,16 @@ void MainWindow::SwitchTo3D() {
     uint32_t w = static_cast<uint32_t>(m_vulkanWindow->width() * m_vulkanWindow->devicePixelRatio());
     uint32_t h = static_cast<uint32_t>(m_vulkanWindow->height() * m_vulkanWindow->devicePixelRatio());
 
-    m_renderer = new VulkanRender3D();
-    m_vulkanWindow->SetRenderer(m_renderer);
+    m_renderer = new VKRender3D();
+    auto* vkRenderer = dynamic_cast<VKRender*>(m_renderer);
+    if (!vkRenderer) return;
+    m_vulkanWindow->SetRenderer(vkRenderer);
 
-    m_renderer->SetInstance(instance);
-    m_renderer->SetSurface(surface);
+    vkRenderer->SetInstance(instance);
+    vkRenderer->SetSurface(surface);
     m_renderer->SetFramebufferSize(w, h);
     if (m_renderer->Initialize("VulkanReference", w, h)) {
-        auto* render3D = static_cast<VulkanRender3D*>(m_renderer);
+        auto* render3D = static_cast<VKRender3D*>(m_renderer);
         render3D->SetGrayEnabled(m_grayCheck && m_grayCheck->isChecked());
         render3D->SetWireframeEnabled(m_borderCheck && m_borderCheck->isChecked());
         ApplyLightAnalysisToRenderer();
@@ -1087,7 +1092,7 @@ void MainWindow::SwitchTo2D() {
         return;
     }
     if (!m_renderer || !m_vulkanWindow) return;
-    if (dynamic_cast<VulkanRender2D*>(m_renderer)) return;
+    if (dynamic_cast<VKRender2D*>(m_renderer)) return;
 
     m_renderTimer->stop();
     m_scene->Clear();
@@ -1100,11 +1105,13 @@ void MainWindow::SwitchTo2D() {
     uint32_t w = static_cast<uint32_t>(m_vulkanWindow->width() * m_vulkanWindow->devicePixelRatio());
     uint32_t h = static_cast<uint32_t>(m_vulkanWindow->height() * m_vulkanWindow->devicePixelRatio());
 
-    m_renderer = new VulkanRender2D();
-    m_vulkanWindow->SetRenderer(m_renderer);
+    m_renderer = new VKRender2D();
+    auto* vkRenderer = dynamic_cast<VKRender*>(m_renderer);
+    if (!vkRenderer) return;
+    m_vulkanWindow->SetRenderer(vkRenderer);
 
-    m_renderer->SetInstance(instance);
-    m_renderer->SetSurface(surface);
+    vkRenderer->SetInstance(instance);
+    vkRenderer->SetSurface(surface);
     m_renderer->SetFramebufferSize(w, h);
     if (m_renderer->Initialize("VulkanReference", w, h)) {
         RebuildSceneMeshes();
@@ -1136,9 +1143,11 @@ void MainWindow::EnsureOpenGLWindow() {
     if (m_openglWindow && m_openglContainer) return;
 
     if (!m_openglRenderer) {
-        m_openglRenderer = new OpenGLRender3D();
+        m_openglRenderer = new GLRender3D();
     }
-    m_openglWindow = new QWindowOpenGL(m_openglRenderer);
+    auto* glRenderer = dynamic_cast<GLRender*>(m_openglRenderer);
+    if (!glRenderer) return;
+    m_openglWindow = new QWindowOpenGL(glRenderer);
     m_openglContainer = QWidget::createWindowContainer(m_openglWindow);
     m_openglContainer->setMinimumSize(400, 300);
     m_openglContainer->setFocusPolicy(Qt::StrongFocus);
@@ -1162,13 +1171,15 @@ void MainWindow::EnsureOpenGLInitialized() {
     if (!m_openglRenderer->IsInitialized()) {
         const uint32_t w = static_cast<uint32_t>(m_openglWindow->width() * m_openglWindow->devicePixelRatio());
         const uint32_t h = static_cast<uint32_t>(m_openglWindow->height() * m_openglWindow->devicePixelRatio());
-        m_openglRenderer->SetContext(m_openglWindow->GetContext());
-        m_openglRenderer->SetWindow(m_openglWindow);
-        m_openglRenderer->SetFramebufferSize(w, h);
+        auto* glRenderer = dynamic_cast<GLRender*>(m_openglRenderer);
+        if (!glRenderer) return;
+        glRenderer->SetContext(m_openglWindow->GetContext());
+        glRenderer->SetWindow(m_openglWindow);
+        glRenderer->SetFramebufferSize(w, h);
         if (!m_openglRenderer->Initialize("OpenGLReference", w, h)) return;
     }
 
-    if (auto* render3D = dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) {
+    if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
         render3D->SetGrayEnabled(m_grayCheck && m_grayCheck->isChecked());
         render3D->SetWireframeEnabled(m_borderCheck && m_borderCheck->isChecked());
         render3D->SetDyeEnabled(m_dyeCheck && m_dyeCheck->isChecked());
@@ -1221,11 +1232,13 @@ void MainWindow::SwitchToVulkan() {
         VkSurfaceKHR surface = m_vulkanWindow->GetSurface();
         const uint32_t w = static_cast<uint32_t>(m_vulkanWindow->width() * m_vulkanWindow->devicePixelRatio());
         const uint32_t h = static_cast<uint32_t>(m_vulkanWindow->height() * m_vulkanWindow->devicePixelRatio());
-        m_renderer->SetInstance(instance);
-        m_renderer->SetSurface(surface);
-        m_renderer->SetFramebufferSize(w, h);
+        auto* vkRenderer = dynamic_cast<VKRender*>(m_renderer);
+        if (!vkRenderer) return;
+        vkRenderer->SetInstance(instance);
+        vkRenderer->SetSurface(surface);
+        vkRenderer->SetFramebufferSize(w, h);
         if (m_renderer->Initialize("VulkanReference", w, h)) {
-            if (auto* render3D = dynamic_cast<VulkanRender3D*>(m_renderer)) {
+            if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
                 render3D->SetGrayEnabled(m_grayCheck && m_grayCheck->isChecked());
                 render3D->SetWireframeEnabled(m_borderCheck && m_borderCheck->isChecked());
                 render3D->SetDyeEnabled(m_dyeCheck && m_dyeCheck->isChecked());
@@ -1240,7 +1253,7 @@ void MainWindow::SwitchToVulkan() {
 
 void MainWindow::SwitchOpenGLTo3D() {
     if (!m_openglWindow) return;
-    if (dynamic_cast<OpenGLRender3D*>(m_openglRenderer)) return;
+    if (dynamic_cast<GLRender3D*>(m_openglRenderer)) return;
 
     if (m_renderTimer) m_renderTimer->stop();
     if (m_openglRenderer) {
@@ -1254,15 +1267,17 @@ void MainWindow::SwitchOpenGLTo3D() {
         m_openglRenderer = nullptr;
     }
 
-    m_openglRenderer = new OpenGLRender3D();
-    m_openglWindow->SetRenderer(m_openglRenderer);
+    m_openglRenderer = new GLRender3D();
+    auto* glRenderer = dynamic_cast<GLRender*>(m_openglRenderer);
+    if (!glRenderer) return;
+    m_openglWindow->SetRenderer(glRenderer);
     EnsureOpenGLInitialized();
     StartRenderLoop();
 }
 
 void MainWindow::SwitchOpenGLTo2D() {
     if (!m_openglWindow) return;
-    if (dynamic_cast<OpenGLRender2D*>(m_openglRenderer)) return;
+    if (dynamic_cast<GLRender2D*>(m_openglRenderer)) return;
 
     if (m_renderTimer) m_renderTimer->stop();
     if (m_openglRenderer) {
@@ -1276,8 +1291,10 @@ void MainWindow::SwitchOpenGLTo2D() {
         m_openglRenderer = nullptr;
     }
 
-    m_openglRenderer = new OpenGLRender2D();
-    m_openglWindow->SetRenderer(m_openglRenderer);
+    m_openglRenderer = new GLRender2D();
+    auto* glRenderer = dynamic_cast<GLRender*>(m_openglRenderer);
+    if (!glRenderer) return;
+    m_openglWindow->SetRenderer(glRenderer);
     EnsureOpenGLInitialized();
     StartRenderLoop();
 }

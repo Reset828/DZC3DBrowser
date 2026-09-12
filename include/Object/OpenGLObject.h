@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-class OpenGLRender;
+class GLRender;
 
 class OpenGLObject : public SceneObject {
 public:
@@ -16,8 +16,8 @@ public:
     OpenGLObject(const OpenGLObject&) = delete;
     OpenGLObject& operator=(const OpenGLObject&) = delete;
 
-    void SetRender(OpenGLRender* pRender);
-    OpenGLRender* GetRender() const;
+    void SetRender(GLRender* pRender);
+    GLRender* GetRender() const;
 
     void CreateVertexBuffer(const std::vector<Vertex3D>& vertices);
     void CreateIndexBuffer(const std::vector<uint32_t>& indices);
@@ -27,7 +27,7 @@ public:
     uint32_t GetIndexCount() const;
 
 protected:
-    OpenGLRender* m_pRender = nullptr;
+    GLRender* m_pRender = nullptr;
     uint32_t m_vao = 0;
     uint32_t m_vbo = 0;
     uint32_t m_ebo = 0;

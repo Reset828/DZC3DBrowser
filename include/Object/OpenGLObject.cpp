@@ -1,5 +1,5 @@
 ﻿#include "OpenGLObject.h"
-#include "Render/OpenGLRender.h"
+#include "Render/GLRender.h"
 #include <QOpenGLFunctions_4_2_Core>
 #include <cstddef>
 
@@ -9,11 +9,11 @@ OpenGLObject::~OpenGLObject() {
     DestroyBuffers();
 }
 
-void OpenGLObject::SetRender(OpenGLRender* pRender) {
+void OpenGLObject::SetRender(GLRender* pRender) {
     m_pRender = pRender;
 }
 
-OpenGLRender* OpenGLObject::GetRender() const {
+GLRender* OpenGLObject::GetRender() const {
     return m_pRender;
 }
 

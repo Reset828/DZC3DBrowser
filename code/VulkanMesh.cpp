@@ -85,8 +85,8 @@ void VulkanMesh::Render(int mode) {
         pipeline = m_pRender->GetShadowPipeline();
     } else {
         pipeline = m_pRender->GetPipeline(m_pRender->IsWireframeEnabled()
-            ? VulkanRender::DT_TRIANGLE_WIREFRAME
-            : VulkanRender::DT_TRIANGLE);
+            ? VKRender::DT_TRIANGLE_WIREFRAME
+            : VKRender::DT_TRIANGLE);
     }
     if (pipeline == VK_NULL_HANDLE) return;
 

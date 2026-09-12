@@ -1,4 +1,230 @@
-﻿#include "3DOpenGLRender.h"
+﻿#include "GLRender.h"
+#include <iostream>
+#include <fstream>
+#include <stdexcept>
+#include <QRunnable>
+#include <QThreadPool>
+#include <QCoreApplication>
+#include <QEventLoop>
+#include <QOpenGLContext>
+#include <QOpenGLFunctions_4_2_Core>
+#include <QWindow>
+#include <utility>
+
+namespace {
+
+class GLFunctionRunnable final : public QRunnable {
+public:
+    explicit GLFunctionRunnable(Render::AsyncTask task)
+        : m_task(std::move(task)) {}
+
+    void run() override {
+        if (m_task) m_task();
+    }
+
+private:
+    Render::AsyncTask m_task;
+};
+
+}
+
+GLRender::GLRender() {}
+
+GLRender::~GLRender() {
+    Shutdown();
+}
+
+bool GLRender::Initialize(const char* /*appName*/, uint32_t width, uint32_t height) {
+    m_framebufferWidth = width;
+    m_framebufferHeight = height;
+    m_shuttingDown = false;
+
+    if (!m_context || !m_window) return false;
+    if (!m_context->makeCurrent(m_window)) return false;
+
+    m_functions = m_context->versionFunctions<QOpenGLFunctions_4_2_Core>();
+    if (!m_functions) return false;
+    m_functions->initializeOpenGLFunctions();
+
+    if (!OnInitialize()) return false;
+    if (!CreateRenderPass()) return false;
+    if (!CreatePipelines()) return false;
+    if (!CreateFramebuffers()) return false;
+
+    m_initialized = true;
+    return true;
+}
+
+void GLRender::Quiesce() {
+    if (!m_initialized) return;
+
+    m_shuttingDown = true;
+    QThreadPool::globalInstance()->waitForDone();
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+}
+
+void GLRender::Shutdown() {
+    if (!m_initialized) return;
+
+    Quiesce();
+    if (m_context && m_window) {
+        m_context->makeCurrent(m_window);
+    }
+    OnShutdown();
+    if (m_context) {
+        m_context->doneCurrent();
+    }
+    m_functions = nullptr;
+    m_currentProgram = 0;
+    m_initialized = false;
+}
+
+
+bool GLRender::BeginFrame() {
+    if (!m_initialized || !m_context || !m_window) return false;
+    if (!m_context->makeCurrent(m_window)) return false;
+
+    if (!m_functions) return false;
+
+    m_functions->glViewport(0, 0,
+        static_cast<int>(m_framebufferWidth),
+        static_cast<int>(m_framebufferHeight));
+    m_functions->glClearColor(m_clearColor.x, m_clearColor.y, m_clearColor.z, m_clearColor.w);
+    m_functions->glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    OnBeginFrame();
+    return true;
+}
+
+void GLRender::EndFrame() {
+    if (!m_initialized || !m_context || !m_window) return;
+    OnEndFrame();
+    m_context->swapBuffers(m_window);
+}
+
+void GLRender::DrawIndexed(uint32_t indexCount, uint32_t instanceCount) {
+    if (!m_functions || indexCount == 0) return;
+    m_functions->glDrawElementsInstanced(GL_TRIANGLES, static_cast<int>(indexCount),
+        GL_UNSIGNED_INT, nullptr, static_cast<int>(instanceCount));
+}
+
+void GLRender::SetPolygonWireframe(bool enabled) {
+    if (!m_functions) return;
+    m_functions->glPolygonMode(GL_FRONT_AND_BACK, enabled ? GL_LINE : GL_FILL);
+}
+
+QOpenGLFunctions_4_2_Core* GLRender::GetFunctions() const { return m_functions; }
+unsigned int GLRender::GetCurrentProgram() const { return m_currentProgram; }
+
+void GLRender::WaitForIdle() {}
+
+void GLRender::SubmitAsync(Render::AsyncTask task) {
+    if (!task || IsShuttingDown()) return;
+    QThreadPool::globalInstance()->start(new GLFunctionRunnable(std::move(task)));
+}
+
+void GLRender::SubmitAsync(QRunnable* task) {
+    if (!task || IsShuttingDown()) return;
+    QThreadPool::globalInstance()->start(task);
+}
+
+
+
+void GLRender::SetContext(QOpenGLContext* context) {
+    m_context = context;
+}
+
+void GLRender::SetWindow(QWindow* window) {
+    m_window = window;
+}
+
+QOpenGLContext* GLRender::GetContext() const { return m_context; }
+QWindow* GLRender::GetWindow() const { return m_window; }
+
+
+
+
+
+
+
+
+
+
+
+bool GLRender::CreateRenderPass() { return true; }
+bool GLRender::CreatePipelines() { return true; }
+bool GLRender::CreateFramebuffers() { return true; }
+
+std::vector<char> GLRender::ReadShaderFile(const std::string& filename) {
+    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("无法打开着色器文件: " + filename);
+    }
+
+    const size_t fileSize = static_cast<size_t>(file.tellg());
+    std::vector<char> buffer(fileSize);
+    file.seekg(0);
+    file.read(buffer.data(), static_cast<std::streamsize>(fileSize));
+    file.close();
+    return buffer;
+}
+
+#include <glm/gtc/matrix_transform.hpp>
+
+GLRender2D::GLRender2D() {}
+
+GLRender2D::~GLRender2D() {}
+
+void GLRender2D::OnMouseDown(float nx, float ny, int button) {
+    m_mouseButton = button;
+    m_lastMouse = glm::vec2(nx, ny);
+}
+
+void GLRender2D::OnMouseMove(float nx, float ny) {
+    if (m_mouseButton < 0) return;
+    glm::vec2 delta = glm::vec2(nx, ny) - m_lastMouse;
+    m_lastMouse = glm::vec2(nx, ny);
+
+    if (m_mouseButton == 0) {
+        float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
+        float worldW = 2.0f * aspect * m_zoomLevel;
+        float worldH = 2.0f * m_zoomLevel;
+        m_panOffset.x -= delta.x * worldW;
+        m_panOffset.y += delta.y * worldH;
+    }
+}
+
+void GLRender2D::OnMouseUp(int /*button*/) {
+    m_mouseButton = -1;
+}
+
+void GLRender2D::OnMouseWheel(float delta) {
+    m_zoomLevel *= (delta > 0.0f) ? 0.85f : 1.18f;
+    m_zoomLevel = glm::clamp(m_zoomLevel, 0.01f, 100.0f);
+}
+
+bool GLRender2D::OnInitialize() {
+    return true;
+}
+
+void GLRender2D::OnShutdown() {
+    DestroyUniformBuffers();
+}
+
+void GLRender2D::OnBeginFrame() {
+    UpdateCameraUBO();
+}
+
+void GLRender2D::OnEndFrame() {}
+
+bool GLRender2D::CreatePipelines() { return true; }
+bool GLRender2D::CreateDescriptorSetLayout() { return true; }
+bool GLRender2D::CreateUniformBuffers() { return true; }
+bool GLRender2D::CreateDescriptorPool() { return true; }
+bool GLRender2D::CreateDescriptorSets() { return true; }
+void GLRender2D::DestroyUniformBuffers() {}
+void GLRender2D::UpdateCameraUBO() {}
+
 #include "Light/SolarPosition.h"
 #include "VertexType/VertexTypes.h"
 #include <cmath>
@@ -17,18 +243,18 @@
 #include <iostream>
 #include <string>
 
-OpenGLRender3D::OpenGLRender3D() {
+GLRender3D::GLRender3D() {
     UpdateSunDirection();
 }
 
-OpenGLRender3D::~OpenGLRender3D() {}
+GLRender3D::~GLRender3D() {}
 
-void OpenGLRender3D::OnMouseDown(float nx, float ny, int button) {
+void GLRender3D::OnMouseDown(float nx, float ny, int button) {
     m_mouseButton = button;
     m_lastMouse = glm::vec2(nx, ny);
 }
 
-void OpenGLRender3D::OnMouseMove(float nx, float ny) {
+void GLRender3D::OnMouseMove(float nx, float ny) {
     if (m_mouseButton < 0) return;
     const glm::vec2 previousMouse = m_lastMouse;
     const glm::vec3 sphereFrom =
@@ -115,7 +341,7 @@ void OpenGLRender3D::OnMouseMove(float nx, float ny) {
     }
 }
 
-glm::vec3 OpenGLRender3D::ProjectToVirtualSphere(float nx, float ny) const {
+glm::vec3 GLRender3D::ProjectToVirtualSphere(float nx, float ny) const {
     const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
     const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
     const float minExtent = std::min(width, height);
@@ -136,7 +362,7 @@ glm::vec3 OpenGLRender3D::ProjectToVirtualSphere(float nx, float ny) const {
     return glm::normalize(glm::vec3(x, y, z));
 }
 
-void OpenGLRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
+void GLRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
                                                     float angle) {
     if (std::abs(angle) <= std::numeric_limits<float>::epsilon()) return;
 
@@ -167,16 +393,16 @@ void OpenGLRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
     m_modelRotation = rotationAt(allowed);
 }
 
-void OpenGLRender3D::OnMouseUp(int /*button*/) {
+void GLRender3D::OnMouseUp(int /*button*/) {
     m_mouseButton = -1;
 }
 
-void OpenGLRender3D::OnMouseWheel(float delta) {
+void GLRender3D::OnMouseWheel(float delta) {
     m_orbitDistance *= (delta > 0.0f) ? 0.9f : 1.1f;
     m_orbitDistance = glm::clamp(m_orbitDistance, 0.1f, 1000.0f);
 }
 
-bool OpenGLRender3D::OnInitialize() {
+bool GLRender3D::OnInitialize() {
     if (!CreateShaderProgram()) return false;
     if (!CreateUniformBuffers()) return false;
     if (!CreateDummyShadowMap()) return false;
@@ -191,7 +417,7 @@ bool OpenGLRender3D::OnInitialize() {
     return true;
 }
 
-void OpenGLRender3D::OnShutdown() {
+void GLRender3D::OnShutdown() {
     DestroyShadowMap();
     DestroyDummyShadowMap();
     DestroyDepthReadbackResources();
@@ -200,7 +426,7 @@ void OpenGLRender3D::OnShutdown() {
     DestroyDepthResources();
 }
 
-void OpenGLRender3D::OnBeginFrame() {
+void GLRender3D::OnBeginFrame() {
     ProcessDepthReadback();
     if (m_functions && m_program != 0) {
         m_functions->glUseProgram(m_program);
@@ -211,18 +437,18 @@ void OpenGLRender3D::OnBeginFrame() {
     UpdateUniformBuffer();
 }
 
-void OpenGLRender3D::OnEndFrame() {}
+void GLRender3D::OnEndFrame() {}
 
-void OpenGLRender3D::OnRecreateSwapchain() {
+void GLRender3D::OnRecreateSwapchain() {
     DestroyDepthResources();
     CreateDepthResources();
 }
 
-bool OpenGLRender3D::CreateRenderPass() { return true; }
-bool OpenGLRender3D::CreatePipelines() { return true; }
-bool OpenGLRender3D::CreateFramebuffers() { return true; }
+bool GLRender3D::CreateRenderPass() { return true; }
+bool GLRender3D::CreatePipelines() { return true; }
+bool GLRender3D::CreateFramebuffers() { return true; }
 
-unsigned int OpenGLRender3D::CompileShader(unsigned int type, const char* source) {
+unsigned int GLRender3D::CompileShader(unsigned int type, const char* source) {
     if (!m_functions) return 0;
     unsigned int shader = m_functions->glCreateShader(type);
     m_functions->glShaderSource(shader, 1, &source, nullptr);
@@ -243,7 +469,7 @@ unsigned int OpenGLRender3D::CompileShader(unsigned int type, const char* source
     return shader;
 }
 
-unsigned int OpenGLRender3D::LinkProgram(unsigned int vert, unsigned int frag) {
+unsigned int GLRender3D::LinkProgram(unsigned int vert, unsigned int frag) {
     if (!m_functions) return 0;
     unsigned int program = m_functions->glCreateProgram();
     m_functions->glAttachShader(program, vert);
@@ -265,7 +491,7 @@ unsigned int OpenGLRender3D::LinkProgram(unsigned int vert, unsigned int frag) {
     return program;
 }
 
-bool OpenGLRender3D::CreateShaderProgram() {
+bool GLRender3D::CreateShaderProgram() {
     if (!m_functions) return false;
     try {
         const std::vector<char> vertCode = ReadShaderFile("res/3d.vert");
@@ -305,7 +531,7 @@ bool OpenGLRender3D::CreateShaderProgram() {
     }
 }
 
-void OpenGLRender3D::DestroyShaderProgram() {
+void GLRender3D::DestroyShaderProgram() {
     if (m_functions && m_program != 0) {
         m_functions->glDeleteProgram(m_program);
     }
@@ -317,7 +543,7 @@ void OpenGLRender3D::DestroyShaderProgram() {
     m_currentProgram = 0;
 }
 
-bool OpenGLRender3D::CreateUniformBuffers() {
+bool GLRender3D::CreateUniformBuffers() {
     if (!m_functions) return false;
     m_functions->glGenBuffers(1, &m_ubo);
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, m_ubo);
@@ -341,14 +567,14 @@ bool OpenGLRender3D::CreateUniformBuffers() {
     return true;
 }
 
-void OpenGLRender3D::DestroyUniformBuffers() {
+void GLRender3D::DestroyUniformBuffers() {
     if (m_functions && m_ubo != 0) {
         m_functions->glDeleteBuffers(1, &m_ubo);
     }
     m_ubo = 0;
 }
 
-void OpenGLRender3D::UpdateUniformBuffer() {
+void GLRender3D::UpdateUniformBuffer() {
     if (!m_functions || m_ubo == 0) return;
 
     float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
@@ -395,25 +621,25 @@ void OpenGLRender3D::UpdateUniformBuffer() {
     m_functions->glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(ubo), &ubo);
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
-bool OpenGLRender3D::CreateDepthResources() { return true; }
-void OpenGLRender3D::DestroyDepthResources() {}
-bool OpenGLRender3D::CreateDepthReadbackResources() { return true; }
-void OpenGLRender3D::DestroyDepthReadbackResources() {}
-void OpenGLRender3D::ProcessDepthReadback() {}
+bool GLRender3D::CreateDepthResources() { return true; }
+void GLRender3D::DestroyDepthResources() {}
+bool GLRender3D::CreateDepthReadbackResources() { return true; }
+void GLRender3D::DestroyDepthReadbackResources() {}
+void GLRender3D::ProcessDepthReadback() {}
 
-void OpenGLRender3D::SetWireframeEnabled(bool enabled) {
+void GLRender3D::SetWireframeEnabled(bool enabled) {
     m_wireframeMode = enabled;
 }
 
-void OpenGLRender3D::SetGrayEnabled(bool enabled) {
+void GLRender3D::SetGrayEnabled(bool enabled) {
     m_grayEnabled = enabled;
 }
 
-void OpenGLRender3D::SetDyeEnabled(bool enabled) {
+void GLRender3D::SetDyeEnabled(bool enabled) {
     m_dyeEnabled = enabled;
 }
 
-void OpenGLRender3D::SetLightAnalysisEnabled(bool enabled) {
+void GLRender3D::SetLightAnalysisEnabled(bool enabled) {
     m_lightAnalysisEnabled = enabled;
     if (!m_initialized) return;
     if (m_context && m_window) {
@@ -428,7 +654,7 @@ void OpenGLRender3D::SetLightAnalysisEnabled(bool enabled) {
     EnsureShadowMapForAnalysis();
 }
 
-void OpenGLRender3D::SetShadowTextureSize(uint32_t size) {
+void GLRender3D::SetShadowTextureSize(uint32_t size) {
     m_shadowTextureSize = size;
     if (m_initialized && m_lightAnalysisEnabled) {
         if (m_context && m_window) {
@@ -438,35 +664,35 @@ void OpenGLRender3D::SetShadowTextureSize(uint32_t size) {
     }
 }
 
-uint32_t OpenGLRender3D::GetShadowTextureSize() const {
+uint32_t GLRender3D::GetShadowTextureSize() const {
     return m_shadowTextureSize;
 }
 
-bool OpenGLRender3D::IsShadowMapReady() const {
+bool GLRender3D::IsShadowMapReady() const {
     return m_shadowMapReady;
 }
 
-std::string OpenGLRender3D::TakeShadowMapStatus() {
+std::string GLRender3D::TakeShadowMapStatus() {
     std::string message = std::move(m_shadowMapStatus);
     m_shadowMapStatus.clear();
     return message;
 }
 
-void OpenGLRender3D::SetShadowSceneBounds(const Vec3& boundsMin, const Vec3& boundsMax, bool valid) {
+void GLRender3D::SetShadowSceneBounds(const Vec3& boundsMin, const Vec3& boundsMax, bool valid) {
     m_shadowBoundsValid = valid;
     m_shadowBoundsMin = glm::vec3(boundsMin.x, boundsMin.y, boundsMin.z);
     m_shadowBoundsMax = glm::vec3(boundsMax.x, boundsMax.y, boundsMax.z);
 }
 
-void OpenGLRender3D::SetShadowMapStatus(const std::string& message) {
+void GLRender3D::SetShadowMapStatus(const std::string& message) {
     m_shadowMapStatus = message;
 }
 
-bool OpenGLRender3D::ShouldRenderShadows() const {
+bool GLRender3D::ShouldRenderShadows() const {
     return m_lightAnalysisEnabled && m_sunAboveHorizon && m_shadowMapReady && !m_shadowPassActive;
 }
 
-glm::mat4 OpenGLRender3D::ComputeLightViewProj() const {
+glm::mat4 GLRender3D::ComputeLightViewProj() const {
     glm::vec3 boundsMin = m_shadowBoundsMin;
     glm::vec3 boundsMax = m_shadowBoundsMax;
     if (!m_shadowBoundsValid) {
@@ -521,7 +747,7 @@ glm::mat4 OpenGLRender3D::ComputeLightViewProj() const {
     return glm::orthoRH_NO(viewMin.x, viewMax.x, viewMin.y, viewMax.y, zNear, zFar) * lightView;
 }
 
-void OpenGLRender3D::BindShadowTexture() {
+void GLRender3D::BindShadowTexture() {
     if (!m_functions) return;
     m_functions->glActiveTexture(GL_TEXTURE1);
     unsigned int texture = m_dummyShadowTexture;
@@ -532,7 +758,7 @@ void OpenGLRender3D::BindShadowTexture() {
     m_functions->glActiveTexture(GL_TEXTURE0);
 }
 
-bool OpenGLRender3D::CreateDummyShadowMap() {
+bool GLRender3D::CreateDummyShadowMap() {
     if (!m_functions) return false;
     m_functions->glGenTextures(1, &m_dummyShadowTexture);
     m_functions->glBindTexture(GL_TEXTURE_2D, m_dummyShadowTexture);
@@ -552,14 +778,14 @@ bool OpenGLRender3D::CreateDummyShadowMap() {
     return m_dummyShadowTexture != 0;
 }
 
-void OpenGLRender3D::DestroyDummyShadowMap() {
+void GLRender3D::DestroyDummyShadowMap() {
     if (m_functions && m_dummyShadowTexture != 0) {
         m_functions->glDeleteTextures(1, &m_dummyShadowTexture);
     }
     m_dummyShadowTexture = 0;
 }
 
-bool OpenGLRender3D::CreateShadowMap(uint32_t size) {
+bool GLRender3D::CreateShadowMap(uint32_t size) {
     if (!m_functions || size == 0) return false;
     int maxSize = 0;
     m_functions->glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxSize);
@@ -599,7 +825,7 @@ bool OpenGLRender3D::CreateShadowMap(uint32_t size) {
     return true;
 }
 
-void OpenGLRender3D::DestroyShadowMap() {
+void GLRender3D::DestroyShadowMap() {
     if (m_functions && m_shadowFbo != 0) {
         m_functions->glDeleteFramebuffers(1, &m_shadowFbo);
     }
@@ -612,7 +838,7 @@ void OpenGLRender3D::DestroyShadowMap() {
     m_allocatedShadowTextureSize = 0;
 }
 
-bool OpenGLRender3D::TryAllocateShadowMap(uint32_t size) {
+bool GLRender3D::TryAllocateShadowMap(uint32_t size) {
     DestroyShadowMap();
     if (!CreateShadowMap(size)) return false;
     m_shadowMapReady = true;
@@ -620,7 +846,7 @@ bool OpenGLRender3D::TryAllocateShadowMap(uint32_t size) {
     return true;
 }
 
-bool OpenGLRender3D::EnsureShadowMapForAnalysis() {
+bool GLRender3D::EnsureShadowMapForAnalysis() {
     if (!m_initialized || !m_lightAnalysisEnabled) return false;
     if (m_context && m_window) {
         m_context->makeCurrent(m_window);
@@ -656,7 +882,7 @@ bool OpenGLRender3D::EnsureShadowMapForAnalysis() {
     return false;
 }
 
-bool OpenGLRender3D::BeginShadowPass() {
+bool GLRender3D::BeginShadowPass() {
     if (!m_initialized || !m_lightAnalysisEnabled || !m_sunAboveHorizon) return false;
     if (!m_context || !m_window || !m_context->makeCurrent(m_window)) return false;
     if (!EnsureShadowMapForAnalysis() || !m_shadowMapReady || m_shadowFbo == 0) return false;
@@ -679,7 +905,7 @@ bool OpenGLRender3D::BeginShadowPass() {
     return true;
 }
 
-void OpenGLRender3D::EndShadowPass() {
+void GLRender3D::EndShadowPass() {
     if (!m_shadowPassActive) return;
     if (m_functions) {
         m_functions->glDisable(GL_POLYGON_OFFSET_FILL);
@@ -691,32 +917,32 @@ void OpenGLRender3D::EndShadowPass() {
     m_shadowPassActive = false;
 }
 
-void OpenGLRender3D::SetLatitude(float latitude) {
+void GLRender3D::SetLatitude(float latitude) {
     m_latitude = latitude;
     UpdateSunDirection();
 }
 
-void OpenGLRender3D::SetLightDate(int year, int month, int day) {
+void GLRender3D::SetLightDate(int year, int month, int day) {
     m_lightYear = year;
     m_lightMonth = month;
     m_lightDay = day;
     UpdateSunDirection();
 }
 
-void OpenGLRender3D::SetLightTimeMinutes(int minutes) {
+void GLRender3D::SetLightTimeMinutes(int minutes) {
     m_lightTimeMinutes = minutes;
     UpdateSunDirection();
 }
 
-glm::vec3 OpenGLRender3D::GetSunDirection() const {
+glm::vec3 GLRender3D::GetSunDirection() const {
     return m_sunDirection;
 }
 
-bool OpenGLRender3D::IsSunAboveHorizon() const {
+bool GLRender3D::IsSunAboveHorizon() const {
     return m_sunAboveHorizon;
 }
 
-void OpenGLRender3D::UpdateSunDirection() {
+void GLRender3D::UpdateSunDirection() {
     SolarPositionQuery query{};
     query.latitudeDegrees = m_latitude;
     query.year = m_lightYear;
@@ -729,7 +955,7 @@ void OpenGLRender3D::UpdateSunDirection() {
     m_sunAboveHorizon = sun.aboveHorizon;
 }
 
-void OpenGLRender3D::SetOrthographicEnabled(bool enabled) {
+void GLRender3D::SetOrthographicEnabled(bool enabled) {
     if (enabled && !m_orthographicEnabled) {
         m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         m_mouseButton = -1;
@@ -739,12 +965,12 @@ void OpenGLRender3D::SetOrthographicEnabled(bool enabled) {
     m_orthographicEnabled = enabled;
 }
 
-void OpenGLRender3D::SetOrbitCenter(const Vec3& normalizedCenter) {
+void GLRender3D::SetOrbitCenter(const Vec3& normalizedCenter) {
     m_orbitCenter = glm::vec3(
         normalizedCenter.x, normalizedCenter.y, normalizedCenter.z);
 }
 
-void OpenGLRender3D::ResetView(float orbitDistance) {
+void GLRender3D::ResetView(float orbitDistance) {
     m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     m_panOffset = glm::vec3(0.0f);
     m_orbitDistance = std::isfinite(orbitDistance)
@@ -755,7 +981,7 @@ void OpenGLRender3D::ResetView(float orbitDistance) {
     m_lastVerticalLocalAxis = glm::vec3(1.0f, 0.0f, 0.0f);
 }
 
-void OpenGLRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
+void GLRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
                                                  float normalizationScale) {
     if (!std::isfinite(normalizationScale) || normalizationScale <= 0.0f) {
         m_normalizedToWorld = glm::mat4(1.0f);
@@ -770,18 +996,18 @@ void OpenGLRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
     m_normalizedToWorld = translateToSource * undoScale;
 }
 
-void OpenGLRender3D::RequestCoordReadback(float ndcX, float ndcY) {
+void GLRender3D::RequestCoordReadback(float ndcX, float ndcY) {
     m_depthReadbackRequested = true;
     m_requestedNDCX = ndcX;
     m_requestedNDCY = ndcY;
 }
 
-bool OpenGLRender3D::HasNewWorldCoord() const {
+bool GLRender3D::HasNewWorldCoord() const {
     bool v = m_newCoordAvailable;
     m_newCoordAvailable = false;
     return v;
 }
 
-float OpenGLRender3D::GetLastWorldX() const { return m_lastWorldCoord[0]; }
-float OpenGLRender3D::GetLastWorldY() const { return m_lastWorldCoord[1]; }
-float OpenGLRender3D::GetLastWorldZ() const { return m_lastWorldCoord[2]; }
+float GLRender3D::GetLastWorldX() const { return m_lastWorldCoord[0]; }
+float GLRender3D::GetLastWorldY() const { return m_lastWorldCoord[1]; }
+float GLRender3D::GetLastWorldZ() const { return m_lastWorldCoord[2]; }

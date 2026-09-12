@@ -1,18 +1,118 @@
-﻿#ifndef __3D_OPENGL_RENDER_H__
-#define __3D_OPENGL_RENDER_H__
+﻿#ifndef __GL_RENDER_H__
+#define __GL_RENDER_H__
 
-#include "OpenGLRender.h"
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "Render.h"
+
+class QRunnable;
+class QOpenGLContext;
+class QOpenGLFunctions_4_2_Core;
+class QWindow;
+
+
+class GLRender : public Render {
+public:
+    GLRender();
+    ~GLRender() override;
+
+    GLRender(const GLRender&) = delete;
+    GLRender& operator=(const GLRender&) = delete;
+
+    bool Initialize(const char* appName, uint32_t width, uint32_t height) override;
+    void Shutdown() override;
+    void Quiesce() override;
+    bool BeginFrame() override;
+    void EndFrame() override;
+    void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1) override;
+    void SetPolygonWireframe(bool enabled);
+
+    QOpenGLFunctions_4_2_Core* GetFunctions() const;
+    unsigned int GetCurrentProgram() const;
+    virtual unsigned int GetShadowProgram() const { return 0; }
+
+    void WaitForIdle() override;
+    void SubmitAsync(Render::AsyncTask task) override;
+    void SubmitAsync(QRunnable* task);
+    void SetContext(QOpenGLContext* context);
+    void SetWindow(QWindow* window);
+    QOpenGLContext* GetContext() const;
+    QWindow* GetWindow() const;
+protected:
+    virtual bool OnInitialize() { return true; }
+    virtual void OnShutdown() {}
+
+    virtual void OnBeginFrame() {}
+    virtual void OnEndFrame() {}
+
+    virtual void OnRecreateSwapchain() {}
+
+    virtual bool CreateRenderPass();
+    virtual bool CreatePipelines();
+    virtual bool CreateFramebuffers();
+
+    std::vector<char> ReadShaderFile(const std::string& filename);
+
+protected:
+
+    QOpenGLContext* m_context = nullptr;
+    QWindow* m_window = nullptr;
+    QOpenGLFunctions_4_2_Core* m_functions = nullptr;
+    unsigned int m_currentProgram = 0;
+};
+
+
+
+#include <glm/glm.hpp>
+
+class GLRender2D : public GLRender {
+public:
+    GLRender2D();
+    ~GLRender2D() override;
+
+    GLRender2D(const GLRender2D&) = delete;
+    GLRender2D& operator=(const GLRender2D&) = delete;
+
+    void OnMouseDown(float nx, float ny, int button) override;
+    void OnMouseMove(float nx, float ny) override;
+    void OnMouseUp(int button) override;
+    void OnMouseWheel(float delta) override;
+
+protected:
+    bool OnInitialize() override;
+    void OnShutdown() override;
+    void OnBeginFrame() override;
+    void OnEndFrame() override;
+    bool CreatePipelines() override;
+
+    bool CreateDescriptorSetLayout();
+    bool CreateUniformBuffers();
+    bool CreateDescriptorPool();
+    bool CreateDescriptorSets();
+    void DestroyUniformBuffers();
+    void UpdateCameraUBO();
+
+protected:
+    glm::vec2 m_panOffset = glm::vec2(0.0f);
+    float m_zoomLevel = 1.0f;
+
+    int m_mouseButton = -1;
+    glm::vec2 m_lastMouse = glm::vec2(0.0f);
+};
+
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <string>
 
-class OpenGLRender3D : public OpenGLRender {
+class GLRender3D : public GLRender {
 public:
-    OpenGLRender3D();
-    ~OpenGLRender3D() override;
+    GLRender3D();
+    ~GLRender3D() override;
 
-    OpenGLRender3D(const OpenGLRender3D&) = delete;
-    OpenGLRender3D& operator=(const OpenGLRender3D&) = delete;
+    GLRender3D(const GLRender3D&) = delete;
+    GLRender3D& operator=(const GLRender3D&) = delete;
 
     void OnMouseDown(float nx, float ny, int button) override;
     void OnMouseMove(float nx, float ny) override;
@@ -131,4 +231,4 @@ protected:
     unsigned int m_shadowFbo = 0;
 };
 
-#endif //__3D_OPENGL_RENDER_H__
+#endif //__GL_RENDER_H__

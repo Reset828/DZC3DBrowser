@@ -10,8 +10,7 @@
 
 class QWindowVulkan;
 class QWindowOpenGL;
-class VulkanRender;
-class OpenGLRender;
+class Render;
 class Layer;
 class SceneObject;
 class QTimer;
@@ -87,8 +86,8 @@ private:
         bool visible = true;
     };
 
-    VulkanRender* m_renderer;
-    OpenGLRender* m_openglRenderer = nullptr;
+    Render* m_renderer;
+    Render* m_openglRenderer = nullptr;
     QWindowVulkan* m_vulkanWindow;
     QWindowOpenGL* m_openglWindow = nullptr;
     QWidget* m_container;

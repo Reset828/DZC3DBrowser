@@ -4,16 +4,16 @@
 #include <QWindow>
 #include <QOpenGLContext>
 
-class OpenGLRender;
+class GLRender;
 
 class QWindowOpenGL : public QWindow {
     Q_OBJECT
 public:
-    explicit QWindowOpenGL(OpenGLRender* renderer);
+    explicit QWindowOpenGL(GLRender* renderer);
     ~QWindowOpenGL();
 
     QOpenGLContext* GetContext() const;
-    void SetRenderer(OpenGLRender* renderer);
+    void SetRenderer(GLRender* renderer);
 
 signals:
     void openGLReady();
@@ -25,7 +25,7 @@ protected:
 private:
     bool CreateOpenGLContext();
 
-    OpenGLRender* m_renderer;
+    GLRender* m_renderer;
     QOpenGLContext* m_context;
     bool m_initialized;
 };

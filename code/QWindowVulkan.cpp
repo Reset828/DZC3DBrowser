@@ -1,10 +1,10 @@
 ﻿#include "QWindowVulkan.h"
-#include "Render/VulkanRender.h"
+#include "Render/VKRender.h"
 #include <QExposeEvent>
 #include <QResizeEvent>
 #include <windows.h>
 
-QWindowVulkan::QWindowVulkan(VulkanRender* renderer)
+QWindowVulkan::QWindowVulkan(VKRender* renderer)
     : m_renderer(renderer)
     , m_instance(VK_NULL_HANDLE)
     , m_surface(VK_NULL_HANDLE)
@@ -51,7 +51,7 @@ void QWindowVulkan::resizeEvent(QResizeEvent* event) {
 }
 
 bool QWindowVulkan::CreateVulkanSurface() {
-    auto extensions = VulkanRender::GetRequiredExtensions();
+    auto extensions = VKRender::GetRequiredExtensions();
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -88,4 +88,4 @@ bool QWindowVulkan::CreateVulkanSurface() {
 
 VkSurfaceKHR QWindowVulkan::GetSurface() const { return m_surface; }
 VkInstance QWindowVulkan::GetVkInstance() const { return m_instance; }
-void QWindowVulkan::SetRenderer(VulkanRender* renderer) { m_renderer = renderer; }
+void QWindowVulkan::SetRenderer(VKRender* renderer) { m_renderer = renderer; }

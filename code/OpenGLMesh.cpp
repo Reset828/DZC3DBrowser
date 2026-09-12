@@ -1,5 +1,5 @@
 ﻿#include "OpenGLMesh.h"
-#include "Render/OpenGLRender.h"
+#include "Render/GLRender.h"
 #include <QOpenGLFunctions_4_2_Core>
 
 OpenGLMesh::OpenGLMesh() {

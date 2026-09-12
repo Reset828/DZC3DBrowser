@@ -1,10 +1,10 @@
 ﻿#include "QWindowOpenGL.h"
-#include "Render/OpenGLRender.h"
+#include "Render/GLRender.h"
 #include <QExposeEvent>
 #include <QResizeEvent>
 #include <QSurfaceFormat>
 
-QWindowOpenGL::QWindowOpenGL(OpenGLRender* renderer)
+QWindowOpenGL::QWindowOpenGL(GLRender* renderer)
     : m_renderer(renderer)
     , m_context(nullptr)
     , m_initialized(false)
@@ -70,4 +70,4 @@ bool QWindowOpenGL::CreateOpenGLContext() {
 
 QOpenGLContext* QWindowOpenGL::GetContext() const { return m_context; }
 
-void QWindowOpenGL::SetRenderer(OpenGLRender* renderer) { m_renderer = renderer; }
+void QWindowOpenGL::SetRenderer(GLRender* renderer) { m_renderer = renderer; }

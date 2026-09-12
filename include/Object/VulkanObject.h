@@ -2,7 +2,7 @@
 #define __VULKAN_OBJECT_H__
 
 #include "Object/SceneObject.h"
-#include "Render/VulkanRender.h"
+#include "Render/VKRender.h"
 #include "VertexType/VertexTypes.h"
 #include <cstdint>
 #include <vector>
@@ -15,8 +15,8 @@ public:
 
     VulkanObject& operator=(const VulkanObject& obj);
 
-    void SetRender(VulkanRender* pRender);
-    VulkanRender* GetRender() const;
+    void SetRender(VKRender* pRender);
+    VKRender* GetRender() const;
 
     void CreateVertexBuffer(const std::vector<Vertex3D>& vertices);
     void CreateIndexBuffer(const std::vector<uint32_t>& indices);
@@ -35,7 +35,7 @@ public:
     void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 
 protected:
-    VulkanRender* m_pRender = nullptr;
+    VKRender* m_pRender = nullptr;
     VkBuffer m_vertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_vertexBufferMemory = VK_NULL_HANDLE;
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;

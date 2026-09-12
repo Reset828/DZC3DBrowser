@@ -112,17 +112,15 @@
     <ClInclude Include="VulkanMesh.h" />
     <ClInclude Include="OpenGLMesh.h" />
     <ClInclude Include="..\include\VertexType\VertexTypes.h" />
+    <ClInclude Include="..\include\Math\EngineTypes.h" />
     <ClInclude Include="..\include\Light\SolarPosition.h" />
     <ClInclude Include="..\include\Layer\Layer.h" />
     <ClInclude Include="..\include\Object\SceneObject.h" />
     <ClInclude Include="..\include\Object\VulkanObject.h" />
     <ClInclude Include="..\include\Object\OpenGLObject.h" />
-    <ClInclude Include="..\include\Render\VulkanRender.h" />
-    <ClInclude Include="..\include\Render\2DVulkanRender.h" />
-    <ClInclude Include="..\include\Render\3DVulkanRender.h" />
-    <ClInclude Include="..\include\Render\OpenGLRender.h" />
-    <ClInclude Include="..\include\Render\2DOpenGLRender.h" />
-    <ClInclude Include="..\include\Render\3DOpenGLRender.h" />
+    <ClInclude Include="..\include\Render\Render.h" />
+    <ClInclude Include="..\include\Render\GLRender.h" />
+    <ClInclude Include="..\include\Render\VKRender.h" />
     <QtMoc Include="QWindowVulkan.h" />
     <QtMoc Include="QWindowOpenGL.h" />
     <QtMoc Include="MainWindow.h" />
@@ -142,12 +140,9 @@
     <ClCompile Include="..\include\Object\SceneObject.cpp" />
     <ClCompile Include="..\include\Object\VulkanObject.cpp" />
     <ClCompile Include="..\include\Object\OpenGLObject.cpp" />
-    <ClCompile Include="..\include\Render\VulkanRender.cpp" />
-    <ClCompile Include="..\include\Render\2DVulkanRender.cpp" />
-    <ClCompile Include="..\include\Render\3DVulkanRender.cpp" />
-    <ClCompile Include="..\include\Render\OpenGLRender.cpp" />
-    <ClCompile Include="..\include\Render\2DOpenGLRender.cpp" />
-    <ClCompile Include="..\include\Render\3DOpenGLRender.cpp" />
+    <ClCompile Include="..\include\Render\Render.cpp" />
+    <ClCompile Include="..\include\Render\GLRender.cpp" />
+    <ClCompile Include="..\include\Render\VKRender.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="res\2d.frag" />

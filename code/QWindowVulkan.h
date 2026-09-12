@@ -14,17 +14,17 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_win32.h> 
 
-class VulkanRender;
+class VKRender;
 
 class QWindowVulkan : public QWindow {
     Q_OBJECT
 public:
-    explicit QWindowVulkan(VulkanRender* renderer);
+    explicit QWindowVulkan(VKRender* renderer);
     ~QWindowVulkan();
 
     VkSurfaceKHR GetSurface() const;
     VkInstance GetVkInstance() const;
-    void SetRenderer(VulkanRender* renderer);
+    void SetRenderer(VKRender* renderer);
 
 signals:
     void vulkanReady();
@@ -36,7 +36,7 @@ protected:
 private:
     bool CreateVulkanSurface();
 
-    VulkanRender* m_renderer;
+    VKRender* m_renderer;
     VkInstance m_instance;
     VkSurfaceKHR m_surface;
     bool m_initialized;

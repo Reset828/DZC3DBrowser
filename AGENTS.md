@@ -25,13 +25,13 @@ code/                 app + vcxproj
 include/              reusable engine; .h and .cpp live together, compiled into the same exe
   Object/             VulkanObject — scene node + GPU buffers
   Layer/              VulkanLayer — child list
-  Render/             VulkanRender, VulkanRender2D, VulkanRender3D
+  Render/             Render, GLRender/2D/3D, VKRender/2D/3D
   VertexType/         Vertex2D / Vertex3D / UBO layouts
 windows/              OutDir (exe). VS run CWD.
 obj/                  sample OBJ
 ```
 
-Include path is `$(ProjectDir)..\include`, so includes look like `"Render/VulkanRender.h"`.
+Include path is `$(ProjectDir)..\include`, so includes look like `"Render/VKRender.h"`.
 
 ## Boot / frame
 
@@ -41,17 +41,17 @@ Include path is `$(ProjectDir)..\include`, so includes look like `"Render/Vulkan
 2. `QWindowVulkan::exposeEvent` creates instance + `vkCreateWin32SurfaceKHR`, then `SetInstance` / `SetSurface` / `Initialize`.
 3. `QTimer` ~16 ms: `BeginFrame` → `m_scene->Render` → `EndFrame`.
 
-`SetInstance` sets `m_externalInstance`. `VulkanRender::Shutdown` must **not** destroy instance/surface; `QWindowVulkan` owns them.
+`SetInstance` sets `m_externalInstance`. `VKRender::Shutdown` must **not** destroy instance/surface; `QWindowVulkan` owns them.
 
-2D/3D switch (`SwitchTo2D` / `SwitchTo3D`): stop timer, `scene->Clear`, `Shutdown` + `delete` renderer, construct `VulkanRender2D` or `VulkanRender3D`, reuse the same instance/surface, `Initialize`, `RebuildSceneMeshes`.
+2D/3D switch (`SwitchTo2D` / `SwitchTo3D`): stop timer, `scene->Clear`, `Shutdown` + `delete` renderer, construct `VKRender2D` or `VKRender3D`, reuse the same instance/surface, `Initialize`, `RebuildSceneMeshes`.
 
 ## Where to look
 
 | Task | Location |
 |------|----------|
 | Reusable Vulkan / scene API | `include/` — search here first |
-| Instance, device, swapchain, pipelines | `include/Render/VulkanRender.*` |
-| 2D pan/zoom or 3D orbit/depth/readback | `include/Render/2DVulkanRender.*` / `3DVulkanRender.*` |
+| Instance, device, swapchain, pipelines | `include/Render/VKRender.*` |
+| 2D pan/zoom or 3D orbit/depth/readback | `include/Render/VKRender.*` (2D/3D classes) |
 | Scene node, vertex/index buffers | `include/Object/VulkanObject.*` |
 | Child list | `include/Layer/VulkanLayer.*` |
 | Vertex bindings (keep in sync with GLSL) | `include/VertexType/VertexTypes.*` |
@@ -59,12 +59,12 @@ Include path is `$(ProjectDir)..\include`, so includes look like `"Render/Vulkan
 | UI, file open, 2D/3D switch | `code/MainWindow.*` |
 | Mesh upload / draw | `code/VulkanMesh.*` |
 | OBJ parse | `code/ObjParseRunnable.*` |
-| Staging upload on thread pool | `code/BufferUploadRunnable.*` + `VulkanRender::SubmitAsync` |
+| Staging upload on thread pool | `code/BufferUploadRunnable.*` + `VKRender::SubmitAsync` |
 
 ## include/ APIs (do not reimplement)
 
-- `VulkanRender` — `Initialize` / `Shutdown` / `Quiesce`, `BeginFrame` / `EndFrame` / `DrawIndexed`, buffer helpers, `ReadShaderFile`, `SubmitAsync`, mouse hooks. Non-copyable.
-- `VulkanRender2D` / `VulkanRender3D` — files are `2DVulkanRender.*` / `3DVulkanRender.*`. Override `OnInitialize` / `CreatePipelines` / camera UBO. 3D also: depth, wireframe/gray/dye/ortho, world-coord readback.
+- `VKRender` — `Initialize` / `Shutdown` / `Quiesce`, `BeginFrame` / `EndFrame` / `DrawIndexed`, buffer helpers, `ReadShaderFile`, `SubmitAsync`, mouse hooks. Non-copyable.
+- `VKRender2D` / `VKRender3D` — both are declared and implemented in `VKRender.*`. Override `OnInitialize` / `CreatePipelines` / camera UBO. 3D also: depth, wireframe/gray/dye/ortho, world-coord readback.
 - `VulkanObject` — `SetRender` / parent / visible / color; `CreateVertexBuffer` / `CreateIndexBuffer` / `DestroyBuffers`. `Render()` is pure virtual.
 - `VulkanLayer` — `AddChild` / `RemoveChild` / `Clear`; `Render` walks children under `shared_mutex`.
 - `Vertex2D` / `Vertex3D` — `GetBindingDescription` / `GetAttributeDescriptions`.
@@ -75,14 +75,14 @@ App-only (keep out of `include/`): anything with `Q_OBJECT`, `MainWindow`, `QWin
 
 - `Q_OBJECT` types must be `<QtMoc>` in `code/vulkan-reference.vcxproj`, not `ClInclude`. Only `MainWindow` and `QWindowVulkan` are moc'd today.
 - `include/` headers use `#ifndef __FOO_H__`. `code/` mixes `#pragma once`.
-- Debug builds enable `VK_LAYER_KHRONOS_validation`. `VK_CHECK_RESULT` exists only in `VulkanRender.cpp`.
+- Debug builds enable `VK_LAYER_KHRONOS_validation`. `VK_CHECK_RESULT` exists only in `VKRender.cpp`.
 - Async work (`QThreadPool`, `SubmitAsync`): check `IsShuttingDown()`, load/upload generation, and `VulkanMesh::m_alive` before touching GPU or UI objects. `Quiesce` waits the pool, then `vkDeviceWaitIdle`.
 - New reusable module: new folder under `include/`, `.h`+`.cpp` together, add both to the vcxproj. Do not leak Qt widgets or `Q_OBJECT` into `include/`.
 
 ## Anti-patterns
 
 - Do not recreate buffers, shader loading, pipelines, or the scene graph in `code/` if `include/` already does it.
-- Do not destroy `VkInstance` / `VkSurfaceKHR` from `VulkanRender` when `m_externalInstance` is set.
+- Do not destroy `VkInstance` / `VkSurfaceKHR` from `VKRender` when `m_externalInstance` is set.
 - Do not add GLFW call sites. `VulkanConfig.props` still links `glfw3.lib`; the app uses Qt + `VK_KHR_win32_surface` only.
 - Do not write LF-only or BOM-less `.h`/`.cpp`. **GLSL is the opposite:** `.vert`/`.frag` must be UTF-8 **without** BOM (`glslc` rejects BOM; the old `shaders/compile.bat` strips it).
 
