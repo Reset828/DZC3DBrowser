@@ -18,6 +18,7 @@ public:
     explicit GLFunctionRunnable(Render::AsyncTask task)
         : m_task(std::move(task)) {}
 
+    // 执行后台任务。
     void run() override {
         if (m_task) m_task();
     }
@@ -34,6 +35,7 @@ GLRender::~GLRender() {
     Shutdown();
 }
 
+// 初始化渲染器及其后端资源。
 bool GLRender::Initialize(const char* /*appName*/, uint32_t width, uint32_t height) {
     m_framebufferWidth = width;
     m_framebufferHeight = height;
@@ -55,6 +57,7 @@ bool GLRender::Initialize(const char* /*appName*/, uint32_t width, uint32_t heig
     return true;
 }
 
+// 等待异步任务完成并使渲染器进入静止状态。
 void GLRender::Quiesce() {
     if (!m_initialized) return;
 
@@ -63,6 +66,7 @@ void GLRender::Quiesce() {
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 }
 
+// 关闭渲染器并释放资源。
 void GLRender::Shutdown() {
     if (!m_initialized) return;
 
@@ -80,6 +84,7 @@ void GLRender::Shutdown() {
 }
 
 
+// 开始一帧渲染。
 bool GLRender::BeginFrame() {
     if (!m_initialized || !m_context || !m_window) return false;
     if (!m_context->makeCurrent(m_window)) return false;
@@ -96,33 +101,41 @@ bool GLRender::BeginFrame() {
     return true;
 }
 
+// 结束当前帧并提交渲染结果。
 void GLRender::EndFrame() {
     if (!m_initialized || !m_context || !m_window) return;
     OnEndFrame();
     m_context->swapBuffers(m_window);
 }
 
+// 提交索引绘制命令。
 void GLRender::DrawIndexed(uint32_t indexCount, uint32_t instanceCount) {
     if (!m_functions || indexCount == 0) return;
     m_functions->glDrawElementsInstanced(GL_TRIANGLES, static_cast<int>(indexCount),
         GL_UNSIGNED_INT, nullptr, static_cast<int>(instanceCount));
 }
 
+// 切换填充/线框多边形模式。
 void GLRender::SetPolygonWireframe(bool enabled) {
     if (!m_functions) return;
     m_functions->glPolygonMode(GL_FRONT_AND_BACK, enabled ? GL_LINE : GL_FILL);
 }
 
+// 获取 OpenGL 函数入口。
 QOpenGLFunctions_4_2_Core* GLRender::GetFunctions() const { return m_functions; }
+// 获取当前着色器程序。
 unsigned int GLRender::GetCurrentProgram() const { return m_currentProgram; }
 
+// 等待 GPU 与异步任务完成。
 void GLRender::WaitForIdle() {}
 
+// 提交异步任务。
 void GLRender::SubmitAsync(Render::AsyncTask task) {
     if (!task || IsShuttingDown()) return;
     QThreadPool::globalInstance()->start(new GLFunctionRunnable(std::move(task)));
 }
 
+// 提交异步任务。
 void GLRender::SubmitAsync(QRunnable* task) {
     if (!task || IsShuttingDown()) return;
     QThreadPool::globalInstance()->start(task);
@@ -130,15 +143,19 @@ void GLRender::SubmitAsync(QRunnable* task) {
 
 
 
+// 设置 Qt OpenGL 上下文。
 void GLRender::SetContext(QOpenGLContext* context) {
     m_context = context;
 }
 
+// 设置渲染用 QWindow。
 void GLRender::SetWindow(QWindow* window) {
     m_window = window;
 }
 
+// 获取 OpenGL 上下文。
 QOpenGLContext* GLRender::GetContext() const { return m_context; }
+// 获取渲染窗口。
 QWindow* GLRender::GetWindow() const { return m_window; }
 
 
@@ -151,10 +168,14 @@ QWindow* GLRender::GetWindow() const { return m_window; }
 
 
 
+// 创建渲染通道。
 bool GLRender::CreateRenderPass() { return true; }
+// 创建图形管线。
 bool GLRender::CreatePipelines() { return true; }
+// 创建帧缓冲。
 bool GLRender::CreateFramebuffers() { return true; }
 
+// 读取着色器文件。
 std::vector<char> GLRender::ReadShaderFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
@@ -175,11 +196,13 @@ GLRender2D::GLRender2D() {}
 
 GLRender2D::~GLRender2D() {}
 
+// 处理鼠标按下。
 void GLRender2D::OnMouseDown(float nx, float ny, int button) {
     m_mouseButton = button;
     m_lastMouse = glm::vec2(nx, ny);
 }
 
+// 处理鼠标移动。
 void GLRender2D::OnMouseMove(float nx, float ny) {
     if (m_mouseButton < 0) return;
     glm::vec2 delta = glm::vec2(nx, ny) - m_lastMouse;
@@ -194,35 +217,48 @@ void GLRender2D::OnMouseMove(float nx, float ny) {
     }
 }
 
+// 处理鼠标松开。
 void GLRender2D::OnMouseUp(int /*button*/) {
     m_mouseButton = -1;
 }
 
+// 处理滚轮缩放。
 void GLRender2D::OnMouseWheel(float delta) {
     m_zoomLevel *= (delta > 0.0f) ? 0.85f : 1.18f;
     m_zoomLevel = glm::clamp(m_zoomLevel, 0.01f, 100.0f);
 }
 
+// 后端初始化完成后的钩子。
 bool GLRender2D::OnInitialize() {
     return true;
 }
 
+// 关闭前释放后端资源的钩子。
 void GLRender2D::OnShutdown() {
     DestroyUniformBuffers();
 }
 
+// 每帧开始时的钩子。
 void GLRender2D::OnBeginFrame() {
     UpdateCameraUBO();
 }
 
+// 每帧结束时的钩子。
 void GLRender2D::OnEndFrame() {}
 
+// 创建图形管线。
 bool GLRender2D::CreatePipelines() { return true; }
+// 创建描述符集布局。
 bool GLRender2D::CreateDescriptorSetLayout() { return true; }
+// 创建并映射 UBO。
 bool GLRender2D::CreateUniformBuffers() { return true; }
+// 创建描述符池。
 bool GLRender2D::CreateDescriptorPool() { return true; }
+// 分配并写入描述符集。
 bool GLRender2D::CreateDescriptorSets() { return true; }
+// 销毁 UBO 及其内存。
 void GLRender2D::DestroyUniformBuffers() {}
+// 写入二维相机 UBO。
 void GLRender2D::UpdateCameraUBO() {}
 
 #include "Light/SolarPosition.h"
@@ -249,11 +285,13 @@ GLRender3D::GLRender3D() {
 
 GLRender3D::~GLRender3D() {}
 
+// 处理鼠标按下。
 void GLRender3D::OnMouseDown(float nx, float ny, int button) {
     m_mouseButton = button;
     m_lastMouse = glm::vec2(nx, ny);
 }
 
+// 处理鼠标移动。
 void GLRender3D::OnMouseMove(float nx, float ny) {
     if (m_mouseButton < 0) return;
     const glm::vec2 previousMouse = m_lastMouse;
@@ -341,6 +379,7 @@ void GLRender3D::OnMouseMove(float nx, float ny) {
     }
 }
 
+// 将鼠标位置映射到虚拟球面。
 glm::vec3 GLRender3D::ProjectToVirtualSphere(float nx, float ny) const {
     const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
     const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
@@ -362,6 +401,7 @@ glm::vec3 GLRender3D::ProjectToVirtualSphere(float nx, float ny) const {
     return glm::normalize(glm::vec3(x, y, z));
 }
 
+// 应用受约束的局部旋转。
 void GLRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
                                                     float angle) {
     if (std::abs(angle) <= std::numeric_limits<float>::epsilon()) return;
@@ -393,15 +433,18 @@ void GLRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
     m_modelRotation = rotationAt(allowed);
 }
 
+// 处理鼠标松开。
 void GLRender3D::OnMouseUp(int /*button*/) {
     m_mouseButton = -1;
 }
 
+// 处理滚轮缩放。
 void GLRender3D::OnMouseWheel(float delta) {
     m_orbitDistance *= (delta > 0.0f) ? 0.9f : 1.1f;
     m_orbitDistance = glm::clamp(m_orbitDistance, 0.1f, 1000.0f);
 }
 
+// 后端初始化完成后的钩子。
 bool GLRender3D::OnInitialize() {
     if (!CreateShaderProgram()) return false;
     if (!CreateUniformBuffers()) return false;
@@ -417,6 +460,7 @@ bool GLRender3D::OnInitialize() {
     return true;
 }
 
+// 关闭前释放后端资源的钩子。
 void GLRender3D::OnShutdown() {
     DestroyShadowMap();
     DestroyDummyShadowMap();
@@ -426,6 +470,7 @@ void GLRender3D::OnShutdown() {
     DestroyDepthResources();
 }
 
+// 每帧开始时的钩子。
 void GLRender3D::OnBeginFrame() {
     ProcessDepthReadback();
     if (m_functions && m_program != 0) {
@@ -437,17 +482,23 @@ void GLRender3D::OnBeginFrame() {
     UpdateUniformBuffer();
 }
 
+// 每帧结束时的钩子。
 void GLRender3D::OnEndFrame() {}
 
+// 交换链/帧缓冲重建后的钩子。
 void GLRender3D::OnRecreateSwapchain() {
     DestroyDepthResources();
     CreateDepthResources();
 }
 
+// 创建渲染通道。
 bool GLRender3D::CreateRenderPass() { return true; }
+// 创建图形管线。
 bool GLRender3D::CreatePipelines() { return true; }
+// 创建帧缓冲。
 bool GLRender3D::CreateFramebuffers() { return true; }
 
+// 编译 OpenGL 着色器。
 unsigned int GLRender3D::CompileShader(unsigned int type, const char* source) {
     if (!m_functions) return 0;
     unsigned int shader = m_functions->glCreateShader(type);
@@ -469,6 +520,7 @@ unsigned int GLRender3D::CompileShader(unsigned int type, const char* source) {
     return shader;
 }
 
+// 链接 OpenGL 着色器程序。
 unsigned int GLRender3D::LinkProgram(unsigned int vert, unsigned int frag) {
     if (!m_functions) return 0;
     unsigned int program = m_functions->glCreateProgram();
@@ -491,6 +543,7 @@ unsigned int GLRender3D::LinkProgram(unsigned int vert, unsigned int frag) {
     return program;
 }
 
+// 编译并链接着色器程序。
 bool GLRender3D::CreateShaderProgram() {
     if (!m_functions) return false;
     try {
@@ -531,6 +584,7 @@ bool GLRender3D::CreateShaderProgram() {
     }
 }
 
+// 删除着色器程序。
 void GLRender3D::DestroyShaderProgram() {
     if (m_functions && m_program != 0) {
         m_functions->glDeleteProgram(m_program);
@@ -543,6 +597,7 @@ void GLRender3D::DestroyShaderProgram() {
     m_currentProgram = 0;
 }
 
+// 创建并映射 UBO。
 bool GLRender3D::CreateUniformBuffers() {
     if (!m_functions) return false;
     m_functions->glGenBuffers(1, &m_ubo);
@@ -567,6 +622,7 @@ bool GLRender3D::CreateUniformBuffers() {
     return true;
 }
 
+// 销毁 UBO 及其内存。
 void GLRender3D::DestroyUniformBuffers() {
     if (m_functions && m_ubo != 0) {
         m_functions->glDeleteBuffers(1, &m_ubo);
@@ -574,6 +630,7 @@ void GLRender3D::DestroyUniformBuffers() {
     m_ubo = 0;
 }
 
+// 按当前相机与显示选项写入 UBO。
 void GLRender3D::UpdateUniformBuffer() {
     if (!m_functions || m_ubo == 0) return;
 
@@ -621,24 +678,33 @@ void GLRender3D::UpdateUniformBuffer() {
     m_functions->glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(ubo), &ubo);
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
+// 创建深度附件。
 bool GLRender3D::CreateDepthResources() { return true; }
+// 销毁深度附件。
 void GLRender3D::DestroyDepthResources() {}
+// 创建深度回读缓冲。
 bool GLRender3D::CreateDepthReadbackResources() { return true; }
+// 销毁深度回读缓冲。
 void GLRender3D::DestroyDepthReadbackResources() {}
+// 把回读深度反投影为世界坐标。
 void GLRender3D::ProcessDepthReadback() {}
 
+// 开关线框模式。
 void GLRender3D::SetWireframeEnabled(bool enabled) {
     m_wireframeMode = enabled;
 }
 
+// 开关灰度显示。
 void GLRender3D::SetGrayEnabled(bool enabled) {
     m_grayEnabled = enabled;
 }
 
+// 开关染色。
 void GLRender3D::SetDyeEnabled(bool enabled) {
     m_dyeEnabled = enabled;
 }
 
+// 开关光照分析。
 void GLRender3D::SetLightAnalysisEnabled(bool enabled) {
     m_lightAnalysisEnabled = enabled;
     if (!m_initialized) return;
@@ -654,6 +720,7 @@ void GLRender3D::SetLightAnalysisEnabled(bool enabled) {
     EnsureShadowMapForAnalysis();
 }
 
+// 设置阴影贴图边长。
 void GLRender3D::SetShadowTextureSize(uint32_t size) {
     m_shadowTextureSize = size;
     if (m_initialized && m_lightAnalysisEnabled) {
@@ -664,34 +731,41 @@ void GLRender3D::SetShadowTextureSize(uint32_t size) {
     }
 }
 
+// 获取阴影贴图尺寸。
 uint32_t GLRender3D::GetShadowTextureSize() const {
     return m_shadowTextureSize;
 }
 
+// 查询阴影贴图是否就绪。
 bool GLRender3D::IsShadowMapReady() const {
     return m_shadowMapReady;
 }
 
+// 读取并清除阴影贴图状态。
 std::string GLRender3D::TakeShadowMapStatus() {
     std::string message = std::move(m_shadowMapStatus);
     m_shadowMapStatus.clear();
     return message;
 }
 
+// 设置阴影场景包围盒。
 void GLRender3D::SetShadowSceneBounds(const Vec3& boundsMin, const Vec3& boundsMax, bool valid) {
     m_shadowBoundsValid = valid;
     m_shadowBoundsMin = glm::vec3(boundsMin.x, boundsMin.y, boundsMin.z);
     m_shadowBoundsMax = glm::vec3(boundsMax.x, boundsMax.y, boundsMax.z);
 }
 
+// 记录阴影贴图状态文本。
 void GLRender3D::SetShadowMapStatus(const std::string& message) {
     m_shadowMapStatus = message;
 }
 
+// 判断当前是否应渲染阴影。
 bool GLRender3D::ShouldRenderShadows() const {
     return m_lightAnalysisEnabled && m_sunAboveHorizon && m_shadowMapReady && !m_shadowPassActive;
 }
 
+// 计算光源视图投影矩阵。
 glm::mat4 GLRender3D::ComputeLightViewProj() const {
     glm::vec3 boundsMin = m_shadowBoundsMin;
     glm::vec3 boundsMax = m_shadowBoundsMax;
@@ -747,6 +821,7 @@ glm::mat4 GLRender3D::ComputeLightViewProj() const {
     return glm::orthoRH_NO(viewMin.x, viewMax.x, viewMin.y, viewMax.y, zNear, zFar) * lightView;
 }
 
+// 绑定阴影贴图。
 void GLRender3D::BindShadowTexture() {
     if (!m_functions) return;
     m_functions->glActiveTexture(GL_TEXTURE1);
@@ -758,6 +833,7 @@ void GLRender3D::BindShadowTexture() {
     m_functions->glActiveTexture(GL_TEXTURE0);
 }
 
+// 创建 1x1 占位阴影贴图。
 bool GLRender3D::CreateDummyShadowMap() {
     if (!m_functions) return false;
     m_functions->glGenTextures(1, &m_dummyShadowTexture);
@@ -778,6 +854,7 @@ bool GLRender3D::CreateDummyShadowMap() {
     return m_dummyShadowTexture != 0;
 }
 
+// 销毁占位阴影贴图。
 void GLRender3D::DestroyDummyShadowMap() {
     if (m_functions && m_dummyShadowTexture != 0) {
         m_functions->glDeleteTextures(1, &m_dummyShadowTexture);
@@ -785,6 +862,7 @@ void GLRender3D::DestroyDummyShadowMap() {
     m_dummyShadowTexture = 0;
 }
 
+// 按给定边长创建阴影深度贴图。
 bool GLRender3D::CreateShadowMap(uint32_t size) {
     if (!m_functions || size == 0) return false;
     int maxSize = 0;
@@ -825,6 +903,7 @@ bool GLRender3D::CreateShadowMap(uint32_t size) {
     return true;
 }
 
+// 销毁阴影贴图与帧缓冲。
 void GLRender3D::DestroyShadowMap() {
     if (m_functions && m_shadowFbo != 0) {
         m_functions->glDeleteFramebuffers(1, &m_shadowFbo);
@@ -838,6 +917,7 @@ void GLRender3D::DestroyShadowMap() {
     m_allocatedShadowTextureSize = 0;
 }
 
+// 尝试分配指定尺寸的阴影贴图。
 bool GLRender3D::TryAllocateShadowMap(uint32_t size) {
     DestroyShadowMap();
     if (!CreateShadowMap(size)) return false;
@@ -846,6 +926,7 @@ bool GLRender3D::TryAllocateShadowMap(uint32_t size) {
     return true;
 }
 
+// 光照分析开启时保证阴影贴图可用。
 bool GLRender3D::EnsureShadowMapForAnalysis() {
     if (!m_initialized || !m_lightAnalysisEnabled) return false;
     if (m_context && m_window) {
@@ -882,6 +963,7 @@ bool GLRender3D::EnsureShadowMapForAnalysis() {
     return false;
 }
 
+// 开始向阴影贴图绘制。
 bool GLRender3D::BeginShadowPass() {
     if (!m_initialized || !m_lightAnalysisEnabled || !m_sunAboveHorizon) return false;
     if (!m_context || !m_window || !m_context->makeCurrent(m_window)) return false;
@@ -905,6 +987,7 @@ bool GLRender3D::BeginShadowPass() {
     return true;
 }
 
+// 结束阴影通道并恢复主帧缓冲。
 void GLRender3D::EndShadowPass() {
     if (!m_shadowPassActive) return;
     if (m_functions) {
@@ -917,11 +1000,13 @@ void GLRender3D::EndShadowPass() {
     m_shadowPassActive = false;
 }
 
+// 设置太阳计算用纬度。
 void GLRender3D::SetLatitude(float latitude) {
     m_latitude = latitude;
     UpdateSunDirection();
 }
 
+// 设置太阳计算用日期。
 void GLRender3D::SetLightDate(int year, int month, int day) {
     m_lightYear = year;
     m_lightMonth = month;
@@ -929,19 +1014,23 @@ void GLRender3D::SetLightDate(int year, int month, int day) {
     UpdateSunDirection();
 }
 
+// 设置真太阳时（分钟）。
 void GLRender3D::SetLightTimeMinutes(int minutes) {
     m_lightTimeMinutes = minutes;
     UpdateSunDirection();
 }
 
+// 获取太阳光方向。
 glm::vec3 GLRender3D::GetSunDirection() const {
     return m_sunDirection;
 }
 
+// 查询太阳是否位于地平线以上。
 bool GLRender3D::IsSunAboveHorizon() const {
     return m_sunAboveHorizon;
 }
 
+// 按纬度/日期/真太阳时更新太阳方向。
 void GLRender3D::UpdateSunDirection() {
     SolarPositionQuery query{};
     query.latitudeDegrees = m_latitude;
@@ -955,6 +1044,7 @@ void GLRender3D::UpdateSunDirection() {
     m_sunAboveHorizon = sun.aboveHorizon;
 }
 
+// 开关正射投影。
 void GLRender3D::SetOrthographicEnabled(bool enabled) {
     if (enabled && !m_orthographicEnabled) {
         m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
@@ -965,11 +1055,13 @@ void GLRender3D::SetOrthographicEnabled(bool enabled) {
     m_orthographicEnabled = enabled;
 }
 
+// 设置轨道旋转中心。
 void GLRender3D::SetOrbitCenter(const Vec3& normalizedCenter) {
     m_orbitCenter = glm::vec3(
         normalizedCenter.x, normalizedCenter.y, normalizedCenter.z);
 }
 
+// 复位旋转、平移和轨道距离。
 void GLRender3D::ResetView(float orbitDistance) {
     m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     m_panOffset = glm::vec3(0.0f);
@@ -981,6 +1073,7 @@ void GLRender3D::ResetView(float orbitDistance) {
     m_lastVerticalLocalAxis = glm::vec3(1.0f, 0.0f, 0.0f);
 }
 
+// 设置归一化坐标到世界坐标的变换。
 void GLRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
                                                  float normalizationScale) {
     if (!std::isfinite(normalizationScale) || normalizationScale <= 0.0f) {
@@ -996,18 +1089,23 @@ void GLRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
     m_normalizedToWorld = translateToSource * undoScale;
 }
 
+// 请求把屏幕点反算为世界坐标。
 void GLRender3D::RequestCoordReadback(float ndcX, float ndcY) {
     m_depthReadbackRequested = true;
     m_requestedNDCX = ndcX;
     m_requestedNDCY = ndcY;
 }
 
+// 查询是否有新的世界坐标。
 bool GLRender3D::HasNewWorldCoord() const {
     bool v = m_newCoordAvailable;
     m_newCoordAvailable = false;
     return v;
 }
 
+// 获取最近一次世界坐标的 X 分量。
 float GLRender3D::GetLastWorldX() const { return m_lastWorldCoord[0]; }
+// 获取最近一次世界坐标的 Y 分量。
 float GLRender3D::GetLastWorldY() const { return m_lastWorldCoord[1]; }
+// 获取最近一次世界坐标的 Z 分量。
 float GLRender3D::GetLastWorldZ() const { return m_lastWorldCoord[2]; }

@@ -22,6 +22,7 @@ struct SolarPositionQuery {
     float trueSolarTimeHours;
 };
 
+// 计算太阳位置。
 SolarPosition ComputeSolarPosition(const SolarPositionQuery& query);
 
 #endif //__SOLAR_POSITION_H__

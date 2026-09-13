@@ -25,6 +25,7 @@ QWindowOpenGL::~QWindowOpenGL() {
     }
 }
 
+// 首次露出时创建后端并 Initialize。
 void QWindowOpenGL::exposeEvent(QExposeEvent* event) {
     Q_UNUSED(event);
     if (isExposed() && !m_initialized) {
@@ -45,6 +46,7 @@ void QWindowOpenGL::exposeEvent(QExposeEvent* event) {
     }
 }
 
+// 窗口尺寸变化时更新帧缓冲大小。
 void QWindowOpenGL::resizeEvent(QResizeEvent* event) {
     QWindow::resizeEvent(event);
     if (m_renderer && m_renderer->IsInitialized()) {
@@ -55,6 +57,7 @@ void QWindowOpenGL::resizeEvent(QResizeEvent* event) {
     }
 }
 
+// 创建 Qt OpenGL 上下文。
 bool QWindowOpenGL::CreateOpenGLContext() {
     if (m_context) return true;
 
@@ -68,6 +71,8 @@ bool QWindowOpenGL::CreateOpenGLContext() {
     return true;
 }
 
+// 获取 OpenGL 上下文。
 QOpenGLContext* QWindowOpenGL::GetContext() const { return m_context; }
 
+// 更换窗口绑定的渲染器。
 void QWindowOpenGL::SetRenderer(GLRender* renderer) { m_renderer = renderer; }

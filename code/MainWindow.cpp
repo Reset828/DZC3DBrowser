@@ -68,6 +68,7 @@ MainWindow::MainWindow(QWidget* parent)
     , m_modelsTreeItem(nullptr)
 {
     resize(1280, 720);
+    ConfigureMeshFactory(m_renderer);
     SetupToolBar();
     SetupVulkan();
 
@@ -164,6 +165,7 @@ MainWindow::~MainWindow() {
     }
 }
 
+// 处理窗口关闭事件。
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (m_renderTimer) {
         m_renderTimer->stop();
@@ -182,6 +184,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     QMainWindow::closeEvent(event);
 }
 
+// 创建菜单与工具栏控件。
 void MainWindow::SetupToolBar() {
     QMenuBar* mb = menuBar();
 
@@ -237,6 +240,7 @@ void MainWindow::SetupToolBar() {
     toolbar->addWidget(engineHost);
 }
 
+// 创建坐标状态栏。
 void MainWindow::SetupStatusBar() {
     statusBar()->setSizeGripEnabled(false);
 
@@ -250,6 +254,7 @@ void MainWindow::SetupStatusBar() {
     statusBar()->addPermanentWidget(m_coordZ);
 }
 
+// 创建 Vulkan 窗口容器并接渲染循环。
 void MainWindow::SetupVulkan() {
     auto* vkRenderer = dynamic_cast<VKRender*>(m_renderer);
     if (!vkRenderer) return;
@@ -342,8 +347,8 @@ void MainWindow::SetupVulkan() {
     m_pLatitudeEdit = new QLineEdit(QStringLiteral("36"), m_lightAnalysisPanel);
     pFormLayout->addRow(QStringLiteral("纬度"), m_pLatitudeEdit);
 
-    connect(m_pComboTexSize, QOverload<const QString&>::of(&QComboBox::currentIndexChanged),
-            this, [this](const QString&) {
+    connect(m_pComboTexSize, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) {
         ApplyLightAnalysisToRenderer();
     });
     connect(m_pLatitudeEdit, &QLineEdit::textChanged, this, [this](const QString&) {
@@ -418,6 +423,7 @@ void MainWindow::SetupVulkan() {
     connect(m_vulkanWindow, &QWindowVulkan::vulkanReady, this, &MainWindow::StartRenderLoop);
 }
 
+// 分发窗口输入事件。
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     QWindow* window = nullptr;
     if (obj == m_vulkanWindow) window = m_vulkanWindow;
@@ -499,6 +505,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     return QMainWindow::eventFilter(obj, event);
 }
 
+// 启动渲染循环。
 void MainWindow::StartRenderLoop() {
     if (m_renderTimer) {
         m_renderTimer->start(16);
@@ -557,6 +564,7 @@ void MainWindow::StartRenderLoop() {
     m_renderTimer->start(16);
 }
 
+// 打开或关闭光照分析。
 void MainWindow::onLightAnalysis() {
     if (!m_lightAnalysisPanel) return;
     const bool open = !m_lightAnalysisPanel->isVisible();
@@ -569,6 +577,7 @@ void MainWindow::onLightAnalysis() {
     ApplyLightAnalysisToRenderer();
 }
 
+// 把光照面板参数写进当前三维渲染器。
 void MainWindow::ApplyLightAnalysisToRenderer() {
     auto applySun = [this](auto* render3D) {
         if (!render3D) return;
@@ -613,6 +622,7 @@ void MainWindow::ApplyLightAnalysisToRenderer() {
     UpdateShadowSceneBounds();
 }
 
+// 用已加载模型包围盒更新阴影范围。
 void MainWindow::UpdateShadowSceneBounds() {
     Vec3 bboxMin = { std::numeric_limits<float>::max(),
                      std::numeric_limits<float>::max(),
@@ -646,6 +656,7 @@ void MainWindow::UpdateShadowSceneBounds() {
     }
 }
 
+// 同步阴影贴图尺寸选项。
 void MainWindow::SyncShadowTextureSizeCombo(uint32_t size) {
     if (!m_pComboTexSize) return;
     const QString text = QString::number(size);
@@ -656,11 +667,13 @@ void MainWindow::SyncShadowTextureSizeCombo(uint32_t size) {
     m_pComboTexSize->setCurrentIndex(index);
 }
 
+// 显示阴影贴图状态。
 void MainWindow::ShowShadowMapStatus(const std::string& message) {
     if (message.empty()) return;
     statusBar()->showMessage(QString::fromStdString(message), 8000);
 }
 
+// 响应打开文件操作。
 void MainWindow::onOpenFile() {
     QString filePath = QFileDialog::getOpenFileName(this,
         QStringLiteral("选择 OBJ 文件"),
@@ -671,6 +684,7 @@ void MainWindow::onOpenFile() {
     LoadFile(filePath);
 }
 
+// 后台解析 OBJ 并加入场景。
 void MainWindow::LoadFile(const QString& filePath) {
     if (filePath.isEmpty()) return;
     if (!QFile::exists(filePath)) {
@@ -695,12 +709,14 @@ void MainWindow::LoadFile(const QString& filePath) {
     QThreadPool::globalInstance()->start(runnable);
 }
 
+// 响应最近文件操作。
 void MainWindow::onRecentFileTriggered() {
     auto* action = qobject_cast<QAction*>(sender());
     if (!action) return;
     LoadFile(action->data().toString());
 }
 
+// 把路径写入最近文件列表。
 void MainWindow::AddRecentFile(const QString& filePath) {
     if (filePath.isEmpty()) return;
     m_recentFiles.removeAll(filePath);
@@ -712,6 +728,7 @@ void MainWindow::AddRecentFile(const QString& filePath) {
     RebuildRecentMenu();
 }
 
+// 从设置读取最近文件。
 void MainWindow::LoadRecentFiles() {
     QSettings settings;
     m_recentFiles = settings.value(QStringLiteral("recentFiles")).toStringList();
@@ -720,11 +737,13 @@ void MainWindow::LoadRecentFiles() {
     }
 }
 
+// 把最近文件写回设置。
 void MainWindow::SaveRecentFiles() {
     QSettings settings;
     settings.setValue(QStringLiteral("recentFiles"), m_recentFiles);
 }
 
+// 重建最近文件菜单。
 void MainWindow::RebuildRecentMenu() {
     if (!m_recentMenu) return;
     m_recentMenu->clear();
@@ -741,6 +760,7 @@ void MainWindow::RebuildRecentMenu() {
     }
 }
 
+// 把解析结果加入模型列表并建网格。
 void MainWindow::AddLoadedModel(const QString& filePath,
                                 std::vector<Vertex3D>&& vertices,
                                 std::vector<uint32_t>&& indices) {
@@ -758,6 +778,7 @@ void MainWindow::AddLoadedModel(const QString& filePath,
     AddRecentFile(filePath);
 }
 
+// 切换模型可见性。
 void MainWindow::SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible) {
     auto it = std::find_if(m_loadedModels.begin(), m_loadedModels.end(),
         [treeItem](const LoadedModel& model) {
@@ -772,6 +793,7 @@ void MainWindow::SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible) 
     UpdateShadowSceneBounds();
 }
 
+// 从场景和列表移除模型。
 void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
     auto it = std::find_if(m_loadedModels.begin(), m_loadedModels.end(),
         [treeItem](const LoadedModel& model) {
@@ -793,6 +815,7 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
     UpdateShadowSceneBounds();
 }
 
+// 清理当前对象内容。
 void MainWindow::ClearLoadedModels() {
     ++m_loadGeneration;
 
@@ -837,6 +860,7 @@ void MainWindow::ClearLoadedModels() {
     UpdateShadowSceneBounds();
 }
 
+// 聚焦到目标对象。
 void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
     if (m_loadedModels.empty()) return;
 
@@ -923,6 +947,35 @@ void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
     }
 }
 
+// 按渲染器类型安装 Mesh 工厂。
+void MainWindow::ConfigureMeshFactory(Render* renderer) {
+    if (!renderer) return;
+
+    if (dynamic_cast<GLRender*>(renderer)) {
+        renderer->SetMeshFactory([](Render* baseRenderer) -> Object* {
+            auto* glRenderer = dynamic_cast<GLRender*>(baseRenderer);
+            if (!glRenderer) return nullptr;
+
+            auto* mesh = new GLMesh();
+            mesh->SetRender(glRenderer);
+            return mesh;
+        });
+        return;
+    }
+
+    if (dynamic_cast<VKRender*>(renderer)) {
+        renderer->SetMeshFactory([](Render* baseRenderer) -> Object* {
+            auto* vkRenderer = dynamic_cast<VKRender*>(baseRenderer);
+            if (!vkRenderer) return nullptr;
+
+            auto* mesh = new VKMesh();
+            mesh->SetRender(vkRenderer);
+            return mesh;
+        });
+    }
+}
+
+// 重建当前场景网格。
 void MainWindow::RebuildSceneMeshes() {
     const bool useOpenGL = IsOpenGLBackend()
         && dynamic_cast<GLRender3D*>(m_openglRenderer) != nullptr;
@@ -1020,8 +1073,12 @@ void MainWindow::RebuildSceneMeshes() {
         if (useOpenGL) {
             auto* glMesh = dynamic_cast<GLMesh*>(model.mesh);
             if (!glMesh) {
-                glMesh = new GLMesh();
-                glMesh->SetRender(glRenderer);
+                Object* mesh = m_openglRenderer->CreateMesh();
+                glMesh = dynamic_cast<GLMesh*>(mesh);
+                if (!glMesh) {
+                    delete mesh;
+                    continue;
+                }
                 glMesh->SetVisible(model.visible);
                 model.mesh = glMesh;
                 m_scene->AddChild(glMesh);
@@ -1030,8 +1087,12 @@ void MainWindow::RebuildSceneMeshes() {
         } else {
             auto* vkMesh = dynamic_cast<VKMesh*>(model.mesh);
             if (!vkMesh) {
-                vkMesh = new VKMesh();
-                vkMesh->SetRender(vkRenderer);
+                Object* mesh = m_renderer->CreateMesh();
+                vkMesh = dynamic_cast<VKMesh*>(mesh);
+                if (!vkMesh) {
+                    delete mesh;
+                    continue;
+                }
                 vkMesh->SetVisible(model.visible);
                 model.mesh = vkMesh;
                 m_scene->AddChild(vkMesh);
@@ -1043,12 +1104,14 @@ void MainWindow::RebuildSceneMeshes() {
     UpdateShadowSceneBounds();
 }
 
+// 把模型上的网格指针置空。
 void MainWindow::ResetLoadedMeshPointers() {
     for (LoadedModel& model : m_loadedModels) {
         model.mesh = nullptr;
     }
 }
 
+// 销毁二维渲染器并换成三维。
 void MainWindow::SwitchTo3D() {
     if (IsOpenGLBackend()) {
         SwitchOpenGLTo3D();
@@ -1070,6 +1133,7 @@ void MainWindow::SwitchTo3D() {
 
     m_renderer = new VKRender3D();
     auto* vkRenderer = dynamic_cast<VKRender*>(m_renderer);
+    ConfigureMeshFactory(m_renderer);
     if (!vkRenderer) return;
     m_vulkanWindow->SetRenderer(vkRenderer);
 
@@ -1086,6 +1150,7 @@ void MainWindow::SwitchTo3D() {
     }
 }
 
+// 销毁三维渲染器并换成二维。
 void MainWindow::SwitchTo2D() {
     if (IsOpenGLBackend()) {
         SwitchOpenGLTo2D();
@@ -1107,6 +1172,7 @@ void MainWindow::SwitchTo2D() {
 
     m_renderer = new VKRender2D();
     auto* vkRenderer = dynamic_cast<VKRender*>(m_renderer);
+    ConfigureMeshFactory(m_renderer);
     if (!vkRenderer) return;
     m_vulkanWindow->SetRenderer(vkRenderer);
 
@@ -1119,18 +1185,22 @@ void MainWindow::SwitchTo2D() {
     }
 }
 
+// 切换到二维控制模式。
 void MainWindow::on2DController() {
     SwitchTo2D();
 }
 
+// 切换到三维控制模式。
 void MainWindow::on3DController() {
     SwitchTo3D();
 }
 
+// 判断当前是否使用 OpenGL 后端。
 bool MainWindow::IsOpenGLBackend() const {
     return m_openglContainer && m_openglContainer->isVisible();
 }
 
+// 处理渲染后端切换。
 void MainWindow::onBackendEngineChanged(int index) {
     if (index == 1) {
         SwitchToOpenGL();
@@ -1139,6 +1209,7 @@ void MainWindow::onBackendEngineChanged(int index) {
     }
 }
 
+// 按需创建 OpenGL 窗口与容器。
 void MainWindow::EnsureOpenGLWindow() {
     if (m_openglWindow && m_openglContainer) return;
 
@@ -1146,6 +1217,7 @@ void MainWindow::EnsureOpenGLWindow() {
         m_openglRenderer = new GLRender3D();
     }
     auto* glRenderer = dynamic_cast<GLRender*>(m_openglRenderer);
+    ConfigureMeshFactory(m_openglRenderer);
     if (!glRenderer) return;
     m_openglWindow = new QWindowOpenGL(glRenderer);
     m_openglContainer = QWidget::createWindowContainer(m_openglWindow);
@@ -1164,6 +1236,7 @@ void MainWindow::EnsureOpenGLWindow() {
     m_openglContainer->hide();
 }
 
+// 初始化 OpenGL 渲染器并同步显示选项。
 void MainWindow::EnsureOpenGLInitialized() {
     if (!m_openglRenderer || !m_openglWindow) return;
     if (!m_openglWindow->GetContext()) return;
@@ -1189,6 +1262,7 @@ void MainWindow::EnsureOpenGLInitialized() {
     RebuildSceneMeshes();
 }
 
+// 隐藏 Vulkan 视口，启用 OpenGL。
 void MainWindow::SwitchToOpenGL() {
     EnsureOpenGLWindow();
     if (!m_openglContainer) return;
@@ -1210,6 +1284,7 @@ void MainWindow::SwitchToOpenGL() {
     StartRenderLoop();
 }
 
+// 隐藏 OpenGL 视口，恢复 Vulkan。
 void MainWindow::SwitchToVulkan() {
     if (!m_openglContainer || !m_openglContainer->isVisible()) {
         return;
@@ -1251,6 +1326,7 @@ void MainWindow::SwitchToVulkan() {
     StartRenderLoop();
 }
 
+// 把 OpenGL 后端换成三维。
 void MainWindow::SwitchOpenGLTo3D() {
     if (!m_openglWindow) return;
     if (dynamic_cast<GLRender3D*>(m_openglRenderer)) return;
@@ -1269,12 +1345,14 @@ void MainWindow::SwitchOpenGLTo3D() {
 
     m_openglRenderer = new GLRender3D();
     auto* glRenderer = dynamic_cast<GLRender*>(m_openglRenderer);
+    ConfigureMeshFactory(m_openglRenderer);
     if (!glRenderer) return;
     m_openglWindow->SetRenderer(glRenderer);
     EnsureOpenGLInitialized();
     StartRenderLoop();
 }
 
+// 把 OpenGL 后端换成二维。
 void MainWindow::SwitchOpenGLTo2D() {
     if (!m_openglWindow) return;
     if (dynamic_cast<GLRender2D*>(m_openglRenderer)) return;
@@ -1293,6 +1371,7 @@ void MainWindow::SwitchOpenGLTo2D() {
 
     m_openglRenderer = new GLRender2D();
     auto* glRenderer = dynamic_cast<GLRender*>(m_openglRenderer);
+    ConfigureMeshFactory(m_openglRenderer);
     if (!glRenderer) return;
     m_openglWindow->SetRenderer(glRenderer);
     EnsureOpenGLInitialized();

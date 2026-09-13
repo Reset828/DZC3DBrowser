@@ -36,46 +36,85 @@ public:
     ~MainWindow();
 
 protected:
+    // 处理窗口关闭事件。
     void closeEvent(QCloseEvent* event) override;
+    // 分发窗口输入事件。
     bool eventFilter(QObject* obj, QEvent* event) override;
 
 private slots:
+    // 响应打开文件操作。
     void onOpenFile();
+    // 切换到二维控制模式。
     void on2DController();
+    // 切换到三维控制模式。
     void on3DController();
+    // 打开或关闭光照分析。
     void onLightAnalysis();
+    // 响应最近文件操作。
     void onRecentFileTriggered();
+    // 处理渲染后端切换。
     void onBackendEngineChanged(int index);
 
 private:
+    // 创建菜单与工具栏控件。
     void SetupToolBar();
+    // 后台解析 OBJ 并加入场景。
     void LoadFile(const QString& filePath);
+    // 把路径写入最近文件列表。
     void AddRecentFile(const QString& filePath);
+    // 从设置读取最近文件。
     void LoadRecentFiles();
+    // 把最近文件写回设置。
     void SaveRecentFiles();
+    // 重建最近文件菜单。
     void RebuildRecentMenu();
+    // 创建坐标状态栏。
     void SetupStatusBar();
+    // 创建 Vulkan 窗口容器并接渲染循环。
     void SetupVulkan();
+    // 启动渲染循环。
     void StartRenderLoop();
+    // 销毁三维渲染器并换成二维。
     void SwitchTo2D();
+    // 销毁二维渲染器并换成三维。
     void SwitchTo3D();
+    // 隐藏 OpenGL 视口，恢复 Vulkan。
     void SwitchToVulkan();
+    // 隐藏 Vulkan 视口，启用 OpenGL。
     void SwitchToOpenGL();
+    // 当前是否显示 OpenGL 视口。
     bool IsOpenGLBackend() const;
+    // 按需创建 OpenGL 窗口与容器。
     void EnsureOpenGLWindow();
+    // 初始化 OpenGL 渲染器并同步显示选项。
     void EnsureOpenGLInitialized();
+    // 把 OpenGL 后端换成二维。
     void SwitchOpenGLTo2D();
+    // 把 OpenGL 后端换成三维。
     void SwitchOpenGLTo3D();
+    // 把光照面板参数写进当前三维渲染器。
     void ApplyLightAnalysisToRenderer();
+    // 用已加载模型包围盒更新阴影范围。
     void UpdateShadowSceneBounds();
+    // 同步阴影贴图尺寸选项。
     void SyncShadowTextureSizeCombo(uint32_t size);
+    // 显示阴影贴图状态。
     void ShowShadowMapStatus(const std::string& message);
+    // 把解析结果加入模型列表并建网格。
     void AddLoadedModel(const QString& filePath, std::vector<Vertex3D>&& vertices, std::vector<uint32_t>&& indices);
+    // 切换模型可见性。
     void SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible);
+    // 从场景和列表移除模型。
     void RemoveLoadedModel(QTreeWidgetItem* treeItem);
+    // 清理当前对象内容。
     void ClearLoadedModels();
+    // 聚焦到目标对象。
     void FocusSceneOrModel(QTreeWidgetItem* treeItem);
+    // 按渲染器类型安装 Mesh 工厂。
+    void ConfigureMeshFactory(Render* renderer);
+    // 重建当前场景网格。
     void RebuildSceneMeshes();
+    // 把模型上的网格指针置空。
     void ResetLoadedMeshPointers();
 
     struct LoadedModel {

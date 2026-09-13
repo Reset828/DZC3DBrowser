@@ -22,6 +22,7 @@ QWindowVulkan::~QWindowVulkan() {
     }
 }
 
+// 首次露出时创建后端并 Initialize。
 void QWindowVulkan::exposeEvent(QExposeEvent* event) {
     if (isExposed() && !m_initialized) {
         m_initialized = true;
@@ -40,6 +41,7 @@ void QWindowVulkan::exposeEvent(QExposeEvent* event) {
     }
 }
 
+// 窗口尺寸变化时更新帧缓冲大小。
 void QWindowVulkan::resizeEvent(QResizeEvent* event) {
     QWindow::resizeEvent(event);
     if (m_renderer->IsInitialized()) {
@@ -50,6 +52,7 @@ void QWindowVulkan::resizeEvent(QResizeEvent* event) {
     }
 }
 
+// 创建 VkInstance 与 Win32 表面。
 bool QWindowVulkan::CreateVulkanSurface() {
     auto extensions = VKRender::GetRequiredExtensions();
 
@@ -86,6 +89,9 @@ bool QWindowVulkan::CreateVulkanSurface() {
 }
 
 
+// 获取 Vulkan 表面。
 VkSurfaceKHR QWindowVulkan::GetSurface() const { return m_surface; }
+// 获取 Vulkan 实例。
 VkInstance QWindowVulkan::GetVkInstance() const { return m_instance; }
+// 更换窗口绑定的渲染器。
 void QWindowVulkan::SetRenderer(VKRender* renderer) { m_renderer = renderer; }

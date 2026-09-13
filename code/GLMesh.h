@@ -9,9 +9,11 @@ public:
     GLMesh();
     ~GLMesh() override;
 
+    // 同步上传 Mesh 数据。
     void SetMeshDataSync(const std::vector<Vertex3D>& vertices,
                          const std::vector<uint32_t>& indices);
 
+    // 绘制自身；Layer 则遍历子对象。
     void Render(int mode = 0) override;
 
 private:

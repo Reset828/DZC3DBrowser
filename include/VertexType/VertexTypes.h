@@ -11,7 +11,9 @@ struct Vertex2D {
     float color[3];
     float texCoord[2];
 
+    // 返回顶点绑定描述。
     static VkVertexInputBindingDescription GetBindingDescription();
+    // 返回顶点属性描述。
     static std::vector<VkVertexInputAttributeDescription> GetAttributeDescriptions();
 };
 
@@ -21,7 +23,9 @@ struct Vertex3D {
     float texCoord[2];
     float normal[3];
 
+    // 返回顶点绑定描述。
     static VkVertexInputBindingDescription GetBindingDescription();
+    // 返回顶点属性描述。
     static std::vector<VkVertexInputAttributeDescription> GetAttributeDescriptions();
 };
 

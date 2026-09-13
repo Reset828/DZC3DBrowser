@@ -7,10 +7,12 @@ namespace {
 constexpr float kPi = 3.14159265f;
 constexpr float kTwoPi = 6.28318531f;
 
+// 判断是否闰年。
 bool IsLeapYear(int year) {
     return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
 }
 
+// 获取指定月份的天数。
 int DaysInMonth(int year, int month) {
     static const int kDays[] = { 0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
     if (month == 2 && IsLeapYear(year)) {
@@ -19,6 +21,7 @@ int DaysInMonth(int year, int month) {
     return kDays[month];
 }
 
+// 计算年内日序。
 int DayOfYear(int year, int month, int day) {
     month = std::clamp(month, 1, 12);
     day = std::clamp(day, 1, DaysInMonth(year, month));
@@ -33,6 +36,7 @@ int DayOfYear(int year, int month, int day) {
     return n;
 }
 
+// 将小时数限制在一天范围内。
 float WrapHours(float hours) {
     hours = std::fmod(hours, 24.0f);
     if (hours < 0.0f) {
@@ -41,6 +45,7 @@ float WrapHours(float hours) {
     return hours;
 }
 
+// 将角度限制在 2π 范围内。
 float WrapTwoPi(float radians) {
     radians = std::fmod(radians, kTwoPi);
     if (radians < 0.0f) {
@@ -51,6 +56,7 @@ float WrapTwoPi(float radians) {
 
 } // namespace
 
+// 计算太阳位置。
 SolarPosition ComputeSolarPosition(const SolarPositionQuery& query) {
     const float latitudeDeg = std::clamp(query.latitudeDegrees, -90.0f, 90.0f);
     const float latitude = latitudeDeg * (kPi / 180.0f);

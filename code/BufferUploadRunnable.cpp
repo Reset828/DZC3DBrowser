@@ -38,6 +38,7 @@ BufferUploadRunnable::BufferUploadRunnable(
 
 BufferUploadRunnable::~BufferUploadRunnable() = default;
 
+// 执行后台任务。
 void BufferUploadRunnable::run() {
     VkDeviceSize totalSize = m_size;
     if (m_isMulti) {

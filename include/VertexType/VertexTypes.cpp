@@ -1,6 +1,7 @@
 ﻿#include "VertexTypes.h"
 
 
+// 返回顶点绑定描述。
 VkVertexInputBindingDescription Vertex2D::GetBindingDescription() {
     VkVertexInputBindingDescription desc{};
     desc.binding = 0;
@@ -9,6 +10,7 @@ VkVertexInputBindingDescription Vertex2D::GetBindingDescription() {
     return desc;
 }
 
+// 返回顶点属性描述。
 std::vector<VkVertexInputAttributeDescription> Vertex2D::GetAttributeDescriptions() {
     std::vector<VkVertexInputAttributeDescription> attrs(3);
 
@@ -31,6 +33,7 @@ std::vector<VkVertexInputAttributeDescription> Vertex2D::GetAttributeDescription
 }
 
 
+// 返回顶点绑定描述。
 VkVertexInputBindingDescription Vertex3D::GetBindingDescription() {
     VkVertexInputBindingDescription desc{};
     desc.binding = 0;
@@ -39,6 +42,7 @@ VkVertexInputBindingDescription Vertex3D::GetBindingDescription() {
     return desc;
 }
 
+// 返回顶点属性描述。
 std::vector<VkVertexInputAttributeDescription> Vertex3D::GetAttributeDescriptions() {
     std::vector<VkVertexInputAttributeDescription> attrs(4);
 

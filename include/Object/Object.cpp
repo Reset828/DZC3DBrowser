@@ -18,34 +18,42 @@ Object& Object::operator=(const Object& obj) {
     return *this;
 }
 
+// 设置父对象。
 void Object::SetParent(Object* pParent) {
     m_pParent = pParent;
 }
 
+// 获取父对象。
 Object* Object::GetParent() const {
     return m_pParent;
 }
 
+// 设置脏标记。
 void Object::SetDirty(bool bDirty) {
     EnableFlag(FT_DIRTY, bDirty);
 }
 
+// 查询对象是否已修改。
 bool Object::IsDirty() const {
     return IsFlagEnabled(FT_DIRTY);
 }
 
+// 获取对象类型。
 uint32_t Object::GetType() const {
     return m_uType;
 }
 
+// 设置对象可见性。
 void Object::SetVisible(bool bVisible) {
     EnableFlag(FT_VISIBLE, bVisible);
 }
 
+// 查询对象是否可见。
 bool Object::IsVisible() const {
     return IsFlagEnabled(FT_VISIBLE);
 }
 
+// 设置对象颜色。
 void Object::SetColor(const Vec4& clr) {
     uint8_t r = static_cast<uint8_t>(clr.x * 255.0f);
     uint8_t g = static_cast<uint8_t>(clr.y * 255.0f);
@@ -57,10 +65,12 @@ void Object::SetColor(const Vec4& clr) {
              (static_cast<uint32_t>(a) << 24);
 }
 
+// 设置对象颜色。
 void Object::SetColor(float r, float g, float b, float a) {
     SetColor(Vec4{ r, g, b, a });
 }
 
+// 获取对象颜色。
 Vec4 Object::GetColor() const {
     float r = static_cast<float>((m_uClr >> 0) & 0xFF) / 255.0f;
     float g = static_cast<float>((m_uClr >> 8) & 0xFF) / 255.0f;
@@ -69,6 +79,7 @@ Vec4 Object::GetColor() const {
     return Vec4{ r, g, b, a };
 }
 
+// 打开或关闭指定标志位。
 void Object::EnableFlag(FlagType ft, bool bEnable) {
     if (bEnable) {
         m_uFlag |= static_cast<uint8_t>(ft);
@@ -77,6 +88,7 @@ void Object::EnableFlag(FlagType ft, bool bEnable) {
     }
 }
 
+// 查询指定标志是否启用。
 bool Object::IsFlagEnabled(FlagType ft) const {
     return (m_uFlag & static_cast<uint8_t>(ft)) != 0;
 }

@@ -8,15 +8,18 @@
 #include <string>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 #include "Render.h"
 
 class QRunnable;  // Qt 线程池任务（仅指针使用，可前向声明）
+class QThreadPool;
 
 
 struct VulkanQueueFamilyIndices {
     int graphicsFamily = -1;  // 图形队列族索引
     int presentFamily = -1;   // 呈现队列族索引
+    // 图形与呈现队列族是否都已找到。
     bool IsComplete() const;
 };
 
@@ -26,95 +29,164 @@ struct VulkanSwapchainSupportDetails {
     std::vector<VkPresentModeKHR> presentModes;   // 支持的呈现模式
 };
 
+// Vulkan 后端：设备、交换链、同步和帧流程。
 class VKRender : public Render {
 public:
     VKRender();
     ~VKRender() override;
 
     VKRender(const VKRender&) = delete;
+// operator=：禁止复制 Vulkan 渲染器。
     VKRender& operator=(const VKRender&) = delete;
 
+    // 初始化渲染器及其后端资源。
     bool Initialize(const char* appName, uint32_t width, uint32_t height) override;
+    // 关闭渲染器并释放资源。
     void Shutdown() override;
+    // 等待异步任务完成并使渲染器进入静止状态。
     void Quiesce() override;
+    // 开始一帧渲染。
     bool BeginFrame() override;                                    // 开始帧渲染，获取交换链图像
+    // 结束当前帧并提交渲染结果。
     void EndFrame() override;                                      // 结束帧渲染，提交命令缓冲区
+    // 提交索引绘制命令。
     void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1) override;  // 索引绘制
+    // 返回阴影图形管线。
     virtual VkPipeline GetShadowPipeline() const { return VK_NULL_HANDLE; }
 
+    // 返回 Vulkan 逻辑设备。
     VkDevice GetDevice() const;
+    // 返回 Vulkan 物理设备。
     VkPhysicalDevice GetPhysicalDevice() const;
+    // 返回当前帧命令缓冲。
     VkCommandBuffer GetCurrentCommandBuffer() const;
 
 
+    // 创建 Vulkan 缓冲区并绑定内存。
     VkBuffer CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties);
+    // 销毁缓冲区及其设备内存。
     void DestroyBuffer(VkBuffer buffer);
+    // 映射 Vulkan 缓冲区内存。
     VkResult MapBuffer(VkBuffer buffer, void** data);
+    // 解除 Vulkan 缓冲区内存映射。
     void UnmapBuffer(VkBuffer buffer);
+    // 分配 Vulkan 设备内存。
     VkDeviceMemory AllocateMemory(VkMemoryRequirements memRequirements, VkMemoryPropertyFlags properties);
 
+    // 开始一次性命令缓冲。
     VkCommandBuffer BeginSingleTimeCommands();
+    // 提交并等待一次性命令缓冲。
     void EndSingleTimeCommands(VkCommandBuffer commandBuffer);
+    // 复制 Vulkan 缓冲区内容。
+    void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size,
+                    VkDeviceSize srcOffset = 0, VkDeviceSize dstOffset = 0);
+    // 从 staging 缓冲区创建设备缓冲区。
+    VkBuffer CreateBufferFromStaging(VkBuffer stagingBuffer, VkDeviceSize size,
+                                     VkBufferUsageFlags usage,
+                                     VkDeviceSize stagingOffset = 0);
 
+    // 等待 GPU 与异步任务完成。
     void WaitForIdle() override;
 
+    // 提交异步任务。
     void SubmitAsync(Render::AsyncTask task) override;
+    // 提交异步任务。
     void SubmitAsync(QRunnable* task);
+    // 按拓扑返回图形管线。
     VkPipeline GetPipeline(DrawTopology topology) const;
 
+    // 设置 Win32 表面（外部所有）。
     void SetSurface(VkSurfaceKHR surface);
+    // 设置外部 VkInstance。
     void SetInstance(VkInstance instance);
+    // 检查 Vulkan 验证层支持。
     static bool CheckValidationLayerSupport();        // 检查验证层支持
+    // 返回实例所需扩展名。
     static std::vector<const char*> GetRequiredExtensions();  // 获取所需扩展
 
 protected:
+    // 后端初始化完成后的钩子。
     virtual bool OnInitialize() { return true; }
+    // 关闭前释放后端资源的钩子。
     virtual void OnShutdown() {}
 
+    // 开始录制命令前的钩子。
     virtual void OnPrepareFrame() {}
+    // 每帧开始时的钩子。
     virtual void OnBeginFrame() {}
+    // 每帧结束时的钩子。
     virtual void OnEndFrame() {}
+    // 销毁图形管线的钩子。
     virtual void OnDestroyPipelines() {}
 
+    // 交换链/帧缓冲重建后的钩子。
     virtual void OnRecreateSwapchain() {}
 
+    // 确保本帧已开始录制命令。
     bool EnsureFrameRecording();
+    // 开始主颜色渲染通道。
     void BeginColorRenderPass();
 
+    // 创建渲染通道。
     virtual bool CreateRenderPass();
+    // 创建图形管线。
     virtual bool CreatePipelines();
+    // 创建帧缓冲。
     virtual bool CreateFramebuffers();
 
 protected:
+    // 创建 VkInstance。
     bool CreateInstance(const char* appName);         // 创建Vulkan实例
+    // 创建验证层调试回调。
     bool SetupDebugMessenger();                       // 设置调试消息回调
+    // 选择合适的 Vulkan 物理设备。
     bool PickPhysicalDevice();                        // 选择物理设备
+    // 创建逻辑设备与队列。
     bool CreateLogicalDevice();                       // 创建逻辑设备
+    // 创建交换链。
     bool CreateSwapchain();                           // 创建交换链
+    // 重建 Vulkan 交换链。
     bool RecreateSwapchain();                         // 重建交换链（窗口大小变化时）
+    // 为交换链图像创建视图。
     bool CreateImageViews();                          // 创建图像视图
+    // 创建命令池。
     bool CreateCommandPool();                         // 创建命令池
+    // 分配每帧命令缓冲。
     bool CreateCommandBuffers();                      // 创建命令缓冲区
+    // 创建信号量与围栏。
     bool CreateSyncObjects();                         // 创建同步对象（信号量、围栏）
 
+    // 清理 Vulkan 交换链资源。
     void CleanupSwapchain();                          // 清理交换链相关资源
 
+    // 查找图形与呈现队列族。
     VulkanQueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device);  // 查找队列族
+    // 查询表面格式与呈现模式。
     VulkanSwapchainSupportDetails QuerySwapchainSupport(VkPhysicalDevice device);  // 查询交换链支持
+    // 判断物理设备是否满足交换链需求。
     bool IsDeviceSuitable(VkPhysicalDevice device);   // 设备是否适合
+    // 评估 Vulkan 物理设备。
     int RateDevice(VkPhysicalDevice device);          // 设备评分
 
+    // 选择交换链表面格式。
     VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
+    // 选择呈现模式。
     VkPresentModeKHR ChooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes);
+    // 选择交换链分辨率。
     VkExtent2D ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
 
+    // 按过滤条件查找内存类型索引。
     uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
+    // 从 SPIR-V 创建着色器模块。
     VkResult CreateShaderModule(const std::vector<char>& code, VkShaderModule* shaderModule);
 
+    // 读取着色器文件。
     std::vector<char> ReadShaderFile(const std::string& filename);
+    // 创建着色器模块，失败则抛错。
     VkShaderModule CreateShaderModuleHelper(const std::vector<char>& code);
 
+    // 处理 Vulkan 调试回调。
     static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
         VkDebugUtilsMessageSeverityFlagBitsEXT severity,
         VkDebugUtilsMessageTypeFlagsEXT type,
@@ -159,6 +231,7 @@ protected:
     uint32_t m_imageIndex = 0;                            // 当前交换链图像索引
     static const int MAX_FRAMES_IN_FLIGHT = 2;           // 最大飞行帧数（双缓冲）
     bool m_frameRecording = false;
+    std::unique_ptr<QThreadPool> m_asyncThreadPool;
     bool m_externalInstance = false;    // 实例由外部管理（Qt 窗口）
 
     std::vector<const char*> m_validationLayers = {
@@ -192,26 +265,42 @@ public:
     ~VKRender2D() override;
 
     VKRender2D(const VKRender2D&) = delete;
+// operator=：禁止复制 Vulkan 二维渲染器。
     VKRender2D& operator=(const VKRender2D&) = delete;
 
+    // 处理鼠标按下。
     void OnMouseDown(float nx, float ny, int button) override;
+    // 处理鼠标移动。
     void OnMouseMove(float nx, float ny) override;
+    // 处理鼠标松开。
     void OnMouseUp(int button) override;
+    // 处理滚轮缩放。
     void OnMouseWheel(float delta) override;
 
 protected:
+    // 后端初始化完成后的钩子。
     bool OnInitialize() override;
+    // 关闭前释放后端资源的钩子。
     void OnShutdown() override;
+    // 每帧开始时的钩子。
     void OnBeginFrame() override;
+    // 每帧结束时的钩子。
     void OnEndFrame() override;
+    // 创建图形管线。
     bool CreatePipelines() override;
 
+    // 创建描述符集布局。
     bool CreateDescriptorSetLayout();
+    // 创建并映射 UBO。
     bool CreateUniformBuffers();
+    // 创建描述符池。
     bool CreateDescriptorPool();
+    // 分配并写入描述符集。
     bool CreateDescriptorSets();
+    // 销毁 UBO 及其内存。
     void DestroyUniformBuffers();
 
+    // 写入二维相机 UBO。
     void UpdateCameraUBO();
 
 protected:
@@ -241,90 +330,164 @@ public:
     ~VKRender3D() override;
 
     VKRender3D(const VKRender3D&) = delete;
+// operator=：禁止复制 Vulkan 三维渲染器。
     VKRender3D& operator=(const VKRender3D&) = delete;
 
+    // 处理鼠标按下。
     void OnMouseDown(float nx, float ny, int button) override;
+    // 处理鼠标移动。
     void OnMouseMove(float nx, float ny) override;
+    // 处理鼠标松开。
     void OnMouseUp(int button) override;
+    // 处理滚轮缩放。
     void OnMouseWheel(float delta) override;
+    // 开关线框模式。
     void SetWireframeEnabled(bool enabled);
+    // 开关灰度显示。
     void SetGrayEnabled(bool enabled);
+    // 开关染色。
     void SetDyeEnabled(bool enabled);
+    // 开关光照分析。
     void SetLightAnalysisEnabled(bool enabled);
+    // 设置阴影贴图边长。
     void SetShadowTextureSize(uint32_t size);
+    // 返回阴影贴图边长。
     uint32_t GetShadowTextureSize() const;
+    // 查询阴影贴图是否可用。
     bool IsShadowMapReady() const;
+    // 读取并清除阴影贴图状态。
     std::string TakeShadowMapStatus();
+    // 设置阴影场景包围盒。
     void SetShadowSceneBounds(const Vec3& boundsMin, const Vec3& boundsMax, bool valid);
+    // 开始向阴影贴图绘制。
     bool BeginShadowPass();
+    // 结束阴影通道并恢复主帧缓冲。
     void EndShadowPass();
+    // 返回阴影图形管线。
     VkPipeline GetShadowPipeline() const override;
+    // 设置太阳计算用纬度。
     void SetLatitude(float latitude);
+    // 设置太阳计算用日期。
     void SetLightDate(int year, int month, int day);
+    // 设置真太阳时（分钟）。
     void SetLightTimeMinutes(int minutes);
+    // 返回物体空间太阳方向。
     glm::vec3 GetSunDirection() const;
+    // 查询太阳是否在地平线以上。
     bool IsSunAboveHorizon() const;
+    // 开关正射投影。
     void SetOrthographicEnabled(bool enabled);
+    // 设置轨道旋转中心。
     void SetOrbitCenter(const Vec3& normalizedCenter);
+    // 复位旋转、平移和轨道距离。
     void ResetView(float orbitDistance = 3.0f);
+    // 设置归一化坐标到世界坐标的变换。
     void SetCoordinateNormalization(const Vec3& sourceCenter, float normalizationScale);
+    // 查询是否开启线框。
     bool IsWireframeEnabled() const override { return m_wireframeMode; }
 
+    // 请求把屏幕点反算为世界坐标。
     void RequestCoordReadback(float ndcX, float ndcY);
+    // 查询是否有新的世界坐标可读。
     bool HasNewWorldCoord() const;
+    // 返回最近一次世界坐标 X。
     float GetLastWorldX() const;
+    // 返回最近一次世界坐标 Y。
     float GetLastWorldY() const;
+    // 返回最近一次世界坐标 Z。
     float GetLastWorldZ() const;
 
 protected:
+    // 后端初始化完成后的钩子。
     bool OnInitialize() override;
+    // 关闭前释放后端资源的钩子。
     void OnShutdown() override;
+    // 开始录制命令前的钩子。
     void OnPrepareFrame() override;
+    // 每帧开始时的钩子。
     void OnBeginFrame() override;
+    // 每帧结束时的钩子。
     void OnEndFrame() override;
+    // 销毁图形管线的钩子。
     void OnDestroyPipelines() override;
+    // 交换链/帧缓冲重建后的钩子。
     void OnRecreateSwapchain() override;
 
+    // 创建渲染通道。
     bool CreateRenderPass() override;
+    // 创建图形管线。
     bool CreatePipelines() override;
+    // 创建帧缓冲。
     bool CreateFramebuffers() override;
 
+    // 创建描述符集布局。
     bool CreateDescriptorSetLayout();
+    // 创建并映射 UBO。
     bool CreateUniformBuffers();
+    // 创建描述符池。
     bool CreateDescriptorPool();
+    // 分配并写入描述符集。
     bool CreateDescriptorSets();
+    // 销毁 UBO 及其内存。
     void DestroyUniformBuffers();
+    // 按当前相机与显示选项写入 UBO。
     void UpdateUniformBuffer(uint32_t currentImage);
+    // 按纬度/日期/真太阳时更新太阳方向。
     void UpdateSunDirection();
+    // 把阴影贴图写入描述符集。
     void UpdateShadowDescriptors();
+    // 创建阴影比较采样器。
     bool CreateShadowSampler();
+    // 创建 1x1 占位阴影贴图。
     bool CreateDummyShadowMap();
+    // 保证占位阴影图布局可用。
     bool EnsureDummyShadowReady();
+    // 创建仅深度的阴影渲染通道。
     bool CreateShadowRenderPass();
+    // 创建阴影图形管线。
     bool CreateShadowPipeline();
+    // 按给定边长创建阴影深度贴图。
     bool CreateShadowMap(uint32_t size);
+    // 销毁阴影贴图与帧缓冲。
     void DestroyShadowMap();
+    // 销毁占位阴影贴图。
     void DestroyDummyShadowMap();
+    // 销毁阴影采样器与渲染通道。
     void DestroyShadowSupport();
+    // 转换深度图像布局。
     void TransitionDepthImage(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                               VkAccessFlags srcAccess, VkAccessFlags dstAccess,
                               VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage);
+    // 光照分析开启时保证阴影贴图可用。
     bool EnsureShadowMapForAnalysis();
+    // 尝试分配指定尺寸的阴影贴图。
     bool TryAllocateShadowMap(uint32_t size);
+    // 计算光源视图投影矩阵。
     glm::mat4 ComputeLightViewProj() const;
+    // 判断当前是否需要渲染阴影。
     bool ShouldRenderShadows() const;
+    // 记录阴影贴图状态文本。
     void SetShadowMapStatus(const std::string& message);
+    // 将鼠标位置映射到虚拟球面。
     glm::vec3 ProjectToVirtualSphere(float nx, float ny) const;
+    // 应用受约束的局部旋转。
     void ApplyConstrainedLocalRotation(const glm::vec3& localAxis, float angle);
+    // 初始化单位矩阵。
     static void InitIdentityMatrix(float mat[4][4]);
 
+    // 创建深度附件。
     bool CreateDepthResources();
+    // 销毁深度附件。
     void DestroyDepthResources();
+    // 选择主深度格式。
     VkFormat FindDepthFormat();
+    // 选择阴影深度格式。
     VkFormat FindShadowDepthFormat();
+    // 在候选格式里找设备支持项。
     VkFormat FindSupportedFormat(const std::vector<VkFormat>& candidates,
                                   VkImageTiling tiling,
                                   VkFormatFeatureFlags features);
+    // 查询格式是否含模板。
     bool HasStencilComponent(VkFormat format);
 
     bool m_wireframeMode = false;
@@ -358,8 +521,11 @@ protected:
     glm::vec2 m_lastMouse = glm::vec2(0.0f);
     glm::vec3 m_lastVerticalLocalAxis = glm::vec3(1.0f, 0.0f, 0.0f);
 
+    // 创建深度回读缓冲。
     bool CreateDepthReadbackResources();
+    // 销毁深度回读缓冲。
     void DestroyDepthReadbackResources();
+    // 把回读深度反投影为世界坐标。
     void ProcessDepthReadback(uint32_t frameIndex);
 
     bool m_depthReadbackRequested = false;

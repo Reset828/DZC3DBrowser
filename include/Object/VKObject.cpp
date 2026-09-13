@@ -1,6 +1,5 @@
 ﻿#include "VKObject.h"
-#include <algorithm>
-#include <stdexcept>
+#include "Render/VKRender.h"
 #include <cstring>
 
 VKObject::VKObject() {}
@@ -21,169 +20,118 @@ VKObject& VKObject::operator=(const VKObject& obj) {
     return *this;
 }
 
+// 绑定所属渲染器。
 void VKObject::SetRender(VKRender* pRender) {
     m_pRender = pRender;
 }
 
+// 获取 Vulkan 渲染器。
 VKRender* VKObject::GetRender() const {
     return m_pRender;
 }
 
-void VKObject::CreateVertexBuffer(const std::vector<Vertex3D>& vertices) {
-    if (!m_pRender || vertices.empty()) return;
-
+// 创建顶点缓冲区。
+void VKObject::CreateVertexBuffer(const void* data, VkDeviceSize size) {
+    if (!m_pRender || !data || size == 0) return;
     DestroyBuffers();
-
-    VkDeviceSize bufferSize = sizeof(Vertex3D) * vertices.size();
-
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    CreateBufferHelper(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                       stagingBuffer, stagingBufferMemory);
-
-    void* data;
-    vkMapMemory(m_pRender->GetDevice(), stagingBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
-    vkUnmapMemory(m_pRender->GetDevice(), stagingBufferMemory);
-
-    CreateBufferHelper(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                       m_vertexBuffer, m_vertexBufferMemory);
-
-    CopyBuffer(stagingBuffer, m_vertexBuffer, bufferSize);
-
-    vkDestroyBuffer(m_pRender->GetDevice(), stagingBuffer, nullptr);
-    vkFreeMemory(m_pRender->GetDevice(), stagingBufferMemory, nullptr);
+    CreateBufferFromData(data, size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, m_vertexBuffer);
 }
 
-void VKObject::CreateIndexBuffer(const std::vector<uint32_t>& indices) {
-    if (!m_pRender || indices.empty()) return;
-
-    m_indexCount = static_cast<uint32_t>(indices.size());
-    VkDeviceSize bufferSize = sizeof(uint32_t) * indices.size();
-
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    CreateBufferHelper(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                       stagingBuffer, stagingBufferMemory);
-
-    void* data;
-    vkMapMemory(m_pRender->GetDevice(), stagingBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-    vkUnmapMemory(m_pRender->GetDevice(), stagingBufferMemory);
-
-    CreateBufferHelper(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                       m_indexBuffer, m_indexBufferMemory);
-
-    CopyBuffer(stagingBuffer, m_indexBuffer, bufferSize);
-
-    vkDestroyBuffer(m_pRender->GetDevice(), stagingBuffer, nullptr);
-    vkFreeMemory(m_pRender->GetDevice(), stagingBufferMemory, nullptr);
+// 创建索引缓冲区。
+void VKObject::CreateIndexBuffer(const void* data, VkDeviceSize size,
+                                 uint32_t indexCount) {
+    if (!m_pRender || !data || size == 0 || indexCount == 0) return;
+    CreateBufferFromData(data, size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, m_indexBuffer);
+    m_indexCount = indexCount;
 }
 
-void VKObject::UpdateVertexBuffer(const std::vector<Vertex3D>& vertices) {
-    if (!m_pRender || vertices.empty()) return;
-
-    VkDeviceSize bufferSize = sizeof(Vertex3D) * vertices.size();
-
-    void* data;
-    vkMapMemory(m_pRender->GetDevice(), m_vertexBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
-    vkUnmapMemory(m_pRender->GetDevice(), m_vertexBufferMemory);
+// 更新已有顶点缓冲区内容。
+void VKObject::UpdateVertexBuffer(const void* data, VkDeviceSize size) {
+    UpdateBufferFromData(data, size, m_vertexBuffer);
 }
 
-void VKObject::UpdateIndexBuffer(const std::vector<uint32_t>& indices) {
-    if (!m_pRender || indices.empty()) return;
-
-    m_indexCount = static_cast<uint32_t>(indices.size());
-    VkDeviceSize bufferSize = sizeof(uint32_t) * indices.size();
-
-    void* data;
-    vkMapMemory(m_pRender->GetDevice(), m_indexBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-    vkUnmapMemory(m_pRender->GetDevice(), m_indexBufferMemory);
+// 更新已有索引缓冲区内容。
+void VKObject::UpdateIndexBuffer(const void* data, VkDeviceSize size,
+                                 uint32_t indexCount) {
+    UpdateBufferFromData(data, size, m_indexBuffer);
+    if (data && size > 0) {
+        m_indexCount = indexCount;
+    }
 }
 
+// 销毁对象持有的 GPU 缓冲区。
 void VKObject::DestroyBuffers() {
     if (!m_pRender) return;
 
-    VkDevice device = m_pRender->GetDevice();
-
     if (m_indexBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, m_indexBuffer, nullptr);
+        m_pRender->DestroyBuffer(m_indexBuffer);
         m_indexBuffer = VK_NULL_HANDLE;
     }
-    if (m_indexBufferMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(device, m_indexBufferMemory, nullptr);
-        m_indexBufferMemory = VK_NULL_HANDLE;
-    }
-
     if (m_vertexBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, m_vertexBuffer, nullptr);
+        m_pRender->DestroyBuffer(m_vertexBuffer);
         m_vertexBuffer = VK_NULL_HANDLE;
     }
-    if (m_vertexBufferMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(device, m_vertexBufferMemory, nullptr);
-        m_vertexBufferMemory = VK_NULL_HANDLE;
-    }
+    m_indexCount = 0;
 }
 
-void VKObject::CreateBufferHelper(VkDeviceSize size, VkBufferUsageFlags usage,
-                                      VkMemoryPropertyFlags properties,
-                                      VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = size;
-    bufferInfo.usage = usage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+// 经 staging 创建设备本地缓冲区。
+void VKObject::CreateBufferFromData(const void* data, VkDeviceSize size,
+                                    VkBufferUsageFlags usage, VkBuffer& target) {
+    if (!m_pRender || !data || size == 0) return;
 
-    if (vkCreateBuffer(m_pRender->GetDevice(), &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
-        throw std::runtime_error("创建缓冲区失败");
+    if (target != VK_NULL_HANDLE) {
+        m_pRender->DestroyBuffer(target);
+        target = VK_NULL_HANDLE;
     }
 
-    VkMemoryRequirements memRequirements;
-    vkGetBufferMemoryRequirements(m_pRender->GetDevice(), buffer, &memRequirements);
+    VkBuffer stagingBuffer = VK_NULL_HANDLE;
+    VkBuffer deviceBuffer = VK_NULL_HANDLE;
+    try {
+        stagingBuffer = m_pRender->CreateBuffer(
+            size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
-
-    if (vkAllocateMemory(m_pRender->GetDevice(), &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-        throw std::runtime_error("分配缓冲区内存失败");
-    }
-
-    vkBindBufferMemory(m_pRender->GetDevice(), buffer, bufferMemory, 0);
-}
-
-uint32_t VKObject::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(m_pRender->GetPhysicalDevice(), &memProperties);
-
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-            return i;
+        void* mapped = nullptr;
+        if (m_pRender->MapBuffer(stagingBuffer, &mapped) != VK_SUCCESS) {
+            m_pRender->DestroyBuffer(stagingBuffer);
+            return;
         }
+        std::memcpy(mapped, data, static_cast<size_t>(size));
+        m_pRender->UnmapBuffer(stagingBuffer);
+
+        deviceBuffer = m_pRender->CreateBuffer(
+            size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        m_pRender->CopyBuffer(stagingBuffer, deviceBuffer, size);
+        m_pRender->DestroyBuffer(stagingBuffer);
+        target = deviceBuffer;
+    } catch (...) {
+        if (deviceBuffer != VK_NULL_HANDLE) {
+            m_pRender->DestroyBuffer(deviceBuffer);
+        }
+        if (stagingBuffer != VK_NULL_HANDLE) {
+            m_pRender->DestroyBuffer(stagingBuffer);
+        }
+        throw;
     }
-
-    throw std::runtime_error("未找到合适的内存类型");
 }
 
-void VKObject::CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
-    VkCommandBuffer commandBuffer = m_pRender->BeginSingleTimeCommands();
+// 把数据写入已有缓冲区。
+void VKObject::UpdateBufferFromData(const void* data, VkDeviceSize size,
+                                    VkBuffer target) {
+    if (!m_pRender || !data || size == 0 || target == VK_NULL_HANDLE) return;
 
-    VkBufferCopy copyRegion{};
-    copyRegion.size = size;
-    vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
-
-    m_pRender->EndSingleTimeCommands(commandBuffer);
+    void* mapped = nullptr;
+    if (m_pRender->MapBuffer(target, &mapped) != VK_SUCCESS) return;
+    std::memcpy(mapped, data, static_cast<size_t>(size));
+    m_pRender->UnmapBuffer(target);
 }
 
+// 获取顶点缓冲区。
 VkBuffer VKObject::GetVertexBuffer() const { return m_vertexBuffer; }
 
+// 获取索引缓冲区。
 VkBuffer VKObject::GetIndexBuffer() const { return m_indexBuffer; }
 
+// 获取索引数量。
 uint32_t VKObject::GetIndexCount() const { return m_indexCount; }

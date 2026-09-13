@@ -17,6 +17,7 @@ public:
     explicit VKFunctionRunnable(Render::AsyncTask task)
         : m_task(std::move(task)) {}
 
+    // 执行后台任务。
     void run() override {
         if (m_task) m_task();
     }
@@ -33,10 +34,12 @@ private:
         return false; \
     }
 
+// 判断图形队列和呈现队列是否均已找到。
 bool VulkanQueueFamilyIndices::IsComplete() const { return graphicsFamily >= 0 && presentFamily >= 0; }
 
 
-VKRender::VKRender() {
+VKRender::VKRender()
+    : m_asyncThreadPool(std::make_unique<QThreadPool>()) {
     m_clearValues[0].color = { 0.1f, 0.1f, 0.12f, 1.0f };
     m_clearValueCount = 1;
 }
@@ -46,6 +49,7 @@ VKRender::~VKRender() {
 }
 
 
+// 初始化渲染器及其后端资源。
 bool VKRender::Initialize(const char* appName, uint32_t width, uint32_t height) {
     m_framebufferWidth = width;
     m_framebufferHeight = height;
@@ -82,17 +86,21 @@ bool VKRender::Initialize(const char* appName, uint32_t width, uint32_t height) 
     return true;
 }
 
+// 等待异步任务完成并使渲染器进入静止状态。
 void VKRender::Quiesce() {
     if (!m_initialized) return;
 
     m_shuttingDown = true;
 
-    QThreadPool::globalInstance()->waitForDone();
+    if (m_asyncThreadPool) {
+        m_asyncThreadPool->waitForDone();
+    }
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
     vkDeviceWaitIdle(m_device);
 }
 
+// 关闭渲染器并释放资源。
 void VKRender::Shutdown() {
     if (!m_initialized) return;
 
@@ -168,6 +176,7 @@ void VKRender::Shutdown() {
 
 
 
+// 确保本帧已开始录制命令。
 bool VKRender::EnsureFrameRecording() {
     if (m_frameRecording) return true;
 
@@ -197,6 +206,7 @@ bool VKRender::EnsureFrameRecording() {
     return true;
 }
 
+// 开始主颜色渲染通道。
 void VKRender::BeginColorRenderPass() {
     OnBeginFrame();
 
@@ -227,6 +237,7 @@ void VKRender::BeginColorRenderPass() {
     vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
 }
 
+// 开始一帧渲染。
 bool VKRender::BeginFrame() {
     OnPrepareFrame();
     if (!EnsureFrameRecording()) return false;
@@ -234,6 +245,7 @@ bool VKRender::BeginFrame() {
     return true;
 }
 
+// 结束当前帧并提交渲染结果。
 void VKRender::EndFrame() {
     vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
 
@@ -283,11 +295,13 @@ void VKRender::EndFrame() {
     m_frameRecording = false;
 }
 
+// 提交索引绘制命令。
 void VKRender::DrawIndexed(uint32_t indexCount, uint32_t instanceCount) {
     vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], indexCount, instanceCount, 0, 0, 0);
 }
 
 
+// 创建 Vulkan 缓冲区并绑定内存。
 VkBuffer VKRender::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties) {
     VkBuffer buffer;
     VkBufferCreateInfo bufferInfo{};
@@ -320,6 +334,7 @@ VkBuffer VKRender::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkM
     return buffer;
 }
 
+// 销毁缓冲区及其设备内存。
 void VKRender::DestroyBuffer(VkBuffer buffer) {
     if (buffer == VK_NULL_HANDLE) return;
 
@@ -331,6 +346,7 @@ void VKRender::DestroyBuffer(VkBuffer buffer) {
     vkDestroyBuffer(m_device, buffer, nullptr);
 }
 
+// 映射 Vulkan 缓冲区内存。
 VkResult VKRender::MapBuffer(VkBuffer buffer, void** data) {
     auto it = m_bufferMemoryMap.find(buffer);
     if (it == m_bufferMemoryMap.end()) {
@@ -339,6 +355,7 @@ VkResult VKRender::MapBuffer(VkBuffer buffer, void** data) {
     return vkMapMemory(m_device, it->second, 0, VK_WHOLE_SIZE, 0, data);
 }
 
+// 解除 Vulkan 缓冲区内存映射。
 void VKRender::UnmapBuffer(VkBuffer buffer) {
     auto it = m_bufferMemoryMap.find(buffer);
     if (it != m_bufferMemoryMap.end()) {
@@ -346,6 +363,7 @@ void VKRender::UnmapBuffer(VkBuffer buffer) {
     }
 }
 
+// 分配 Vulkan 设备内存。
 VkDeviceMemory VKRender::AllocateMemory(VkMemoryRequirements memRequirements, VkMemoryPropertyFlags properties) {
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -361,6 +379,7 @@ VkDeviceMemory VKRender::AllocateMemory(VkMemoryRequirements memRequirements, Vk
 }
 
 
+// 开始一次性命令缓冲。
 VkCommandBuffer VKRender::BeginSingleTimeCommands() {
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -379,6 +398,7 @@ VkCommandBuffer VKRender::BeginSingleTimeCommands() {
     return commandBuffer;
 }
 
+// 提交并等待一次性命令缓冲。
 void VKRender::EndSingleTimeCommands(VkCommandBuffer commandBuffer) {
     vkEndCommandBuffer(commandBuffer);
 
@@ -393,11 +413,43 @@ void VKRender::EndSingleTimeCommands(VkCommandBuffer commandBuffer) {
     vkFreeCommandBuffers(m_device, m_singleTimeCommandPool, 1, &commandBuffer);
 }
 
+// 复制 Vulkan 缓冲区内容。
+void VKRender::CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size,
+                          VkDeviceSize srcOffset, VkDeviceSize dstOffset) {
+    VkCommandBuffer commandBuffer = BeginSingleTimeCommands();
+
+    VkBufferCopy copyRegion{};
+    copyRegion.srcOffset = srcOffset;
+    copyRegion.dstOffset = dstOffset;
+    copyRegion.size = size;
+    vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+
+    EndSingleTimeCommands(commandBuffer);
+}
+
+// 从 staging 缓冲区创建设备缓冲区。
+VkBuffer VKRender::CreateBufferFromStaging(VkBuffer stagingBuffer, VkDeviceSize size,
+                                           VkBufferUsageFlags usage,
+                                           VkDeviceSize stagingOffset) {
+    VkBuffer deviceBuffer = CreateBuffer(
+        size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    try {
+        CopyBuffer(stagingBuffer, deviceBuffer, size, stagingOffset);
+    } catch (...) {
+        DestroyBuffer(deviceBuffer);
+        throw;
+    }
+    return deviceBuffer;
+}
+
+// 等待 GPU 与异步任务完成。
 void VKRender::WaitForIdle() {
     vkDeviceWaitIdle(m_device);
 }
 
 
+// 检查 Vulkan 验证层支持。
 bool VKRender::CheckValidationLayerSupport() {
     uint32_t layerCount;
     vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
@@ -418,6 +470,7 @@ bool VKRender::CheckValidationLayerSupport() {
     return true;
 }
 
+// 返回实例所需扩展名。
 std::vector<const char*> VKRender::GetRequiredExtensions() {
     std::vector<const char*> extensions;
     extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
@@ -431,6 +484,7 @@ std::vector<const char*> VKRender::GetRequiredExtensions() {
 }
 
 
+// 创建 VkInstance。
 bool VKRender::CreateInstance(const char* appName) {
     if (m_enableValidationLayers && !CheckValidationLayerSupport()) {
         std::cerr << "验证层不可用" << std::endl;
@@ -482,6 +536,7 @@ bool VKRender::CreateInstance(const char* appName) {
     return true;
 }
 
+// 创建验证层调试回调。
 bool VKRender::SetupDebugMessenger() {
     VkDebugUtilsMessengerCreateInfoEXT createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -506,6 +561,7 @@ bool VKRender::SetupDebugMessenger() {
     return true;
 }
 
+// 选择合适的 Vulkan 物理设备。
 bool VKRender::PickPhysicalDevice() {
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(m_instance, &deviceCount, nullptr);
@@ -535,6 +591,7 @@ bool VKRender::PickPhysicalDevice() {
     return true;
 }
 
+// 创建逻辑设备与队列。
 bool VKRender::CreateLogicalDevice() {
     VulkanQueueFamilyIndices indices = FindQueueFamilies(m_physicalDevice);
 
@@ -575,6 +632,7 @@ bool VKRender::CreateLogicalDevice() {
     return true;
 }
 
+// 创建交换链。
 bool VKRender::CreateSwapchain() {
     VulkanSwapchainSupportDetails swapChainSupport = QuerySwapchainSupport(m_physicalDevice);
 
@@ -631,6 +689,7 @@ bool VKRender::CreateSwapchain() {
     return true;
 }
 
+// 重建 Vulkan 交换链。
 bool VKRender::RecreateSwapchain() {
     vkDeviceWaitIdle(m_device);
 
@@ -645,6 +704,7 @@ bool VKRender::RecreateSwapchain() {
     return true;
 }
 
+// 为交换链图像创建视图。
 bool VKRender::CreateImageViews() {
     m_swapchainImageViews.resize(m_swapchainImages.size());
 
@@ -673,6 +733,7 @@ bool VKRender::CreateImageViews() {
     return true;
 }
 
+// 创建渲染通道。
 bool VKRender::CreateRenderPass() {
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = m_swapchainImageFormat;
@@ -718,10 +779,12 @@ bool VKRender::CreateRenderPass() {
     return true;
 }
 
+// 创建图形管线。
 bool VKRender::CreatePipelines() {
     return true;
 }
 
+// 创建帧缓冲。
 bool VKRender::CreateFramebuffers() {
     m_swapchainFramebuffers.resize(m_swapchainImageViews.size());
 
@@ -746,6 +809,7 @@ bool VKRender::CreateFramebuffers() {
     return true;
 }
 
+// 创建命令池。
 bool VKRender::CreateCommandPool() {
     VulkanQueueFamilyIndices queueFamilyIndices = FindQueueFamilies(m_physicalDevice);
 
@@ -768,6 +832,7 @@ bool VKRender::CreateCommandPool() {
     return true;
 }
 
+// 分配每帧命令缓冲。
 bool VKRender::CreateCommandBuffers() {
     m_commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 
@@ -785,6 +850,7 @@ bool VKRender::CreateCommandBuffers() {
     return true;
 }
 
+// 创建信号量与围栏。
 bool VKRender::CreateSyncObjects() {
     m_imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
     m_renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
@@ -809,6 +875,7 @@ bool VKRender::CreateSyncObjects() {
     return true;
 }
 
+// 清理 Vulkan 交换链资源。
 void VKRender::CleanupSwapchain() {
     for (auto framebuffer : m_swapchainFramebuffers) {
         vkDestroyFramebuffer(m_device, framebuffer, nullptr);
@@ -827,6 +894,7 @@ void VKRender::CleanupSwapchain() {
 }
 
 
+// 查找图形与呈现队列族。
 VulkanQueueFamilyIndices VKRender::FindQueueFamilies(VkPhysicalDevice device) {
     VulkanQueueFamilyIndices indices;
 
@@ -855,6 +923,7 @@ VulkanQueueFamilyIndices VKRender::FindQueueFamilies(VkPhysicalDevice device) {
     return indices;
 }
 
+// 查询表面格式与呈现模式。
 VulkanSwapchainSupportDetails VKRender::QuerySwapchainSupport(VkPhysicalDevice device) {
     VulkanSwapchainSupportDetails details;
 
@@ -877,6 +946,7 @@ VulkanSwapchainSupportDetails VKRender::QuerySwapchainSupport(VkPhysicalDevice d
     return details;
 }
 
+// 判断物理设备是否满足交换链需求。
 bool VKRender::IsDeviceSuitable(VkPhysicalDevice device) {
     VulkanQueueFamilyIndices indices = FindQueueFamilies(device);
 
@@ -901,6 +971,7 @@ bool VKRender::IsDeviceSuitable(VkPhysicalDevice device) {
     return indices.IsComplete() && extensionsSupported && swapChainAdequate;
 }
 
+// 评估 Vulkan 物理设备。
 int VKRender::RateDevice(VkPhysicalDevice device) {
     VkPhysicalDeviceProperties deviceProperties;
     vkGetPhysicalDeviceProperties(device, &deviceProperties);
@@ -924,6 +995,7 @@ int VKRender::RateDevice(VkPhysicalDevice device) {
 }
 
 
+// 选择交换链表面格式。
 VkSurfaceFormatKHR VKRender::ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
     for (const auto& availableFormat : availableFormats) {
         if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB &&
@@ -934,6 +1006,7 @@ VkSurfaceFormatKHR VKRender::ChooseSwapSurfaceFormat(const std::vector<VkSurface
     return availableFormats[0];
 }
 
+// 选择呈现模式。
 VkPresentModeKHR VKRender::ChooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
     for (const auto& availablePresentMode : availablePresentModes) {
         if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
@@ -943,6 +1016,7 @@ VkPresentModeKHR VKRender::ChooseSwapPresentMode(const std::vector<VkPresentMode
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
+// 选择交换链分辨率。
 VkExtent2D VKRender::ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
     if (capabilities.currentExtent.width != UINT32_MAX) {
         return capabilities.currentExtent;
@@ -965,6 +1039,7 @@ VkExtent2D VKRender::ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabiliti
 }
 
 
+// 按过滤条件查找内存类型索引。
 uint32_t VKRender::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProperties);
@@ -978,6 +1053,7 @@ uint32_t VKRender::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags pro
     throw std::runtime_error("未找到合适的内存类型");
 }
 
+// 从 SPIR-V 创建着色器模块。
 VkResult VKRender::CreateShaderModule(const std::vector<char>& code, VkShaderModule* shaderModule) {
     VkShaderModuleCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -987,6 +1063,7 @@ VkResult VKRender::CreateShaderModule(const std::vector<char>& code, VkShaderMod
     return vkCreateShaderModule(m_device, &createInfo, nullptr, shaderModule);
 }
 
+// 处理 Vulkan 调试回调。
 VKAPI_ATTR VkBool32 VKAPI_CALL VKRender::DebugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
     VkDebugUtilsMessageTypeFlagsEXT type,
@@ -997,6 +1074,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VKRender::DebugCallback(
 }
 
 
+// 读取着色器文件。
 std::vector<char> VKRender::ReadShaderFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
 
@@ -1014,6 +1092,7 @@ std::vector<char> VKRender::ReadShaderFile(const std::string& filename) {
     return buffer;
 }
 
+// 创建着色器模块，失败则抛错。
 VkShaderModule VKRender::CreateShaderModuleHelper(const std::vector<char>& code) {
     VkShaderModule shaderModule;
     if (CreateShaderModule(code, &shaderModule) != VK_SUCCESS) {
@@ -1022,24 +1101,34 @@ VkShaderModule VKRender::CreateShaderModuleHelper(const std::vector<char>& code)
     return shaderModule;
 }
 
+// 提交异步任务。
 void VKRender::SubmitAsync(Render::AsyncTask task) {
     if (!task || IsShuttingDown()) return;
-    QThreadPool::globalInstance()->start(new VKFunctionRunnable(std::move(task)));
+    if (m_asyncThreadPool) {
+        m_asyncThreadPool->start(new VKFunctionRunnable(std::move(task)));
+    }
 }
 
+// 提交异步任务。
 void VKRender::SubmitAsync(QRunnable* task) {
     if (!task || IsShuttingDown()) return;
-    QThreadPool::globalInstance()->start(task);
+    if (m_asyncThreadPool) {
+        m_asyncThreadPool->start(task);
+    }
 }
 
 
+// 获取 Vulkan 逻辑设备。
 VkDevice VKRender::GetDevice() const { return m_device; }
+// 获取 Vulkan 物理设备。
 VkPhysicalDevice VKRender::GetPhysicalDevice() const { return m_physicalDevice; }
 
+// 获取当前命令缓冲区。
 VkCommandBuffer VKRender::GetCurrentCommandBuffer() const { return m_commandBuffers[m_currentFrame]; }
 
 
 
+// 获取指定拓扑的图形管线。
 VkPipeline VKRender::GetPipeline(DrawTopology topology) const {
     if (topology >= 0 && topology < DT_COUNT) {
         return m_pipelines[topology];
@@ -1048,7 +1137,9 @@ VkPipeline VKRender::GetPipeline(DrawTopology topology) const {
 }
 
 
+// 设置 Win32 表面（外部所有）。
 void VKRender::SetSurface(VkSurfaceKHR surface) { m_surface = surface; }
+// 设置外部 VkInstance。
 void VKRender::SetInstance(VkInstance instance) { m_instance = instance; m_externalInstance = true; }
 
 #include <iostream>
@@ -1060,11 +1151,13 @@ VKRender2D::VKRender2D() {}
 VKRender2D::~VKRender2D() {}
 
 
+// 处理鼠标按下。
 void VKRender2D::OnMouseDown(float nx, float ny, int button) {
     m_mouseButton = button;
     m_lastMouse = glm::vec2(nx, ny);
 }
 
+// 处理鼠标移动。
 void VKRender2D::OnMouseMove(float nx, float ny) {
     if (m_mouseButton < 0) return;
     glm::vec2 delta = glm::vec2(nx, ny) - m_lastMouse;
@@ -1079,16 +1172,19 @@ void VKRender2D::OnMouseMove(float nx, float ny) {
     }
 }
 
+// 处理鼠标松开。
 void VKRender2D::OnMouseUp(int /*button*/) {
     m_mouseButton = -1;
 }
 
+// 处理滚轮缩放。
 void VKRender2D::OnMouseWheel(float delta) {
     m_zoomLevel *= (delta > 0.0f) ? 0.85f : 1.18f;
     m_zoomLevel = glm::clamp(m_zoomLevel, 0.01f, 100.0f);
 }
 
 
+// 后端初始化完成后的钩子。
 bool VKRender2D::OnInitialize() {
     m_clearValueCount = 1;
     m_clearValues[0].color = { m_clearColor.x, m_clearColor.y, m_clearColor.z, m_clearColor.w };
@@ -1100,6 +1196,7 @@ bool VKRender2D::OnInitialize() {
     return true;
 }
 
+// 关闭前释放后端资源的钩子。
 void VKRender2D::OnShutdown() {
     if (m_descriptorPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
@@ -1112,6 +1209,7 @@ void VKRender2D::OnShutdown() {
     }
 }
 
+// 每帧开始时的钩子。
 void VKRender2D::OnBeginFrame() {
     UpdateCameraUBO();
 
@@ -1119,9 +1217,11 @@ void VKRender2D::OnBeginFrame() {
         m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
 }
 
+// 每帧结束时的钩子。
 void VKRender2D::OnEndFrame() {}
 
 
+// 创建图形管线。
 bool VKRender2D::CreatePipelines() {
     auto vertShaderCode = ReadShaderFile("res/2d_vert.spv");
     auto fragShaderCode = ReadShaderFile("res/2d_frag.spv");
@@ -1237,6 +1337,7 @@ bool VKRender2D::CreatePipelines() {
 }
 
 
+// 创建描述符集布局。
 bool VKRender2D::CreateDescriptorSetLayout() {
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
     uboLayoutBinding.binding = 0;
@@ -1257,6 +1358,7 @@ bool VKRender2D::CreateDescriptorSetLayout() {
     return true;
 }
 
+// 创建并映射 UBO。
 bool VKRender2D::CreateUniformBuffers() {
     VkDeviceSize bufferSize = sizeof(CameraUBO2D);
 
@@ -1302,6 +1404,7 @@ bool VKRender2D::CreateUniformBuffers() {
     return true;
 }
 
+// 创建描述符池。
 bool VKRender2D::CreateDescriptorPool() {
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -1320,6 +1423,7 @@ bool VKRender2D::CreateDescriptorPool() {
     return true;
 }
 
+// 分配并写入描述符集。
 bool VKRender2D::CreateDescriptorSets() {
     std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, m_descriptorSetLayout);
 
@@ -1356,6 +1460,7 @@ bool VKRender2D::CreateDescriptorSets() {
     return true;
 }
 
+// 销毁 UBO 及其内存。
 void VKRender2D::DestroyUniformBuffers() {
     for (size_t i = 0; i < m_uniformBuffers.size(); i++) {
         if (m_uniformBuffersMapped[i] != nullptr) {
@@ -1376,6 +1481,7 @@ void VKRender2D::DestroyUniformBuffers() {
     m_uniformBuffersMapped.clear();
 }
 
+// 写入二维相机 UBO。
 void VKRender2D::UpdateCameraUBO() {
     float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
     float halfW = aspect * m_zoomLevel;
@@ -1415,11 +1521,13 @@ VKRender3D::~VKRender3D() {
 
 
 
+// 处理鼠标按下。
 void VKRender3D::OnMouseDown(float nx, float ny, int button) {
     m_mouseButton = button;
     m_lastMouse = glm::vec2(nx, ny);
 }
 
+// 处理鼠标移动。
 void VKRender3D::OnMouseMove(float nx, float ny) {
     if (m_mouseButton < 0) return;
     const glm::vec2 previousMouse = m_lastMouse;
@@ -1507,6 +1615,7 @@ void VKRender3D::OnMouseMove(float nx, float ny) {
     }
 }
 
+// 将鼠标位置映射到虚拟球面。
 glm::vec3 VKRender3D::ProjectToVirtualSphere(float nx, float ny) const {
     const float width = static_cast<float>(std::max(1u, m_framebufferWidth));
     const float height = static_cast<float>(std::max(1u, m_framebufferHeight));
@@ -1528,6 +1637,7 @@ glm::vec3 VKRender3D::ProjectToVirtualSphere(float nx, float ny) const {
     return glm::normalize(glm::vec3(x, y, z));
 }
 
+// 应用受约束的局部旋转。
 void VKRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
                                                     float angle) {
     if (std::abs(angle) <= std::numeric_limits<float>::epsilon()) return;
@@ -1559,16 +1669,19 @@ void VKRender3D::ApplyConstrainedLocalRotation(const glm::vec3& localAxis,
     m_modelRotation = rotationAt(allowed);
 }
 
+// 处理鼠标松开。
 void VKRender3D::OnMouseUp(int /*button*/) {
     m_mouseButton = -1;
 }
 
+// 处理滚轮缩放。
 void VKRender3D::OnMouseWheel(float delta) {
     m_orbitDistance *= (delta > 0.0f) ? 0.9f : 1.1f;
     m_orbitDistance = glm::clamp(m_orbitDistance, 0.1f, 1000.0f);
 }
 
 
+// 后端初始化完成后的钩子。
 bool VKRender3D::OnInitialize() {
     m_clearValueCount = 2;
     m_clearValues[0].color = { m_clearColor.x, m_clearColor.y, m_clearColor.z, m_clearColor.w };
@@ -1585,6 +1698,7 @@ bool VKRender3D::OnInitialize() {
     return true;
 }
 
+// 关闭前释放后端资源的钩子。
 void VKRender3D::OnShutdown() {
     DestroyDepthReadbackResources();
     DestroyShadowMap();
@@ -1602,6 +1716,7 @@ void VKRender3D::OnShutdown() {
     }
 }
 
+// 销毁图形管线的钩子。
 void VKRender3D::OnDestroyPipelines() {
     if (m_shadowPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_shadowPipeline, nullptr);
@@ -1609,10 +1724,12 @@ void VKRender3D::OnDestroyPipelines() {
     }
 }
 
+// 开始录制命令前的钩子。
 void VKRender3D::OnPrepareFrame() {
     EnsureDummyShadowReady();
 }
 
+// 每帧开始时的钩子。
 void VKRender3D::OnBeginFrame() {
     ProcessDepthReadback(m_currentFrame);
     UpdateUniformBuffer(m_currentFrame);
@@ -1621,11 +1738,13 @@ void VKRender3D::OnBeginFrame() {
         m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
 }
 
+// 交换链/帧缓冲重建后的钩子。
 void VKRender3D::OnRecreateSwapchain() {
     DestroyDepthResources();
 }
 
 
+// 创建渲染通道。
 bool VKRender3D::CreateRenderPass() {
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = m_swapchainImageFormat;
@@ -1692,6 +1811,7 @@ bool VKRender3D::CreateRenderPass() {
 }
 
 
+// 创建图形管线。
 bool VKRender3D::CreatePipelines() {
     auto vertShaderCode = ReadShaderFile("res/3d_vert.spv");
     auto fragShaderCode = ReadShaderFile("res/3d_frag.spv");
@@ -1840,6 +1960,7 @@ bool VKRender3D::CreatePipelines() {
 }
 
 
+// 创建帧缓冲。
 bool VKRender3D::CreateFramebuffers() {
     if (!CreateDepthResources()) return false;
 
@@ -1870,6 +1991,7 @@ bool VKRender3D::CreateFramebuffers() {
 }
 
 
+// 选择主深度格式。
 VkFormat VKRender3D::FindDepthFormat() {
     return FindSupportedFormat(
         { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT },
@@ -1877,6 +1999,7 @@ VkFormat VKRender3D::FindDepthFormat() {
         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
 }
 
+// 选择阴影深度格式。
 VkFormat VKRender3D::FindShadowDepthFormat() {
     return FindSupportedFormat(
         { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT },
@@ -1884,6 +2007,7 @@ VkFormat VKRender3D::FindShadowDepthFormat() {
         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
 }
 
+// 在候选格式里找设备支持项。
 VkFormat VKRender3D::FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features) {
     for (VkFormat format : candidates) {
         VkFormatProperties props;
@@ -1898,10 +2022,12 @@ VkFormat VKRender3D::FindSupportedFormat(const std::vector<VkFormat>& candidates
     throw std::runtime_error("未找到支持的深度格式");
 }
 
+// 查询格式是否含模板。
 bool VKRender3D::HasStencilComponent(VkFormat format) {
     return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
 }
 
+// 创建深度附件。
 bool VKRender3D::CreateDepthResources() {
     VkFormat depthFormat = FindDepthFormat();
 
@@ -1963,6 +2089,7 @@ bool VKRender3D::CreateDepthResources() {
     return true;
 }
 
+// 销毁深度附件。
 void VKRender3D::DestroyDepthResources() {
     if (m_depthImageView != VK_NULL_HANDLE) {
         vkDestroyImageView(m_device, m_depthImageView, nullptr);
@@ -1979,6 +2106,7 @@ void VKRender3D::DestroyDepthResources() {
 }
 
 
+// 创建描述符集布局。
 bool VKRender3D::CreateDescriptorSetLayout() {
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
     uboLayoutBinding.binding = 0;
@@ -2008,6 +2136,7 @@ bool VKRender3D::CreateDescriptorSetLayout() {
     return true;
 }
 
+// 创建并映射 UBO。
 bool VKRender3D::CreateUniformBuffers() {
     VkDeviceSize bufferSize = sizeof(UniformBufferObject3D);
 
@@ -2055,6 +2184,7 @@ bool VKRender3D::CreateUniformBuffers() {
     return true;
 }
 
+// 创建描述符池。
 bool VKRender3D::CreateDescriptorPool() {
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -2075,6 +2205,7 @@ bool VKRender3D::CreateDescriptorPool() {
     return true;
 }
 
+// 分配并写入描述符集。
 bool VKRender3D::CreateDescriptorSets() {
     std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT * 2, m_descriptorSetLayout);
 
@@ -2119,6 +2250,7 @@ bool VKRender3D::CreateDescriptorSets() {
     return true;
 }
 
+// 销毁 UBO 及其内存。
 void VKRender3D::DestroyUniformBuffers() {
     for (size_t i = 0; i < m_uniformBuffers.size(); i++) {
         if (m_uniformBuffersMapped[i] != nullptr) {
@@ -2139,6 +2271,7 @@ void VKRender3D::DestroyUniformBuffers() {
     m_uniformBuffersMapped.clear();
 }
 
+// 按当前相机与显示选项写入 UBO。
 void VKRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
 
@@ -2186,18 +2319,22 @@ void VKRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
+// 开关线框模式。
 void VKRender3D::SetWireframeEnabled(bool enabled) {
     m_wireframeMode = enabled;
 }
 
+// 开关灰度显示。
 void VKRender3D::SetGrayEnabled(bool enabled) {
     m_grayEnabled = enabled;
 }
 
+// 开关染色。
 void VKRender3D::SetDyeEnabled(bool enabled) {
     m_dyeEnabled = enabled;
 }
 
+// 开关光照分析。
 void VKRender3D::SetLightAnalysisEnabled(bool enabled) {
     m_lightAnalysisEnabled = enabled;
     if (!m_initialized) return;
@@ -2212,6 +2349,7 @@ void VKRender3D::SetLightAnalysisEnabled(bool enabled) {
     EnsureShadowMapForAnalysis();
 }
 
+// 设置阴影贴图边长。
 void VKRender3D::SetShadowTextureSize(uint32_t size) {
     m_shadowTextureSize = size;
     if (m_initialized && m_lightAnalysisEnabled) {
@@ -2219,38 +2357,46 @@ void VKRender3D::SetShadowTextureSize(uint32_t size) {
     }
 }
 
+// 获取阴影贴图尺寸。
 uint32_t VKRender3D::GetShadowTextureSize() const {
     return m_shadowTextureSize;
 }
 
+// 查询阴影贴图是否就绪。
 bool VKRender3D::IsShadowMapReady() const {
     return m_shadowMapReady;
 }
 
+// 读取并清除阴影贴图状态。
 std::string VKRender3D::TakeShadowMapStatus() {
     std::string message = std::move(m_shadowMapStatus);
     m_shadowMapStatus.clear();
     return message;
 }
 
+// 设置阴影场景包围盒。
 void VKRender3D::SetShadowSceneBounds(const Vec3& boundsMin, const Vec3& boundsMax, bool valid) {
     m_shadowBoundsValid = valid;
     m_shadowBoundsMin = glm::vec3(boundsMin.x, boundsMin.y, boundsMin.z);
     m_shadowBoundsMax = glm::vec3(boundsMax.x, boundsMax.y, boundsMax.z);
 }
 
+// 记录阴影贴图状态文本。
 void VKRender3D::SetShadowMapStatus(const std::string& message) {
     m_shadowMapStatus = message;
 }
 
+// 判断当前是否应渲染阴影。
 bool VKRender3D::ShouldRenderShadows() const {
     return m_lightAnalysisEnabled && m_sunAboveHorizon && m_shadowMapReady && !m_shadowPassActive;
 }
 
+// 获取阴影图形管线。
 VkPipeline VKRender3D::GetShadowPipeline() const {
     return m_shadowPipeline;
 }
 
+// 计算光源视图投影矩阵。
 glm::mat4 VKRender3D::ComputeLightViewProj() const {
     glm::vec3 boundsMin = m_shadowBoundsMin;
     glm::vec3 boundsMax = m_shadowBoundsMax;
@@ -2308,6 +2454,7 @@ glm::mat4 VKRender3D::ComputeLightViewProj() const {
     return lightProj * lightView;
 }
 
+// 把阴影贴图写入描述符集。
 void VKRender3D::UpdateShadowDescriptors() {
     if (m_device == VK_NULL_HANDLE || m_shadowSampler == VK_NULL_HANDLE) return;
 
@@ -2345,6 +2492,7 @@ void VKRender3D::UpdateShadowDescriptors() {
     }
 }
 
+// 转换深度图像布局。
 void VKRender3D::TransitionDepthImage(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                                           VkAccessFlags srcAccess, VkAccessFlags dstAccess,
                                           VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage) {
@@ -2370,6 +2518,7 @@ void VKRender3D::TransitionDepthImage(VkImage image, VkImageLayout oldLayout, Vk
     EndSingleTimeCommands(cmd);
 }
 
+// 创建阴影比较采样器。
 bool VKRender3D::CreateShadowSampler() {
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -2390,6 +2539,7 @@ bool VKRender3D::CreateShadowSampler() {
     return true;
 }
 
+// 创建 1x1 占位阴影贴图。
 bool VKRender3D::CreateDummyShadowMap() {
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     try {
@@ -2450,6 +2600,7 @@ bool VKRender3D::CreateDummyShadowMap() {
     return true;
 }
 
+// 保证占位阴影图布局可用。
 bool VKRender3D::EnsureDummyShadowReady() {
     if (m_dummyShadowReady || m_dummyShadowImage == VK_NULL_HANDLE) return m_dummyShadowReady;
     TransitionDepthImage(m_dummyShadowImage,
@@ -2480,6 +2631,7 @@ bool VKRender3D::EnsureDummyShadowReady() {
     return true;
 }
 
+// 创建仅深度的阴影渲染通道。
 bool VKRender3D::CreateShadowRenderPass() {
     VkFormat depthFormat = m_shadowDepthFormat;
     if (depthFormat == VK_FORMAT_UNDEFINED) {
@@ -2538,6 +2690,7 @@ bool VKRender3D::CreateShadowRenderPass() {
     return true;
 }
 
+// 创建阴影图形管线。
 bool VKRender3D::CreateShadowPipeline() {
     auto vertShaderCode = ReadShaderFile("res/3d_shadow_vert.spv");
     auto fragShaderCode = ReadShaderFile("res/3d_shadow_frag.spv");
@@ -2631,6 +2784,7 @@ bool VKRender3D::CreateShadowPipeline() {
     return true;
 }
 
+// 按给定边长创建阴影深度贴图。
 bool VKRender3D::CreateShadowMap(uint32_t size) {
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(m_physicalDevice, &properties);
@@ -2733,6 +2887,7 @@ bool VKRender3D::CreateShadowMap(uint32_t size) {
     return true;
 }
 
+// 销毁阴影贴图与帧缓冲。
 void VKRender3D::DestroyShadowMap() {
     if (m_shadowFramebuffer != VK_NULL_HANDLE) {
         vkDestroyFramebuffer(m_device, m_shadowFramebuffer, nullptr);
@@ -2754,6 +2909,7 @@ void VKRender3D::DestroyShadowMap() {
     m_allocatedShadowTextureSize = 0;
 }
 
+// 销毁占位阴影贴图。
 void VKRender3D::DestroyDummyShadowMap() {
     if (m_dummyShadowView != VK_NULL_HANDLE) {
         vkDestroyImageView(m_device, m_dummyShadowView, nullptr);
@@ -2770,6 +2926,7 @@ void VKRender3D::DestroyDummyShadowMap() {
     m_dummyShadowReady = false;
 }
 
+// 销毁阴影采样器与渲染通道。
 void VKRender3D::DestroyShadowSupport() {
     if (m_shadowRenderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(m_device, m_shadowRenderPass, nullptr);
@@ -2781,6 +2938,7 @@ void VKRender3D::DestroyShadowSupport() {
     }
 }
 
+// 尝试分配指定尺寸的阴影贴图。
 bool VKRender3D::TryAllocateShadowMap(uint32_t size) {
     DestroyShadowMap();
     if (!CreateShadowMap(size)) {
@@ -2793,6 +2951,7 @@ bool VKRender3D::TryAllocateShadowMap(uint32_t size) {
     return true;
 }
 
+// 光照分析开启时保证阴影贴图可用。
 bool VKRender3D::EnsureShadowMapForAnalysis() {
     if (!m_initialized || !m_lightAnalysisEnabled) return false;
     if (m_shadowMapReady && m_allocatedShadowTextureSize == m_shadowTextureSize) {
@@ -2828,6 +2987,7 @@ bool VKRender3D::EnsureShadowMapForAnalysis() {
     return false;
 }
 
+// 开始向阴影贴图绘制。
 bool VKRender3D::BeginShadowPass() {
     if (!m_initialized || !m_lightAnalysisEnabled || !m_sunAboveHorizon) return false;
     EnsureDummyShadowReady();
@@ -2866,17 +3026,20 @@ bool VKRender3D::BeginShadowPass() {
     return true;
 }
 
+// 结束阴影通道并恢复主帧缓冲。
 void VKRender3D::EndShadowPass() {
     if (!m_shadowPassActive) return;
     vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
     m_shadowPassActive = false;
 }
 
+// 设置太阳计算用纬度。
 void VKRender3D::SetLatitude(float latitude) {
     m_latitude = latitude;
     UpdateSunDirection();
 }
 
+// 设置太阳计算用日期。
 void VKRender3D::SetLightDate(int year, int month, int day) {
     m_lightYear = year;
     m_lightMonth = month;
@@ -2884,19 +3047,23 @@ void VKRender3D::SetLightDate(int year, int month, int day) {
     UpdateSunDirection();
 }
 
+// 设置真太阳时（分钟）。
 void VKRender3D::SetLightTimeMinutes(int minutes) {
     m_lightTimeMinutes = minutes;
     UpdateSunDirection();
 }
 
+// 获取太阳光方向。
 glm::vec3 VKRender3D::GetSunDirection() const {
     return m_sunDirection;
 }
 
+// 查询太阳是否位于地平线以上。
 bool VKRender3D::IsSunAboveHorizon() const {
     return m_sunAboveHorizon;
 }
 
+// 按纬度/日期/真太阳时更新太阳方向。
 void VKRender3D::UpdateSunDirection() {
     SolarPositionQuery query{};
     query.latitudeDegrees = m_latitude;
@@ -2910,6 +3077,7 @@ void VKRender3D::UpdateSunDirection() {
     m_sunAboveHorizon = sun.aboveHorizon;
 }
 
+// 开关正射投影。
 void VKRender3D::SetOrthographicEnabled(bool enabled) {
     if (enabled && !m_orthographicEnabled) {
         m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
@@ -2920,11 +3088,13 @@ void VKRender3D::SetOrthographicEnabled(bool enabled) {
     m_orthographicEnabled = enabled;
 }
 
+// 设置轨道旋转中心。
 void VKRender3D::SetOrbitCenter(const Vec3& normalizedCenter) {
     m_orbitCenter = glm::vec3(
         normalizedCenter.x, normalizedCenter.y, normalizedCenter.z);
 }
 
+// 复位旋转、平移和轨道距离。
 void VKRender3D::ResetView(float orbitDistance) {
     m_modelRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     m_panOffset = glm::vec3(0.0f);
@@ -2936,6 +3106,7 @@ void VKRender3D::ResetView(float orbitDistance) {
     m_lastVerticalLocalAxis = glm::vec3(1.0f, 0.0f, 0.0f);
 }
 
+// 设置归一化坐标到世界坐标的变换。
 void VKRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
                                                  float normalizationScale) {
     if (!std::isfinite(normalizationScale) || normalizationScale <= 0.0f) {
@@ -2951,6 +3122,7 @@ void VKRender3D::SetCoordinateNormalization(const Vec3& sourceCenter,
     m_normalizedToWorld = translateToSource * undoScale;
 }
 
+// 初始化单位矩阵。
 void VKRender3D::InitIdentityMatrix(float mat[4][4]) {
     memset(mat, 0, sizeof(float) * 16);
     mat[0][0] = 1.0f;
@@ -2960,6 +3132,7 @@ void VKRender3D::InitIdentityMatrix(float mat[4][4]) {
 }
 
 
+// 创建深度回读缓冲。
 bool VKRender3D::CreateDepthReadbackResources() {
     VkDeviceSize bufferSize = sizeof(float);
 
@@ -2997,6 +3170,7 @@ bool VKRender3D::CreateDepthReadbackResources() {
     return true;
 }
 
+// 销毁深度回读缓冲。
 void VKRender3D::DestroyDepthReadbackResources() {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         if (m_depthReadbackMapped[i] != nullptr) {
@@ -3015,12 +3189,14 @@ void VKRender3D::DestroyDepthReadbackResources() {
     }
 }
 
+// 请求把屏幕点反算为世界坐标。
 void VKRender3D::RequestCoordReadback(float ndcX, float ndcY) {
     m_depthReadbackRequested = true;
     m_requestedNDCX = ndcX;
     m_requestedNDCY = ndcY;
 }
 
+// 每帧结束时的钩子。
 void VKRender3D::OnEndFrame() {
     if (!m_depthReadbackRequested) return;
     if (m_depthImage == VK_NULL_HANDLE) return;
@@ -3083,6 +3259,7 @@ void VKRender3D::OnEndFrame() {
     m_pendingNDCY[m_currentFrame] = m_requestedNDCY;
 }
 
+// 把回读深度反投影为世界坐标。
 void VKRender3D::ProcessDepthReadback(uint32_t frameIndex) {
     if (!m_pendingReadback[frameIndex]) return;
     m_pendingReadback[frameIndex] = false;
@@ -3129,6 +3306,7 @@ void VKRender3D::ProcessDepthReadback(uint32_t frameIndex) {
     m_newCoordAvailable = true;
 }
 
+// 查询是否有新的世界坐标。
 bool VKRender3D::HasNewWorldCoord() const {
     bool v = m_newCoordAvailable;
     m_newCoordAvailable = false;
@@ -3136,6 +3314,9 @@ bool VKRender3D::HasNewWorldCoord() const {
 }
 
 
+// 获取最近一次世界坐标的 X 分量。
 float VKRender3D::GetLastWorldX() const { return m_lastWorldCoord[0]; }
+// 获取最近一次世界坐标的 Y 分量。
 float VKRender3D::GetLastWorldY() const { return m_lastWorldCoord[1]; }
+// 获取最近一次世界坐标的 Z 分量。
 float VKRender3D::GetLastWorldZ() const { return m_lastWorldCoord[2]; }

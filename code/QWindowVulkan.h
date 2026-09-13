@@ -22,18 +22,25 @@ public:
     explicit QWindowVulkan(VKRender* renderer);
     ~QWindowVulkan();
 
+    // 返回 Win32 VkSurfaceKHR。
     VkSurfaceKHR GetSurface() const;
+    // 返回本窗口创建的 VkInstance。
     VkInstance GetVkInstance() const;
+    // 更换窗口绑定的渲染器。
     void SetRenderer(VKRender* renderer);
 
 signals:
+    // 实例与表面就绪后发出。
     void vulkanReady();
 
 protected:
+    // 首次露出时创建后端并 Initialize。
     void exposeEvent(QExposeEvent* event) override;
+    // 窗口尺寸变化时更新帧缓冲大小。
     void resizeEvent(QResizeEvent* event) override;
 
 private:
+    // 创建 VkInstance 与 Win32 表面。
     bool CreateVulkanSurface();
 
     VKRender* m_renderer;

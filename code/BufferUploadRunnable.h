@@ -35,6 +35,7 @@ public:
         MultiCallback callback);
 
     ~BufferUploadRunnable() override;
+    // 执行后台任务。
     void run() override;
 
 private:

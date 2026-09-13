@@ -19,6 +19,7 @@ public:
     explicit ObjParseRunnable(std::string filePath, Callback callback,
                               DiagnosticCallback diagnosticCallback = {});
     ~ObjParseRunnable() override;
+    // 执行后台任务。
     void run() override;
 
 private:
@@ -26,4 +27,3 @@ private:
     Callback m_callback;
     DiagnosticCallback m_diagnosticCallback;
 };
-

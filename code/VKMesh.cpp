@@ -1,7 +1,6 @@
 ﻿#include "VKMesh.h"
 #include "BufferUploadRunnable.h"
-#include <QApplication>
-#include <QMetaObject>
+#include "Render/VKRender.h"
 
 VKMesh::VKMesh()
     : m_alive(std::make_shared<std::atomic<bool>>(true))
@@ -14,6 +13,7 @@ VKMesh::~VKMesh() {
 }
 
 
+// 启动 Mesh 数据的异步上传。
 void VKMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
                               std::vector<uint32_t>&& indices) {
     if (!m_pRender || vertices.empty() || indices.empty()) return;
@@ -40,10 +40,8 @@ void VKMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
     segments.push_back({ vertData->data(), vertSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT });
     segments.push_back({ idxData->data(),  idxSize,  VK_BUFFER_USAGE_INDEX_BUFFER_BIT });
 
-    auto segsCopy = std::make_shared<std::vector<BufferUploadRunnable::UploadSegment>>(segments);
-
     auto task = new BufferUploadRunnable(device, phyDev, std::move(segments),
-        [alive, this, device, vertData, idxData, segsCopy, gen](VkBuffer staging,
+        [alive, this, device, vertData, idxData, gen](VkBuffer staging,
                                                                 VkDeviceMemory stagingMem,
             const std::vector<BufferUploadRunnable::UploadSegment>& resultSegs) {
             if (!*alive) {
@@ -63,6 +61,7 @@ void VKMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
     m_pRender->SubmitAsync(task);
 }
 
+// 同步上传 Mesh 数据。
 void VKMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
                                   const std::vector<uint32_t>& indices) {
     if (!m_pRender || vertices.empty() || indices.empty()) return;
@@ -70,11 +69,15 @@ void VKMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
     DestroyBuffers();
     m_buffersReady = false;
 
-    CreateVertexBuffer(vertices);
-    CreateIndexBuffer(indices);
+    CreateVertexBuffer(vertices.data(),
+                       vertices.size() * sizeof(Vertex3D));
+    CreateIndexBuffer(indices.data(),
+                      indices.size() * sizeof(uint32_t),
+                      static_cast<uint32_t>(indices.size()));
     m_buffersReady = true;
 }
 
+// 绘制自身；Layer 则遍历子对象。
 void VKMesh::Render(int mode) {
     if (!IsVisible() || !m_buffersReady || !m_pRender) return;
     if (m_indexCount == 0) return;
@@ -101,160 +104,50 @@ void VKMesh::Render(int mode) {
 }
 
 
-void VKMesh::OnVertexBufferUploaded(VkBuffer staging, VkDeviceMemory stagingMem,
-                                         VkDeviceSize bufferSize) {
-    VkDevice device = m_pRender->GetDevice();
-
-    VkBufferCreateInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bi.size = bufferSize;
-    bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VkBuffer devBuf = VK_NULL_HANDLE;
-    if (vkCreateBuffer(device, &bi, nullptr, &devBuf) != VK_SUCCESS) {
-        CleanupStaging(staging, stagingMem);
-        return;
-    }
-
-    VkMemoryRequirements mr;
-    vkGetBufferMemoryRequirements(device, devBuf, &mr);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize = mr.size;
-    ai.memoryTypeIndex = FindMemoryType(mr.memoryTypeBits,
-                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    VkDeviceMemory devMem = VK_NULL_HANDLE;
-    if (vkAllocateMemory(device, &ai, nullptr, &devMem) != VK_SUCCESS) {
-        vkDestroyBuffer(device, devBuf, nullptr);
-        CleanupStaging(staging, stagingMem);
-        return;
-    }
-    vkBindBufferMemory(device, devBuf, devMem, 0);
-
-    VkCommandBuffer cmd = m_pRender->BeginSingleTimeCommands();
-    VkBufferCopy region{};
-    region.size = bufferSize;
-    vkCmdCopyBuffer(cmd, staging, devBuf, 1, &region);
-    m_pRender->EndSingleTimeCommands(cmd);
-
-    vkDestroyBuffer(device, staging, nullptr);
-    vkFreeMemory(device, stagingMem, nullptr);
-
-    m_vertexBuffer       = devBuf;
-    m_vertexBufferMemory = devMem;
-    CheckBuffersReady();
-}
-
-void VKMesh::OnIndexBufferUploaded(VkBuffer staging, VkDeviceMemory stagingMem,
-                                        VkDeviceSize bufferSize) {
-    VkDevice device = m_pRender->GetDevice();
-
-    VkBufferCreateInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bi.size = bufferSize;
-    bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VkBuffer devBuf = VK_NULL_HANDLE;
-    if (vkCreateBuffer(device, &bi, nullptr, &devBuf) != VK_SUCCESS) {
-        CleanupStaging(staging, stagingMem);
-        return;
-    }
-
-    VkMemoryRequirements mr;
-    vkGetBufferMemoryRequirements(device, devBuf, &mr);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize = mr.size;
-    ai.memoryTypeIndex = FindMemoryType(mr.memoryTypeBits,
-                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    VkDeviceMemory devMem = VK_NULL_HANDLE;
-    if (vkAllocateMemory(device, &ai, nullptr, &devMem) != VK_SUCCESS) {
-        vkDestroyBuffer(device, devBuf, nullptr);
-        CleanupStaging(staging, stagingMem);
-        return;
-    }
-    vkBindBufferMemory(device, devBuf, devMem, 0);
-
-    VkCommandBuffer cmd = m_pRender->BeginSingleTimeCommands();
-    VkBufferCopy region{};
-    region.size = bufferSize;
-    vkCmdCopyBuffer(cmd, staging, devBuf, 1, &region);
-    m_pRender->EndSingleTimeCommands(cmd);
-
-    vkDestroyBuffer(device, staging, nullptr);
-    vkFreeMemory(device, stagingMem, nullptr);
-
-    m_indexBuffer       = devBuf;
-    m_indexBufferMemory = devMem;
-    CheckBuffersReady();
-}
-
+// 处理合并缓冲区上传完成回调。
 void VKMesh::OnCombinedBuffersUploaded(
     VkBuffer staging, VkDeviceMemory stagingMem,
     const std::vector<BufferUploadRunnable::UploadSegment>& segments)
 {
-    if (segments.size() < 2) return;
-    VkDevice device = m_pRender->GetDevice();
-
-    auto createDevBuf = [&](const BufferUploadRunnable::UploadSegment& seg,
-                            VkBuffer& outBuf, VkDeviceMemory& outMem) {
-        VkBufferCreateInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bi.size = seg.size;
-        bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | seg.usage;
-        bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-        VkBuffer devBuf = VK_NULL_HANDLE;
-        if (vkCreateBuffer(device, &bi, nullptr, &devBuf) != VK_SUCCESS) return false;
-
-        VkMemoryRequirements mr;
-        vkGetBufferMemoryRequirements(device, devBuf, &mr);
-        VkMemoryAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.allocationSize = mr.size;
-        ai.memoryTypeIndex = FindMemoryType(mr.memoryTypeBits,
-                                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-        VkDeviceMemory devMem = VK_NULL_HANDLE;
-        if (vkAllocateMemory(device, &ai, nullptr, &devMem) != VK_SUCCESS) {
-            vkDestroyBuffer(device, devBuf, nullptr);
-            return false;
-        }
-        vkBindBufferMemory(device, devBuf, devMem, 0);
-
-        VkCommandBuffer cmd = m_pRender->BeginSingleTimeCommands();
-        VkBufferCopy region{};
-        region.srcOffset = seg.stagingOffset;
-        region.size = seg.size;
-        vkCmdCopyBuffer(cmd, staging, devBuf, 1, &region);
-        m_pRender->EndSingleTimeCommands(cmd);
-
-        outBuf = devBuf;
-        outMem = devMem;
-        return true;
-    };
-
-    bool vertOk = createDevBuf(segments[0], m_vertexBuffer, m_vertexBufferMemory);
-    bool idxOk  = createDevBuf(segments[1], m_indexBuffer, m_indexBufferMemory);
-
-    vkDestroyBuffer(device, staging, nullptr);
-    vkFreeMemory(device, stagingMem, nullptr);
-
-    if (vertOk && idxOk) {
-        m_buffersReady = true;
+    if (!m_pRender || segments.size() < 2) {
+        CleanupStaging(staging, stagingMem);
+        return;
     }
+
+    VkBuffer vertexBuffer = VK_NULL_HANDLE;
+    VkBuffer indexBuffer = VK_NULL_HANDLE;
+    try {
+        vertexBuffer = m_pRender->CreateBufferFromStaging(
+            staging, segments[0].size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            segments[0].stagingOffset);
+        indexBuffer = m_pRender->CreateBufferFromStaging(
+            staging, segments[1].size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            segments[1].stagingOffset);
+    } catch (...) {
+        if (vertexBuffer != VK_NULL_HANDLE) {
+            m_pRender->DestroyBuffer(vertexBuffer);
+        }
+        if (indexBuffer != VK_NULL_HANDLE) {
+            m_pRender->DestroyBuffer(indexBuffer);
+        }
+        CleanupStaging(staging, stagingMem);
+        return;
+    }
+
+    CleanupStaging(staging, stagingMem);
+    m_vertexBuffer = vertexBuffer;
+    m_indexBuffer = indexBuffer;
+    m_buffersReady = true;
 }
 
+// 检查 Mesh GPU 缓冲区是否就绪。
 void VKMesh::CheckBuffersReady() {
     if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
         m_buffersReady = true;
     }
 }
 
+// 释放 staging 缓冲区资源。
 void VKMesh::CleanupStaging(VkBuffer staging, VkDeviceMemory stagingMem) {
     if (!m_pRender) return;
     VkDevice device = m_pRender->GetDevice();

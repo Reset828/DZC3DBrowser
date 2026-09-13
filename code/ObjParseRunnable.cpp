@@ -52,16 +52,19 @@ struct VertexKeyHash {
     }
 };
 
+// 判断是否为空格或制表符。
 bool IsSpace(char c) {
     return c == ' ' || c == '\t';
 }
 
+// 跳过无效或空白数据。
 void SkipSpace(const char*& ptr, const char* end) {
     while (ptr < end && IsSpace(*ptr)) {
         ++ptr;
     }
 }
 
+// 解析浮点数。
 bool ParseFloat(const char*& ptr, const char* end, float& value) {
     SkipSpace(ptr, end);
     if (ptr >= end) return false;
@@ -76,6 +79,7 @@ bool ParseFloat(const char*& ptr, const char* end, float& value) {
     return true;
 }
 
+// 解析整数。
 bool ParseInteger(std::string_view text, int& value) {
     if (text.empty()) return false;
     const char* begin = text.data();
@@ -84,6 +88,7 @@ bool ParseInteger(std::string_view text, int& value) {
     return result.ec == std::errc{} && result.ptr == end;
 }
 
+// 解析 OBJ 索引。
 bool ResolveIndex(int objIndex, size_t count, int& resolved) {
     if (objIndex > 0) {
         resolved = objIndex - 1;
@@ -99,6 +104,7 @@ bool ResolveIndex(int objIndex, size_t count, int& resolved) {
     return resolved >= 0 && static_cast<size_t>(resolved) < count;
 }
 
+// 解析相关数据。
 bool ParseFaceVertex(std::string_view token,
                      size_t positionCount,
                      size_t texCoordCount,
@@ -147,10 +153,12 @@ bool ParseFaceVertex(std::string_view token,
     return true;
 }
 
+// 计算向量差。
 Vec3 Subtract(const Vec3& a, const Vec3& b) {
     return {a.x - b.x, a.y - b.y, a.z - b.z};
 }
 
+// 计算向量叉积。
 Vec3 Cross(const Vec3& a, const Vec3& b) {
     return {
         a.y * b.z - a.z * b.y,
@@ -159,10 +167,12 @@ Vec3 Cross(const Vec3& a, const Vec3& b) {
     };
 }
 
+// 计算向量长度平方。
 float LengthSquared(const Vec3& value) {
     return value.x * value.x + value.y * value.y + value.z * value.z;
 }
 
+// 归一化向量并处理退化情况。
 Vec3 NormalizeOr(const Vec3& value, const Vec3& fallback) {
     const float lengthSquared = LengthSquared(value);
     if (!std::isfinite(lengthSquared) ||
@@ -175,6 +185,7 @@ Vec3 NormalizeOr(const Vec3& value, const Vec3& fallback) {
             value.z * inverseLength};
 }
 
+// 计算三角面的法线。
 Vec3 CalculateFaceNormal(const std::vector<FaceVertex>& face,
                          const std::vector<Vec3>& positions) {
     Vec3 normal{};
@@ -316,6 +327,7 @@ ObjParseRunnable::ObjParseRunnable(std::string filePath, Callback callback,
 
 ObjParseRunnable::~ObjParseRunnable() = default;
 
+// 执行后台任务。
 void ObjParseRunnable::run() {
     auto report = [diagnostic = m_diagnosticCallback](std::string message, bool isError) {
         if (!diagnostic) return;
