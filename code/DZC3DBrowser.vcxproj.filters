@@ -60,7 +60,6 @@
     <ClInclude Include="..\include\Light\SolarPosition.h">
       <Filter>头文件</Filter>
     </ClInclude>
-
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="QWindowVulkan.h">
@@ -131,5 +130,7 @@
     <None Include="res\2d.vert" />
     <None Include="res\3d.frag" />
     <None Include="res\3d.vert" />
+    <None Include="res\3d_shadow.frag" />
+    <None Include="res\3d_shadow.vert" />
   </ItemGroup>
 </Project>
