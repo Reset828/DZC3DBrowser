@@ -12,7 +12,7 @@ bool IsLeapYear(int year) {
     return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
 }
 
-// 获取指定月份的天数。
+// 返回指定年月的天数。
 int DaysInMonth(int year, int month) {
     static const int kDays[] = { 0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
     if (month == 2 && IsLeapYear(year)) {

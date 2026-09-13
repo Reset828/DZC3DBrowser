@@ -5,7 +5,7 @@
 #include "Math/EngineTypes.h"
 
 
-/**********
+/*******************************************************
     Object                 场景节点：可见性 / 颜色 / 父子
       |
       +-- Layer            子对象容器，遍历 Render
@@ -13,14 +13,13 @@
       |     \-- GLMesh
       +-- VKObject         Vulkan vertex / index buffer
             \-- VKMesh
-*************/
+********************************************************/
 class Object {
 public:
     Object();
     Object(const Object& obj);
     virtual ~Object();
 
-// operator=：复制对象的公共状态。
     Object& operator=(const Object& obj);
 
     enum ObjectType {
@@ -41,7 +40,7 @@ public:
 
     // 设置父对象。
     void SetParent(Object* pParent);
-    // 获取父对象。
+    // 返回父对象指针。
     Object* GetParent() const;
 
     // 设置脏标记。
@@ -54,17 +53,17 @@ public:
 
     // 设置对象可见性。
     void SetVisible(bool bVisible);
-    // 查询对象可见性。
+    // 查询对象是否可见。
     bool IsVisible() const;
 
     // 设置对象颜色。
     void SetColor(const Vec4& clr);
     // 设置对象颜色。
     void SetColor(float r, float g, float b, float a);
-    // 获取对象颜色。
+    // 返回对象颜色。
     Vec4 GetColor() const;
 
-    // 绘制自身；Layer 则遍历子对象。
+    // 绘制自身。
     virtual void Render(int iMode = 0) = 0;
 
 protected:
@@ -76,7 +75,7 @@ protected:
 private:
     // 打开或关闭指定标志位。
     void EnableFlag(FlagType ft, bool bEnable);
-    // 查询对象标志位。
+    // 查询指定标志是否启用。
     bool IsFlagEnabled(FlagType ft) const;
 };
 

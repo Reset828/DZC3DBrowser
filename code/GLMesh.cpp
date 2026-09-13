@@ -42,7 +42,7 @@ void GLMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
     m_buffersReady = (m_vao != 0 && m_indexCount > 0);
 }
 
-// 绘制自身；Layer 则遍历子对象。
+// 绑定 VAO 并按当前模式绘制。
 void GLMesh::Render(int mode) {
     if (!IsVisible() || !m_buffersReady || !m_pRender) return;
     if (m_indexCount == 0 || m_vao == 0) return;

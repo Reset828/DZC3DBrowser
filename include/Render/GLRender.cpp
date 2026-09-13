@@ -57,7 +57,7 @@ bool GLRender::Initialize(const char* /*appName*/, uint32_t width, uint32_t heig
     return true;
 }
 
-// 等待异步任务完成并使渲染器进入静止状态。
+// 等待异步任务完成并使渲染器静止。
 void GLRender::Quiesce() {
     if (!m_initialized) return;
 
@@ -101,7 +101,7 @@ bool GLRender::BeginFrame() {
     return true;
 }
 
-// 结束当前帧并提交渲染结果。
+// 结束当前帧并提交结果。
 void GLRender::EndFrame() {
     if (!m_initialized || !m_context || !m_window) return;
     OnEndFrame();
@@ -121,21 +121,21 @@ void GLRender::SetPolygonWireframe(bool enabled) {
     m_functions->glPolygonMode(GL_FRONT_AND_BACK, enabled ? GL_LINE : GL_FILL);
 }
 
-// 获取 OpenGL 函数入口。
+// 返回 OpenGL 4.2 函数表。
 QOpenGLFunctions_4_2_Core* GLRender::GetFunctions() const { return m_functions; }
-// 获取当前着色器程序。
+// 返回当前着色器程序。
 unsigned int GLRender::GetCurrentProgram() const { return m_currentProgram; }
 
 // 等待 GPU 与异步任务完成。
 void GLRender::WaitForIdle() {}
 
-// 提交异步任务。
+// 把任务丢进线程池异步执行。
 void GLRender::SubmitAsync(Render::AsyncTask task) {
     if (!task || IsShuttingDown()) return;
     QThreadPool::globalInstance()->start(new GLFunctionRunnable(std::move(task)));
 }
 
-// 提交异步任务。
+// 把任务丢进线程池异步执行。
 void GLRender::SubmitAsync(QRunnable* task) {
     if (!task || IsShuttingDown()) return;
     QThreadPool::globalInstance()->start(task);
@@ -153,9 +153,9 @@ void GLRender::SetWindow(QWindow* window) {
     m_window = window;
 }
 
-// 获取 OpenGL 上下文。
+// 返回 Qt OpenGL 上下文。
 QOpenGLContext* GLRender::GetContext() const { return m_context; }
-// 获取渲染窗口。
+// 返回渲染窗口。
 QWindow* GLRender::GetWindow() const { return m_window; }
 
 

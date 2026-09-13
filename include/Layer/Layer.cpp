@@ -10,13 +10,13 @@ Layer::~Layer() {
     Clear();
 }
 
-// 判断子对象列表是否为空。
+// 查询子对象列表是否为空。
 bool Layer::IsEmpty() const {
     std::shared_lock lock(m_mutex);
     return m_arrChild.empty();
 }
 
-// 获取子对象数量。
+// 返回子对象数量。
 uint32_t Layer::GetCount() const {
     std::shared_lock lock(m_mutex);
     return static_cast<uint32_t>(m_arrChild.size());
@@ -31,7 +31,7 @@ Object* Layer::GetChild(uint32_t index) {
     return nullptr;
 }
 
-// 获取指定索引的只读子对象。
+// 按索引返回子对象。
 const Object* Layer::GetChild(uint32_t index) const {
     std::shared_lock lock(m_mutex);
     if (index < m_arrChild.size()) {
@@ -40,7 +40,7 @@ const Object* Layer::GetChild(uint32_t index) const {
     return nullptr;
 }
 
-// 查找子对象的索引。
+// 返回子对象索引，找不到则 -1。
 int Layer::FindChild(const Object* pObject) const {
     if (!pObject) return -1;
 
@@ -53,7 +53,7 @@ int Layer::FindChild(const Object* pObject) const {
     return -1;
 }
 
-// 清理当前对象内容。
+// 删除并清空全部子对象。
 void Layer::Clear() {
     std::unique_lock lock(m_mutex);
     for (auto* child : m_arrChild) {
@@ -98,7 +98,7 @@ void Layer::RemoveChild(Object* pObject) {
     }
 }
 
-// 绘制自身；Layer 则遍历子对象。
+// 遍历可见子对象并绘制。
 void Layer::Render(int iMode) {
     if (!IsVisible()) return;
 

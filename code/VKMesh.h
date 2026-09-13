@@ -12,25 +12,22 @@ public:
     ~VKMesh() override;
 
     // 启动 Mesh 数据的异步上传。
-    void SetMeshData(std::vector<Vertex3D>&& vertices,
-                     std::vector<uint32_t>&& indices);
+    void SetMeshData(std::vector<Vertex3D>&& vertices, std::vector<uint32_t>&& indices);
 
     // 同步上传 Mesh 数据。
-    void SetMeshDataSync(const std::vector<Vertex3D>& vertices,
-                         const std::vector<uint32_t>& indices);
+    void SetMeshDataSync(const std::vector<Vertex3D>& vertices, const std::vector<uint32_t>& indices);
 
-    // 绘制自身；Layer 则遍历子对象。
+    // 绑定管线与缓冲并按当前模式绘制。
     void Render(int mode = 0) override;
 
 private:
-    // 检查 Mesh GPU 缓冲区是否就绪。
+    // 顶点与索引缓冲都就绪后置位。
     void CheckBuffersReady();
 
-    // 处理合并缓冲区上传完成回调。
-    void OnCombinedBuffersUploaded(VkBuffer staging, VkDeviceMemory stagingMem,
-                                   const std::vector<BufferUploadRunnable::UploadSegment>& segments);
+    // staging 完成后创建设备缓冲。
+    void OnCombinedBuffersUploaded(VkBuffer staging, VkDeviceMemory stagingMem, const std::vector<BufferUploadRunnable::UploadSegment>& segments);
 
-    // 释放 staging 缓冲区资源。
+    // 销毁 staging 缓冲与内存。
     void CleanupStaging(VkBuffer staging, VkDeviceMemory stagingMem);
 
     std::shared_ptr<std::atomic<bool>> m_alive;

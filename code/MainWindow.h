@@ -36,23 +36,23 @@ public:
     ~MainWindow();
 
 protected:
-    // 处理窗口关闭事件。
+    // 关闭窗口前停渲染并释放后端。
     void closeEvent(QCloseEvent* event) override;
-    // 分发窗口输入事件。
+    // 把鼠标/滚轮事件转给当前渲染器。
     bool eventFilter(QObject* obj, QEvent* event) override;
 
 private slots:
-    // 响应打开文件操作。
+    // 弹出对话框打开 OBJ。
     void onOpenFile();
-    // 切换到二维控制模式。
+    // 切到二维渲染器。
     void on2DController();
-    // 切换到三维控制模式。
+    // 切到三维渲染器。
     void on3DController();
-    // 打开或关闭光照分析。
+    // 打开或关闭光照分析面板。
     void onLightAnalysis();
-    // 响应最近文件操作。
+    // 打开最近文件菜单项对应路径。
     void onRecentFileTriggered();
-    // 处理渲染后端切换。
+    // 在 Vulkan / OpenGL 后端间切换。
     void onBackendEngineChanged(int index);
 
 private:
@@ -72,7 +72,7 @@ private:
     void SetupStatusBar();
     // 创建 Vulkan 窗口容器并接渲染循环。
     void SetupVulkan();
-    // 启动渲染循环。
+    // 启动约 16ms 的帧定时器。
     void StartRenderLoop();
     // 销毁三维渲染器并换成二维。
     void SwitchTo2D();
@@ -96,9 +96,9 @@ private:
     void ApplyLightAnalysisToRenderer();
     // 用已加载模型包围盒更新阴影范围。
     void UpdateShadowSceneBounds();
-    // 同步阴影贴图尺寸选项。
+    // 同步阴影贴图尺寸下拉框。
     void SyncShadowTextureSizeCombo(uint32_t size);
-    // 显示阴影贴图状态。
+    // 在状态栏显示阴影贴图消息。
     void ShowShadowMapStatus(const std::string& message);
     // 把解析结果加入模型列表并建网格。
     void AddLoadedModel(const QString& filePath, std::vector<Vertex3D>&& vertices, std::vector<uint32_t>&& indices);
@@ -106,13 +106,13 @@ private:
     void SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible);
     // 从场景和列表移除模型。
     void RemoveLoadedModel(QTreeWidgetItem* treeItem);
-    // 清理当前对象内容。
+    // 清空全部已加载模型。
     void ClearLoadedModels();
-    // 聚焦到目标对象。
+    // 把相机对准场景或指定模型。
     void FocusSceneOrModel(QTreeWidgetItem* treeItem);
     // 按渲染器类型安装 Mesh 工厂。
     void ConfigureMeshFactory(Render* renderer);
-    // 重建当前场景网格。
+    // 按当前后端重建场景网格。
     void RebuildSceneMeshes();
     // 把模型上的网格指针置空。
     void ResetLoadedMeshPointers();

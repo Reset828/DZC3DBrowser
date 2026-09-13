@@ -13,11 +13,10 @@ public:
                                         std::vector<uint32_t>&&,
                                         const Vec3& sourceCenter,
                                         float normalizationScale)>;
-    using DiagnosticCallback = std::function<void(const std::string& message,
-                                                  bool isError)>;
+    using DiagnosticCallback = std::function<void(const std::string& message, bool isError)>;
 
-    explicit ObjParseRunnable(std::string filePath, Callback callback,
-                              DiagnosticCallback diagnosticCallback = {});
+    explicit ObjParseRunnable(std::string filePath, Callback callback, DiagnosticCallback diagnosticCallback = {});
+
     ~ObjParseRunnable() override;
     // 执行后台任务。
     void run() override;

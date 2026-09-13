@@ -10,7 +10,7 @@
 
 class Object;
 
-/**********
+/******************************************************
     Render                 生命周期 / 帧循环 / Mesh 工厂
       |
       +-- GLRender         OpenGL 上下文与绘制
@@ -19,14 +19,12 @@ class Object;
       +-- VKRender         Vulkan 设备 / 交换链 / 管线
             +-- VKRender2D
             +-- VKRender3D
-*************/
+********************************************************/
 class Render {
 public:
     virtual ~Render();
 
-    // 绘制自身；Layer 则遍历子对象。
     Render(const Render&) = delete;
-// operator=：禁止复制渲染器。
     Render& operator=(const Render&) = delete;
 
     enum DrawTopology {
@@ -41,12 +39,12 @@ public:
     virtual bool Initialize(const char* appName, uint32_t width, uint32_t height) = 0;
     // 关闭渲染器并释放资源。
     virtual void Shutdown() = 0;
-    // 等待异步任务完成并使渲染器进入静止状态。
+    // 等待异步任务完成并使渲染器静止。
     virtual void Quiesce() = 0;
 
     // 开始一帧渲染。
     virtual bool BeginFrame() = 0;
-    // 结束当前帧并提交渲染结果。
+    // 结束当前帧并提交结果。
     virtual void EndFrame() = 0;
     // 提交索引绘制命令。
     virtual void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1) = 0;
@@ -54,11 +52,11 @@ public:
     // 等待 GPU 与异步任务完成。
     virtual void WaitForIdle() = 0;
     using AsyncTask = std::function<void()>;
-    // 提交异步任务。
+    // 把任务丢进线程池异步执行。
     virtual void SubmitAsync(AsyncTask task) = 0;
 
     using MeshFactory = std::function<Object*(Render*)>;
-    // 设置 Mesh 创建工厂。
+    // 设置当前后端的 Mesh 工厂。
     void SetMeshFactory(MeshFactory factory);
     // 通过工厂创建当前后端的 Mesh。
     Object* CreateMesh();
@@ -87,7 +85,6 @@ public:
     virtual void OnMouseWheel(float delta);
 
 protected:
-    // 绘制自身；Layer 则遍历子对象。
     Render();
 
     bool m_initialized = false;

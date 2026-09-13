@@ -89,9 +89,9 @@ bool QWindowVulkan::CreateVulkanSurface() {
 }
 
 
-// 获取 Vulkan 表面。
+// 返回 Win32 VkSurfaceKHR。
 VkSurfaceKHR QWindowVulkan::GetSurface() const { return m_surface; }
-// 获取 Vulkan 实例。
+// 返回本窗口创建的 VkInstance。
 VkInstance QWindowVulkan::GetVkInstance() const { return m_instance; }
 // 更换窗口绑定的渲染器。
 void QWindowVulkan::SetRenderer(VKRender* renderer) { m_renderer = renderer; }

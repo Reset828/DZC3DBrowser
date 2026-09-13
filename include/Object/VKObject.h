@@ -15,7 +15,6 @@ public:
     VKObject(const VKObject& obj);
     ~VKObject() override;
 
-// operator=：复制对象的公共状态和渲染器引用。
     VKObject& operator=(const VKObject& obj);
 
     // 绑定所属渲染器。
@@ -23,9 +22,9 @@ public:
     // 返回所属渲染器。
     VKRender* GetRender() const;
 
-    // 创建顶点缓冲区。
+    // 创建并上传顶点缓冲区。
     void CreateVertexBuffer(const void* data, VkDeviceSize size);
-    // 创建索引缓冲区。
+    // 创建并上传索引缓冲区。
     void CreateIndexBuffer(const void* data, VkDeviceSize size, uint32_t indexCount);
     // 更新已有顶点缓冲区内容。
     void UpdateVertexBuffer(const void* data, VkDeviceSize size);
@@ -50,8 +49,7 @@ protected:
 
 private:
     // 经 staging 创建设备本地缓冲区。
-    void CreateBufferFromData(const void* data, VkDeviceSize size,
-                              VkBufferUsageFlags usage, VkBuffer& target);
+    void CreateBufferFromData(const void* data, VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& target);
     // 把数据写入已有缓冲区。
     void UpdateBufferFromData(const void* data, VkDeviceSize size, VkBuffer target);
 };

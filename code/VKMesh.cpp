@@ -77,7 +77,7 @@ void VKMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
     m_buffersReady = true;
 }
 
-// 绘制自身；Layer 则遍历子对象。
+// 绑定管线与缓冲并按当前模式绘制。
 void VKMesh::Render(int mode) {
     if (!IsVisible() || !m_buffersReady || !m_pRender) return;
     if (m_indexCount == 0) return;
@@ -104,7 +104,7 @@ void VKMesh::Render(int mode) {
 }
 
 
-// 处理合并缓冲区上传完成回调。
+// staging 完成后创建设备缓冲。
 void VKMesh::OnCombinedBuffersUploaded(
     VkBuffer staging, VkDeviceMemory stagingMem,
     const std::vector<BufferUploadRunnable::UploadSegment>& segments)
@@ -140,14 +140,14 @@ void VKMesh::OnCombinedBuffersUploaded(
     m_buffersReady = true;
 }
 
-// 检查 Mesh GPU 缓冲区是否就绪。
+// 顶点与索引缓冲都就绪后置位。
 void VKMesh::CheckBuffersReady() {
     if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
         m_buffersReady = true;
     }
 }
 
-// 释放 staging 缓冲区资源。
+// 销毁 staging 缓冲与内存。
 void VKMesh::CleanupStaging(VkBuffer staging, VkDeviceMemory stagingMem) {
     if (!m_pRender) return;
     VkDevice device = m_pRender->GetDevice();

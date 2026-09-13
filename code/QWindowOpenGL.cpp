@@ -71,7 +71,7 @@ bool QWindowOpenGL::CreateOpenGLContext() {
     return true;
 }
 
-// 获取 OpenGL 上下文。
+// 返回 Qt OpenGL 上下文。
 QOpenGLContext* QWindowOpenGL::GetContext() const { return m_context; }
 
 // 更换窗口绑定的渲染器。

@@ -165,7 +165,7 @@ MainWindow::~MainWindow() {
     }
 }
 
-// 处理窗口关闭事件。
+// 关闭窗口前停渲染并释放后端。
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (m_renderTimer) {
         m_renderTimer->stop();
@@ -423,7 +423,7 @@ void MainWindow::SetupVulkan() {
     connect(m_vulkanWindow, &QWindowVulkan::vulkanReady, this, &MainWindow::StartRenderLoop);
 }
 
-// 分发窗口输入事件。
+// 把鼠标/滚轮事件转给当前渲染器。
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     QWindow* window = nullptr;
     if (obj == m_vulkanWindow) window = m_vulkanWindow;
@@ -505,7 +505,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     return QMainWindow::eventFilter(obj, event);
 }
 
-// 启动渲染循环。
+// 启动约 16ms 的帧定时器。
 void MainWindow::StartRenderLoop() {
     if (m_renderTimer) {
         m_renderTimer->start(16);
@@ -564,7 +564,7 @@ void MainWindow::StartRenderLoop() {
     m_renderTimer->start(16);
 }
 
-// 打开或关闭光照分析。
+// 打开或关闭光照分析面板。
 void MainWindow::onLightAnalysis() {
     if (!m_lightAnalysisPanel) return;
     const bool open = !m_lightAnalysisPanel->isVisible();
@@ -656,7 +656,7 @@ void MainWindow::UpdateShadowSceneBounds() {
     }
 }
 
-// 同步阴影贴图尺寸选项。
+// 同步阴影贴图尺寸下拉框。
 void MainWindow::SyncShadowTextureSizeCombo(uint32_t size) {
     if (!m_pComboTexSize) return;
     const QString text = QString::number(size);
@@ -667,13 +667,13 @@ void MainWindow::SyncShadowTextureSizeCombo(uint32_t size) {
     m_pComboTexSize->setCurrentIndex(index);
 }
 
-// 显示阴影贴图状态。
+// 在状态栏显示阴影贴图消息。
 void MainWindow::ShowShadowMapStatus(const std::string& message) {
     if (message.empty()) return;
     statusBar()->showMessage(QString::fromStdString(message), 8000);
 }
 
-// 响应打开文件操作。
+// 弹出对话框打开 OBJ。
 void MainWindow::onOpenFile() {
     QString filePath = QFileDialog::getOpenFileName(this,
         QStringLiteral("选择 OBJ 文件"),
@@ -709,7 +709,7 @@ void MainWindow::LoadFile(const QString& filePath) {
     QThreadPool::globalInstance()->start(runnable);
 }
 
-// 响应最近文件操作。
+// 打开最近文件菜单项对应路径。
 void MainWindow::onRecentFileTriggered() {
     auto* action = qobject_cast<QAction*>(sender());
     if (!action) return;
@@ -815,7 +815,7 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
     UpdateShadowSceneBounds();
 }
 
-// 清理当前对象内容。
+// 清空全部已加载模型。
 void MainWindow::ClearLoadedModels() {
     ++m_loadGeneration;
 
@@ -860,7 +860,7 @@ void MainWindow::ClearLoadedModels() {
     UpdateShadowSceneBounds();
 }
 
-// 聚焦到目标对象。
+// 把相机对准场景或指定模型。
 void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
     if (m_loadedModels.empty()) return;
 
@@ -975,7 +975,7 @@ void MainWindow::ConfigureMeshFactory(Render* renderer) {
     }
 }
 
-// 重建当前场景网格。
+// 按当前后端重建场景网格。
 void MainWindow::RebuildSceneMeshes() {
     const bool useOpenGL = IsOpenGLBackend()
         && dynamic_cast<GLRender3D*>(m_openglRenderer) != nullptr;
@@ -1185,22 +1185,22 @@ void MainWindow::SwitchTo2D() {
     }
 }
 
-// 切换到二维控制模式。
+// 切到二维渲染器。
 void MainWindow::on2DController() {
     SwitchTo2D();
 }
 
-// 切换到三维控制模式。
+// 切到三维渲染器。
 void MainWindow::on3DController() {
     SwitchTo3D();
 }
 
-// 判断当前是否使用 OpenGL 后端。
+// 当前是否显示 OpenGL 视口。
 bool MainWindow::IsOpenGLBackend() const {
     return m_openglContainer && m_openglContainer->isVisible();
 }
 
-// 处理渲染后端切换。
+// 在 Vulkan / OpenGL 后端间切换。
 void MainWindow::onBackendEngineChanged(int index) {
     if (index == 1) {
         SwitchToOpenGL();

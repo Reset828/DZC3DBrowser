@@ -1,11 +1,10 @@
 ﻿#include "Render.h"
 #include <utility>
 
-// 绘制自身；Layer 则遍历子对象。
 Render::Render() = default;
 Render::~Render() = default;
 
-// 设置 Mesh 创建工厂。
+// 设置当前后端的 Mesh 工厂。
 void Render::SetMeshFactory(MeshFactory factory) {
     m_meshFactory = std::move(factory);
 }

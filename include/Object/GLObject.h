@@ -14,7 +14,6 @@ public:
     ~GLObject() override;
 
     GLObject(const GLObject&) = delete;
-// operator=：禁止复制 OpenGL 对象。
     GLObject& operator=(const GLObject&) = delete;
 
     // 绑定所属渲染器。
@@ -22,9 +21,9 @@ public:
     // 返回所属渲染器。
     GLRender* GetRender() const;
 
-    // 创建顶点缓冲区。
+    // 创建并上传顶点缓冲区。
     void CreateVertexBuffer(const void* data, std::size_t size);
-    // 创建索引缓冲区。
+    // 创建并上传索引缓冲区。
     void CreateIndexBuffer(const void* data, std::size_t size, uint32_t indexCount);
     // 销毁对象持有的 GPU 缓冲区。
     void DestroyBuffers();

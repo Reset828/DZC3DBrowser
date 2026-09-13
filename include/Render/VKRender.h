@@ -36,21 +36,20 @@ public:
     ~VKRender() override;
 
     VKRender(const VKRender&) = delete;
-// operator=：禁止复制 Vulkan 渲染器。
     VKRender& operator=(const VKRender&) = delete;
 
     // 初始化渲染器及其后端资源。
     bool Initialize(const char* appName, uint32_t width, uint32_t height) override;
     // 关闭渲染器并释放资源。
     void Shutdown() override;
-    // 等待异步任务完成并使渲染器进入静止状态。
+    // 等待异步任务完成并使渲染器静止。
     void Quiesce() override;
     // 开始一帧渲染。
-    bool BeginFrame() override;                                    // 开始帧渲染，获取交换链图像
-    // 结束当前帧并提交渲染结果。
-    void EndFrame() override;                                      // 结束帧渲染，提交命令缓冲区
+    bool BeginFrame() override;
+    // 结束当前帧并提交结果。
+    void EndFrame() override;
     // 提交索引绘制命令。
-    void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1) override;  // 索引绘制
+    void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1) override;
     // 返回阴影图形管线。
     virtual VkPipeline GetShadowPipeline() const { return VK_NULL_HANDLE; }
 
@@ -88,9 +87,9 @@ public:
     // 等待 GPU 与异步任务完成。
     void WaitForIdle() override;
 
-    // 提交异步任务。
+    // 把任务丢进线程池异步执行。
     void SubmitAsync(Render::AsyncTask task) override;
-    // 提交异步任务。
+    // 把任务丢进线程池异步执行。
     void SubmitAsync(QRunnable* task);
     // 按拓扑返回图形管线。
     VkPipeline GetPipeline(DrawTopology topology) const;
@@ -100,9 +99,9 @@ public:
     // 设置外部 VkInstance。
     void SetInstance(VkInstance instance);
     // 检查 Vulkan 验证层支持。
-    static bool CheckValidationLayerSupport();        // 检查验证层支持
+    static bool CheckValidationLayerSupport();
     // 返回实例所需扩展名。
-    static std::vector<const char*> GetRequiredExtensions();  // 获取所需扩展
+    static std::vector<const char*> GetRequiredExtensions();
 
 protected:
     // 后端初始化完成后的钩子。
@@ -136,37 +135,37 @@ protected:
 
 protected:
     // 创建 VkInstance。
-    bool CreateInstance(const char* appName);         // 创建Vulkan实例
+    bool CreateInstance(const char* appName);
     // 创建验证层调试回调。
-    bool SetupDebugMessenger();                       // 设置调试消息回调
+    bool SetupDebugMessenger();
     // 选择合适的 Vulkan 物理设备。
-    bool PickPhysicalDevice();                        // 选择物理设备
+    bool PickPhysicalDevice();
     // 创建逻辑设备与队列。
-    bool CreateLogicalDevice();                       // 创建逻辑设备
+    bool CreateLogicalDevice();
     // 创建交换链。
-    bool CreateSwapchain();                           // 创建交换链
+    bool CreateSwapchain();
     // 重建 Vulkan 交换链。
-    bool RecreateSwapchain();                         // 重建交换链（窗口大小变化时）
+    bool RecreateSwapchain();
     // 为交换链图像创建视图。
-    bool CreateImageViews();                          // 创建图像视图
+    bool CreateImageViews();
     // 创建命令池。
-    bool CreateCommandPool();                         // 创建命令池
+    bool CreateCommandPool();
     // 分配每帧命令缓冲。
-    bool CreateCommandBuffers();                      // 创建命令缓冲区
+    bool CreateCommandBuffers();
     // 创建信号量与围栏。
-    bool CreateSyncObjects();                         // 创建同步对象（信号量、围栏）
+    bool CreateSyncObjects();
 
     // 清理 Vulkan 交换链资源。
-    void CleanupSwapchain();                          // 清理交换链相关资源
+    void CleanupSwapchain();
 
     // 查找图形与呈现队列族。
-    VulkanQueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device);  // 查找队列族
+    VulkanQueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device);
     // 查询表面格式与呈现模式。
-    VulkanSwapchainSupportDetails QuerySwapchainSupport(VkPhysicalDevice device);  // 查询交换链支持
+    VulkanSwapchainSupportDetails QuerySwapchainSupport(VkPhysicalDevice device);
     // 判断物理设备是否满足交换链需求。
-    bool IsDeviceSuitable(VkPhysicalDevice device);   // 设备是否适合
+    bool IsDeviceSuitable(VkPhysicalDevice device);
     // 评估 Vulkan 物理设备。
-    int RateDevice(VkPhysicalDevice device);          // 设备评分
+    int RateDevice(VkPhysicalDevice device);
 
     // 选择交换链表面格式。
     VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
@@ -265,7 +264,6 @@ public:
     ~VKRender2D() override;
 
     VKRender2D(const VKRender2D&) = delete;
-// operator=：禁止复制 Vulkan 二维渲染器。
     VKRender2D& operator=(const VKRender2D&) = delete;
 
     // 处理鼠标按下。
@@ -330,7 +328,6 @@ public:
     ~VKRender3D() override;
 
     VKRender3D(const VKRender3D&) = delete;
-// operator=：禁止复制 Vulkan 三维渲染器。
     VKRender3D& operator=(const VKRender3D&) = delete;
 
     // 处理鼠标按下。

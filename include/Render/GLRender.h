@@ -20,18 +20,17 @@ public:
     ~GLRender() override;
 
     GLRender(const GLRender&) = delete;
-// operator=：禁止复制 OpenGL 渲染器。
     GLRender& operator=(const GLRender&) = delete;
 
     // 初始化渲染器及其后端资源。
     bool Initialize(const char* appName, uint32_t width, uint32_t height) override;
     // 关闭渲染器并释放资源。
     void Shutdown() override;
-    // 等待异步任务完成并使渲染器进入静止状态。
+    // 等待异步任务完成并使渲染器静止。
     void Quiesce() override;
     // 开始一帧渲染。
     bool BeginFrame() override;
-    // 结束当前帧并提交渲染结果。
+    // 结束当前帧并提交结果。
     void EndFrame() override;
     // 提交索引绘制命令。
     void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1) override;
@@ -47,9 +46,9 @@ public:
 
     // 等待 GPU 与异步任务完成。
     void WaitForIdle() override;
-    // 提交异步任务。
+    // 把任务丢进线程池异步执行。
     void SubmitAsync(Render::AsyncTask task) override;
-    // 提交异步任务。
+    // 把任务丢进线程池异步执行。
     void SubmitAsync(QRunnable* task);
     // 设置 Qt OpenGL 上下文。
     void SetContext(QOpenGLContext* context);
@@ -101,7 +100,6 @@ public:
     ~GLRender2D() override;
 
     GLRender2D(const GLRender2D&) = delete;
-// operator=：禁止复制 OpenGL 二维渲染器。
     GLRender2D& operator=(const GLRender2D&) = delete;
 
     // 处理鼠标按下。
@@ -156,7 +154,6 @@ public:
     ~GLRender3D() override;
 
     GLRender3D(const GLRender3D&) = delete;
-// operator=：禁止复制 OpenGL 三维渲染器。
     GLRender3D& operator=(const GLRender3D&) = delete;
 
     // 处理鼠标按下。

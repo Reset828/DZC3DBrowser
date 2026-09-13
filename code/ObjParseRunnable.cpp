@@ -104,7 +104,7 @@ bool ResolveIndex(int objIndex, size_t count, int& resolved) {
     return resolved >= 0 && static_cast<size_t>(resolved) < count;
 }
 
-// 解析相关数据。
+// 解析 f 行上的 v/vt/vn 索引。
 bool ParseFaceVertex(std::string_view token,
                      size_t positionCount,
                      size_t texCoordCount,
@@ -210,6 +210,7 @@ Vec3 CalculateFaceNormal(const std::vector<FaceVertex>& face,
     return NormalizeOr(normal, {0.0f, 0.0f, 1.0f});
 }
 
+// 把多边形面剖成三角形。
 std::vector<std::array<size_t, 3>> TriangulateFace(
     const std::vector<FaceVertex>& face,
     const std::vector<Vec3>& positions) {

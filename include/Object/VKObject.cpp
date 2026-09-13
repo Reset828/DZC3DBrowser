@@ -25,19 +25,19 @@ void VKObject::SetRender(VKRender* pRender) {
     m_pRender = pRender;
 }
 
-// 获取 Vulkan 渲染器。
+// 返回所属渲染器。
 VKRender* VKObject::GetRender() const {
     return m_pRender;
 }
 
-// 创建顶点缓冲区。
+// 创建并上传顶点缓冲区。
 void VKObject::CreateVertexBuffer(const void* data, VkDeviceSize size) {
     if (!m_pRender || !data || size == 0) return;
     DestroyBuffers();
     CreateBufferFromData(data, size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, m_vertexBuffer);
 }
 
-// 创建索引缓冲区。
+// 创建并上传索引缓冲区。
 void VKObject::CreateIndexBuffer(const void* data, VkDeviceSize size,
                                  uint32_t indexCount) {
     if (!m_pRender || !data || size == 0 || indexCount == 0) return;
@@ -127,11 +127,11 @@ void VKObject::UpdateBufferFromData(const void* data, VkDeviceSize size,
     m_pRender->UnmapBuffer(target);
 }
 
-// 获取顶点缓冲区。
+// 返回顶点缓冲区句柄。
 VkBuffer VKObject::GetVertexBuffer() const { return m_vertexBuffer; }
 
-// 获取索引缓冲区。
+// 返回索引缓冲区句柄。
 VkBuffer VKObject::GetIndexBuffer() const { return m_indexBuffer; }
 
-// 获取索引数量。
+// 返回索引数量。
 uint32_t VKObject::GetIndexCount() const { return m_indexCount; }

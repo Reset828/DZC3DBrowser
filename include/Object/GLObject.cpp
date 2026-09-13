@@ -14,12 +14,12 @@ void GLObject::SetRender(GLRender* pRender) {
     m_pRender = pRender;
 }
 
-// 获取 OpenGL 渲染器。
+// 返回所属渲染器。
 GLRender* GLObject::GetRender() const {
     return m_pRender;
 }
 
-// 创建顶点缓冲区。
+// 创建并上传顶点缓冲区。
 void GLObject::CreateVertexBuffer(const void* data, std::size_t size) {
     if (!m_pRender || !data || size == 0) return;
     QOpenGLFunctions_4_2_Core* gl = m_pRender->GetFunctions();
@@ -39,7 +39,7 @@ void GLObject::CreateVertexBuffer(const void* data, std::size_t size) {
     gl->glBindVertexArray(0);
 }
 
-// 创建索引缓冲区。
+// 创建并上传索引缓冲区。
 void GLObject::CreateIndexBuffer(const void* data, std::size_t size,
                                  uint32_t indexCount) {
     if (!m_pRender || !data || size == 0 || indexCount == 0) return;
@@ -82,7 +82,7 @@ void GLObject::DestroyBuffers() {
     m_indexCount = 0;
 }
 
-// 获取顶点数组对象。
+// 返回 VAO。
 uint32_t GLObject::GetVertexArray() const { return m_vao; }
-// 获取索引数量。
+// 返回索引数量。
 uint32_t GLObject::GetIndexCount() const { return m_indexCount; }

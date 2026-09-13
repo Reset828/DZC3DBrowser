@@ -10,10 +10,9 @@ public:
     ~GLMesh() override;
 
     // 同步上传 Mesh 数据。
-    void SetMeshDataSync(const std::vector<Vertex3D>& vertices,
-                         const std::vector<uint32_t>& indices);
+    void SetMeshDataSync(const std::vector<Vertex3D>& vertices, const std::vector<uint32_t>& indices);
 
-    // 绘制自身；Layer 则遍历子对象。
+    // 绑定 VAO 并按当前模式绘制。
     void Render(int mode = 0) override;
 
 private:

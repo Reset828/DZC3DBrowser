@@ -86,7 +86,7 @@ bool VKRender::Initialize(const char* appName, uint32_t width, uint32_t height) 
     return true;
 }
 
-// 等待异步任务完成并使渲染器进入静止状态。
+// 等待异步任务完成并使渲染器静止。
 void VKRender::Quiesce() {
     if (!m_initialized) return;
 
@@ -245,7 +245,7 @@ bool VKRender::BeginFrame() {
     return true;
 }
 
-// 结束当前帧并提交渲染结果。
+// 结束当前帧并提交结果。
 void VKRender::EndFrame() {
     vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
 
@@ -1101,7 +1101,7 @@ VkShaderModule VKRender::CreateShaderModuleHelper(const std::vector<char>& code)
     return shaderModule;
 }
 
-// 提交异步任务。
+// 把任务丢进线程池异步执行。
 void VKRender::SubmitAsync(Render::AsyncTask task) {
     if (!task || IsShuttingDown()) return;
     if (m_asyncThreadPool) {
@@ -1109,7 +1109,7 @@ void VKRender::SubmitAsync(Render::AsyncTask task) {
     }
 }
 
-// 提交异步任务。
+// 把任务丢进线程池异步执行。
 void VKRender::SubmitAsync(QRunnable* task) {
     if (!task || IsShuttingDown()) return;
     if (m_asyncThreadPool) {
@@ -1118,17 +1118,17 @@ void VKRender::SubmitAsync(QRunnable* task) {
 }
 
 
-// 获取 Vulkan 逻辑设备。
+// 返回 Vulkan 逻辑设备。
 VkDevice VKRender::GetDevice() const { return m_device; }
-// 获取 Vulkan 物理设备。
+// 返回 Vulkan 物理设备。
 VkPhysicalDevice VKRender::GetPhysicalDevice() const { return m_physicalDevice; }
 
-// 获取当前命令缓冲区。
+// 返回当前帧命令缓冲。
 VkCommandBuffer VKRender::GetCurrentCommandBuffer() const { return m_commandBuffers[m_currentFrame]; }
 
 
 
-// 获取指定拓扑的图形管线。
+// 按拓扑返回图形管线。
 VkPipeline VKRender::GetPipeline(DrawTopology topology) const {
     if (topology >= 0 && topology < DT_COUNT) {
         return m_pipelines[topology];

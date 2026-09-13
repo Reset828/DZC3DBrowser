@@ -23,7 +23,7 @@ public:
     // 返回子对象索引，找不到则 -1。
     int FindChild(const Object* pObject) const;
 
-    // 清理当前对象内容。
+    // 删除并清空全部子对象。
     virtual void Clear();
     // 把对象加入子列表并设置父指针。
     virtual void AddChild(Object* pObject);
@@ -33,7 +33,7 @@ public:
     // 按索引或指针删除子对象。
     virtual void RemoveChild(Object* pObject);
 
-    // 绘制自身；Layer 则遍历子对象。
+    // 遍历可见子对象并绘制。
     void Render(int iMode = 0) override;
 
     std::vector<Object*> m_arrChild;

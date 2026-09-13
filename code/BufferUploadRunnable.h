@@ -17,11 +17,9 @@ public:
         VkDeviceSize stagingOffset = 0; // 在 run() 中填充
     };
 
-    using MultiCallback = std::function<void(VkBuffer, VkDeviceMemory,
-                                              const std::vector<UploadSegment>&)>;
+    using MultiCallback = std::function<void(VkBuffer, VkDeviceMemory, const std::vector<UploadSegment>&)>;
 
-    BufferUploadRunnable(
-        VkDevice device,
+    BufferUploadRunnable(VkDevice device,
         VkPhysicalDevice physicalDevice,
         const void* data,
         VkDeviceSize size,

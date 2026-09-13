@@ -23,7 +23,7 @@ void Object::SetParent(Object* pParent) {
     m_pParent = pParent;
 }
 
-// 获取父对象。
+// 返回父对象指针。
 Object* Object::GetParent() const {
     return m_pParent;
 }
@@ -33,12 +33,12 @@ void Object::SetDirty(bool bDirty) {
     EnableFlag(FT_DIRTY, bDirty);
 }
 
-// 查询对象是否已修改。
+// 查询脏标记。
 bool Object::IsDirty() const {
     return IsFlagEnabled(FT_DIRTY);
 }
 
-// 获取对象类型。
+// 返回对象类型。
 uint32_t Object::GetType() const {
     return m_uType;
 }
@@ -70,7 +70,7 @@ void Object::SetColor(float r, float g, float b, float a) {
     SetColor(Vec4{ r, g, b, a });
 }
 
-// 获取对象颜色。
+// 返回对象颜色。
 Vec4 Object::GetColor() const {
     float r = static_cast<float>((m_uClr >> 0) & 0xFF) / 255.0f;
     float g = static_cast<float>((m_uClr >> 8) & 0xFF) / 255.0f;
