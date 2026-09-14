@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <string>
 
 #include "Math/EngineTypes.h"
 
@@ -65,6 +66,8 @@ public:
     bool IsInitialized() const;
     // 查询渲染器是否正在关闭。
     bool IsShuttingDown() const;
+    // 返回最近一次初始化或着色器加载失败的说明。
+    const std::string& GetLastError() const;
 
     // 设置清屏颜色。
     void SetClearColor(float r, float g, float b, float a);
@@ -87,6 +90,9 @@ public:
 protected:
     Render();
 
+    // 记录最近一次失败原因。
+    void SetLastError(std::string message);
+
     bool m_initialized = false;
     uint32_t m_framebufferWidth = 800;
     uint32_t m_framebufferHeight = 600;
@@ -94,6 +100,7 @@ protected:
     bool m_framebufferResized = false;
     std::atomic<bool> m_shuttingDown{ false };
     MeshFactory m_meshFactory;
+    std::string m_lastError;
 };
 
 #endif //__RENDER_H__

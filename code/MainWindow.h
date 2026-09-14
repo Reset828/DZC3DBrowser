@@ -74,6 +74,8 @@ private:
     void SetupVulkan();
     // 启动约 16ms 的帧定时器。
     void StartRenderLoop();
+    // 弹出渲染器初始化或着色器加载失败说明。
+    void ReportRendererError(Render* renderer, const QString& stage);
     // 销毁三维渲染器并换成二维。
     void SwitchTo2D();
     // 销毁二维渲染器并换成三维。

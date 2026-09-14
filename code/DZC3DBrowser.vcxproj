@@ -159,4 +159,19 @@
   <Import Project="$(QtMsBuild)\qt.targets" Condition="Exists('$(QtMsBuild)\qt.targets')" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <PropertyGroup>
+    <RuntimeShaderDir>$(ProjectDir)..\windows\shaders</RuntimeShaderDir>
+  </PropertyGroup>
+  <Target Name="PrepareRuntimeShaders" BeforeTargets="ClCompile">
+    <Error Condition="'$(VULKAN_SDK)'==''" Text="未设置 VULKAN_SDK。请安装 Vulkan SDK 并设置该环境变量后，再编译 GLSL 到 windows/shaders。" />
+    <Error Condition="!Exists('$(VULKAN_SDK)\Bin\glslc.exe')" Text="找不到 glslc：$(VULKAN_SDK)\Bin\glslc.exe" />
+    <MakeDir Directories="$(RuntimeShaderDir)" />
+    <Copy SourceFiles="$(ProjectDir)res\2d.vert;$(ProjectDir)res\2d.frag;$(ProjectDir)res\3d.vert;$(ProjectDir)res\3d.frag;$(ProjectDir)res\3d_shadow.vert;$(ProjectDir)res\3d_shadow.frag" DestinationFolder="$(RuntimeShaderDir)" SkipUnchangedFiles="true" />
+    <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\2d.vert&quot; -o &quot;$(RuntimeShaderDir)\2d_vert.spv&quot;" />
+    <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\2d.frag&quot; -o &quot;$(RuntimeShaderDir)\2d_frag.spv&quot;" />
+    <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\3d.vert&quot; -o &quot;$(RuntimeShaderDir)\3d_vert.spv&quot;" />
+    <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\3d.frag&quot; -o &quot;$(RuntimeShaderDir)\3d_frag.spv&quot;" />
+    <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\3d_shadow.vert&quot; -o &quot;$(RuntimeShaderDir)\3d_shadow_vert.spv&quot;" />
+    <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\3d_shadow.frag&quot; -o &quot;$(RuntimeShaderDir)\3d_shadow_frag.spv&quot;" />
+  </Target>
 </Project>

@@ -24,6 +24,16 @@ bool Render::IsShuttingDown() const {
     return m_shuttingDown;
 }
 
+// 返回最近一次初始化或着色器加载失败的说明。
+const std::string& Render::GetLastError() const {
+    return m_lastError;
+}
+
+// 记录最近一次失败原因。
+void Render::SetLastError(std::string message) {
+    m_lastError = std::move(message);
+}
+
 // 设置清屏颜色。
 void Render::SetClearColor(float r, float g, float b, float a) {
     m_clearColor = { r, g, b, a };

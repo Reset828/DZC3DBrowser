@@ -74,7 +74,13 @@ bool VKRender::Initialize(const char* appName, uint32_t width, uint32_t height) 
 
     if (!CreateRenderPass()) return false;
 
-    if (!CreatePipelines()) return false;
+    try {
+        if (!CreatePipelines()) return false;
+    } catch (const std::exception& e) {
+        SetLastError(e.what());
+        std::cerr << e.what() << std::endl;
+        return false;
+    }
 
     if (!CreateFramebuffers()) return false;
 
@@ -1083,20 +1089,24 @@ std::vector<char> VKRender::ReadShaderFile(const std::string& filename) {
     }
 
     size_t fileSize = static_cast<size_t>(file.tellg());
+    if (fileSize == 0 || (fileSize % 4) != 0) {
+        throw std::runtime_error("着色器文件无效或不是 SPIR-V: " + filename);
+    }
     std::vector<char> buffer(fileSize);
 
     file.seekg(0);
-    file.read(buffer.data(), fileSize);
+    file.read(buffer.data(), static_cast<std::streamsize>(fileSize));
     file.close();
 
     return buffer;
 }
 
 // 创建着色器模块，失败则抛错。
-VkShaderModule VKRender::CreateShaderModuleHelper(const std::vector<char>& code) {
+VkShaderModule VKRender::CreateShaderModuleHelper(const std::vector<char>& code,
+                                                  const std::string& filename) {
     VkShaderModule shaderModule;
     if (CreateShaderModule(code, &shaderModule) != VK_SUCCESS) {
-        throw std::runtime_error("创建着色器模块失败");
+        throw std::runtime_error("创建着色器模块失败: " + filename);
     }
     return shaderModule;
 }
@@ -1223,11 +1233,13 @@ void VKRender2D::OnEndFrame() {}
 
 // 创建图形管线。
 bool VKRender2D::CreatePipelines() {
-    auto vertShaderCode = ReadShaderFile("res/2d_vert.spv");
-    auto fragShaderCode = ReadShaderFile("res/2d_frag.spv");
+    auto vertShaderCode = ReadShaderFile("../windows/shaders/2d_vert.spv");
+    auto fragShaderCode = ReadShaderFile("../windows/shaders/2d_frag.spv");
 
-    VkShaderModule vertShaderModule = CreateShaderModuleHelper(vertShaderCode);
-    VkShaderModule fragShaderModule = CreateShaderModuleHelper(fragShaderCode);
+    VkShaderModule vertShaderModule = CreateShaderModuleHelper(
+        vertShaderCode, "../windows/shaders/2d_vert.spv");
+    VkShaderModule fragShaderModule = CreateShaderModuleHelper(
+        fragShaderCode, "../windows/shaders/2d_frag.spv");
 
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
     vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1813,11 +1825,13 @@ bool VKRender3D::CreateRenderPass() {
 
 // 创建图形管线。
 bool VKRender3D::CreatePipelines() {
-    auto vertShaderCode = ReadShaderFile("res/3d_vert.spv");
-    auto fragShaderCode = ReadShaderFile("res/3d_frag.spv");
+    auto vertShaderCode = ReadShaderFile("../windows/shaders/3d_vert.spv");
+    auto fragShaderCode = ReadShaderFile("../windows/shaders/3d_frag.spv");
 
-    VkShaderModule vertShaderModule = CreateShaderModuleHelper(vertShaderCode);
-    VkShaderModule fragShaderModule = CreateShaderModuleHelper(fragShaderCode);
+    VkShaderModule vertShaderModule = CreateShaderModuleHelper(
+        vertShaderCode, "../windows/shaders/3d_vert.spv");
+    VkShaderModule fragShaderModule = CreateShaderModuleHelper(
+        fragShaderCode, "../windows/shaders/3d_frag.spv");
 
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
     vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2692,10 +2706,12 @@ bool VKRender3D::CreateShadowRenderPass() {
 
 // 创建阴影图形管线。
 bool VKRender3D::CreateShadowPipeline() {
-    auto vertShaderCode = ReadShaderFile("res/3d_shadow_vert.spv");
-    auto fragShaderCode = ReadShaderFile("res/3d_shadow_frag.spv");
-    VkShaderModule vertShaderModule = CreateShaderModuleHelper(vertShaderCode);
-    VkShaderModule fragShaderModule = CreateShaderModuleHelper(fragShaderCode);
+    auto vertShaderCode = ReadShaderFile("../windows/shaders/3d_shadow_vert.spv");
+    auto fragShaderCode = ReadShaderFile("../windows/shaders/3d_shadow_frag.spv");
+    VkShaderModule vertShaderModule = CreateShaderModuleHelper(
+        vertShaderCode, "../windows/shaders/3d_shadow_vert.spv");
+    VkShaderModule fragShaderModule = CreateShaderModuleHelper(
+        fragShaderCode, "../windows/shaders/3d_shadow_frag.spv");
 
     VkPipelineShaderStageCreateInfo vertStage{};
     vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

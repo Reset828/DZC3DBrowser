@@ -420,7 +420,25 @@ void MainWindow::SetupVulkan() {
     layout->addWidget(hSplitter);
     setCentralWidget(central);
 
-    connect(m_vulkanWindow, &QWindowVulkan::vulkanReady, this, &MainWindow::StartRenderLoop);
+    connect(m_vulkanWindow, &QWindowVulkan::vulkanReady, this, [this]() {
+        if (!m_renderer || !m_renderer->IsInitialized()) {
+            ReportRendererError(m_renderer, QStringLiteral("Vulkan 初始化失败"));
+            return;
+        }
+        StartRenderLoop();
+    });
+}
+
+// 弹出渲染器初始化或着色器加载失败说明。
+void MainWindow::ReportRendererError(Render* renderer, const QString& stage) {
+    QString message = stage;
+    if (renderer && !renderer->GetLastError().empty()) {
+        message += QLatin1Char('\n');
+        message += QString::fromStdString(renderer->GetLastError());
+    } else {
+        message += QStringLiteral("\n未返回具体原因。请确认工作目录为 code/，且 ../windows/shaders/ 中有所需着色器。");
+    }
+    QMessageBox::critical(this, QStringLiteral("初始化失败"), message);
 }
 
 // 把鼠标/滚轮事件转给当前渲染器。
@@ -1147,6 +1165,8 @@ void MainWindow::SwitchTo3D() {
         ApplyLightAnalysisToRenderer();
         RebuildSceneMeshes();
         m_renderTimer->start(16);
+    } else {
+        ReportRendererError(m_renderer, QStringLiteral("Vulkan 切换到三维失败"));
     }
 }
 
@@ -1182,6 +1202,8 @@ void MainWindow::SwitchTo2D() {
     if (m_renderer->Initialize("VulkanReference", w, h)) {
         RebuildSceneMeshes();
         m_renderTimer->start(16);
+    } else {
+        ReportRendererError(m_renderer, QStringLiteral("Vulkan 切换到二维失败"));
     }
 }
 
@@ -1249,7 +1271,10 @@ void MainWindow::EnsureOpenGLInitialized() {
         glRenderer->SetContext(m_openglWindow->GetContext());
         glRenderer->SetWindow(m_openglWindow);
         glRenderer->SetFramebufferSize(w, h);
-        if (!m_openglRenderer->Initialize("OpenGLReference", w, h)) return;
+        if (!m_openglRenderer->Initialize("OpenGLReference", w, h)) {
+            ReportRendererError(m_openglRenderer, QStringLiteral("OpenGL 初始化失败"));
+            return;
+        }
     }
 
     if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
@@ -1321,6 +1346,8 @@ void MainWindow::SwitchToVulkan() {
                 ApplyLightAnalysisToRenderer();
             }
             RebuildSceneMeshes();
+        } else {
+            ReportRendererError(m_renderer, QStringLiteral("Vulkan 重新初始化失败"));
         }
     }
     StartRenderLoop();

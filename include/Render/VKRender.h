@@ -183,7 +183,8 @@ protected:
     // 读取着色器文件。
     std::vector<char> ReadShaderFile(const std::string& filename);
     // 创建着色器模块，失败则抛错。
-    VkShaderModule CreateShaderModuleHelper(const std::vector<char>& code);
+    VkShaderModule CreateShaderModuleHelper(const std::vector<char>& code,
+                                            const std::string& filename);
 
     // 处理 Vulkan 调试回调。
     static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
