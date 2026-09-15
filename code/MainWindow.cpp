@@ -167,15 +167,16 @@ MainWindow::~MainWindow() {
 
 // 关闭窗口前停渲染并释放后端。
 void MainWindow::closeEvent(QCloseEvent* event) {
+    ++m_loadGeneration;
     if (m_renderTimer) {
         m_renderTimer->stop();
     }
-    if (m_renderer && m_renderer->IsInitialized()) {
+    if (m_renderer) {
         m_renderer->Quiesce();
         if (m_scene) m_scene->Clear();
         m_renderer->Shutdown();
     }
-    if (m_openglRenderer && m_openglRenderer->IsInitialized()) {
+    if (m_openglRenderer) {
         m_openglRenderer->Quiesce();
         if (m_scene) m_scene->Clear();
         ResetLoadedMeshPointers();
@@ -244,14 +245,28 @@ void MainWindow::SetupToolBar() {
 void MainWindow::SetupStatusBar() {
     statusBar()->setSizeGripEnabled(false);
 
-    m_coordX = new QLabel(QStringLiteral("X: 0.000"));
-    m_coordY = new QLabel(QStringLiteral("Y: 0.000"));
-    m_coordZ = new QLabel(QStringLiteral("Z: 0.000"));
+    m_backendLabel = new QLabel();
+    m_coordX = new QLabel();
+    m_coordY = new QLabel();
+    m_coordZ = new QLabel();
 
-
+    statusBar()->addPermanentWidget(m_backendLabel);
     statusBar()->addPermanentWidget(m_coordX);
     statusBar()->addPermanentWidget(m_coordY);
     statusBar()->addPermanentWidget(m_coordZ);
+    UpdateBackendStatus();
+}
+
+// 刷新状态栏后端名称，并清空上次世界坐标。
+void MainWindow::UpdateBackendStatus() {
+    if (m_backendLabel) {
+        m_backendLabel->setText(IsOpenGLBackend()
+            ? QStringLiteral("后端: OpenGL")
+            : QStringLiteral("后端: Vulkan（主）"));
+    }
+    if (m_coordX) m_coordX->setText(QStringLiteral("X: —"));
+    if (m_coordY) m_coordY->setText(QStringLiteral("Y: —"));
+    if (m_coordZ) m_coordZ->setText(QStringLiteral("Z: —"));
 }
 
 // 创建 Vulkan 窗口容器并接渲染循环。
@@ -438,7 +453,15 @@ void MainWindow::ReportRendererError(Render* renderer, const QString& stage) {
     } else {
         message += QStringLiteral("\n未返回具体原因。请确认工作目录为 code/，且 ../windows/shaders/ 中有所需着色器。");
     }
-    QMessageBox::critical(this, QStringLiteral("初始化失败"), message);
+    QMessageBox::critical(this, QStringLiteral("渲染错误"), message);
+}
+
+// 设备丢失时停循环并提示重启。
+void MainWindow::HandleDeviceLost(Render* renderer) {
+    if (m_renderTimer) {
+        m_renderTimer->stop();
+    }
+    ReportRendererError(renderer, QStringLiteral("图形设备已丢失"));
 }
 
 // 把鼠标/滚轮事件转给当前渲染器。
@@ -546,6 +569,10 @@ void MainWindow::StartRenderLoop() {
                     if (m_scene) m_scene->Render(0);
                     m_openglRenderer->EndFrame();
                 }
+                if (m_openglRenderer->IsDeviceLost()) {
+                    HandleDeviceLost(m_openglRenderer);
+                    return;
+                }
                 if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
                     if (render3D->HasNewWorldCoord()) {
                         m_coordX->setText(QStringLiteral("X: %1").arg(render3D->GetLastWorldX(), 0, 'f', 3));
@@ -569,6 +596,10 @@ void MainWindow::StartRenderLoop() {
             if (m_renderer->BeginFrame()) {
                 m_scene->Render(0);
                 m_renderer->EndFrame();
+            }
+            if (m_renderer->IsDeviceLost()) {
+                HandleDeviceLost(m_renderer);
+                return;
             }
             if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
                 if (render3D->HasNewWorldCoord()) {
@@ -720,7 +751,7 @@ void MainWindow::LoadFile(const QString& filePath) {
                                          const Vec3& /*sourceCenter*/,
                                          float /*normalizationScale*/) {
             if (loadGeneration != m_loadGeneration) return;
-            if (!m_renderer || m_renderer->IsShuttingDown()) return;
+            if (!m_renderer || m_renderer->IsShuttingDown() || m_renderer->IsDeviceLost()) return;
             AddLoadedModel(filePath, std::move(vertices), std::move(indices));
         });
 
@@ -1139,6 +1170,7 @@ void MainWindow::SwitchTo3D() {
     if (dynamic_cast<VKRender3D*>(m_renderer)) return;
 
     m_renderTimer->stop();
+    ++m_loadGeneration;
     m_scene->Clear();
     ResetLoadedMeshPointers();
     m_renderer->Shutdown();
@@ -1168,6 +1200,7 @@ void MainWindow::SwitchTo3D() {
     } else {
         ReportRendererError(m_renderer, QStringLiteral("Vulkan 切换到三维失败"));
     }
+    UpdateBackendStatus();
 }
 
 // 销毁三维渲染器并换成二维。
@@ -1180,6 +1213,7 @@ void MainWindow::SwitchTo2D() {
     if (dynamic_cast<VKRender2D*>(m_renderer)) return;
 
     m_renderTimer->stop();
+    ++m_loadGeneration;
     m_scene->Clear();
     ResetLoadedMeshPointers();
     m_renderer->Shutdown();
@@ -1205,6 +1239,7 @@ void MainWindow::SwitchTo2D() {
     } else {
         ReportRendererError(m_renderer, QStringLiteral("Vulkan 切换到二维失败"));
     }
+    UpdateBackendStatus();
 }
 
 // 切到二维渲染器。
@@ -1296,6 +1331,7 @@ void MainWindow::SwitchToOpenGL() {
     if (m_renderTimer) {
         m_renderTimer->stop();
     }
+    ++m_loadGeneration;
     if (m_renderer && m_renderer->IsInitialized()) {
         m_renderer->Quiesce();
         if (m_scene) m_scene->Clear();
@@ -1306,6 +1342,7 @@ void MainWindow::SwitchToOpenGL() {
     if (m_container) m_container->hide();
     m_openglContainer->show();
     EnsureOpenGLInitialized();
+    UpdateBackendStatus();
     StartRenderLoop();
 }
 
@@ -1318,6 +1355,7 @@ void MainWindow::SwitchToVulkan() {
     if (m_renderTimer) {
         m_renderTimer->stop();
     }
+    ++m_loadGeneration;
     if (m_openglRenderer && m_openglRenderer->IsInitialized()) {
         m_openglRenderer->Quiesce();
         if (m_scene) m_scene->Clear();
@@ -1350,6 +1388,7 @@ void MainWindow::SwitchToVulkan() {
             ReportRendererError(m_renderer, QStringLiteral("Vulkan 重新初始化失败"));
         }
     }
+    UpdateBackendStatus();
     StartRenderLoop();
 }
 
@@ -1359,6 +1398,7 @@ void MainWindow::SwitchOpenGLTo3D() {
     if (dynamic_cast<GLRender3D*>(m_openglRenderer)) return;
 
     if (m_renderTimer) m_renderTimer->stop();
+    ++m_loadGeneration;
     if (m_openglRenderer) {
         if (m_openglRenderer->IsInitialized()) {
             m_openglRenderer->Quiesce();
@@ -1376,6 +1416,7 @@ void MainWindow::SwitchOpenGLTo3D() {
     if (!glRenderer) return;
     m_openglWindow->SetRenderer(glRenderer);
     EnsureOpenGLInitialized();
+    UpdateBackendStatus();
     StartRenderLoop();
 }
 
@@ -1385,6 +1426,7 @@ void MainWindow::SwitchOpenGLTo2D() {
     if (dynamic_cast<GLRender2D*>(m_openglRenderer)) return;
 
     if (m_renderTimer) m_renderTimer->stop();
+    ++m_loadGeneration;
     if (m_openglRenderer) {
         if (m_openglRenderer->IsInitialized()) {
             m_openglRenderer->Quiesce();
@@ -1402,5 +1444,6 @@ void MainWindow::SwitchOpenGLTo2D() {
     if (!glRenderer) return;
     m_openglWindow->SetRenderer(glRenderer);
     EnsureOpenGLInitialized();
+    UpdateBackendStatus();
     StartRenderLoop();
 }

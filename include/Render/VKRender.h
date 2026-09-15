@@ -185,6 +185,10 @@ protected:
     // 创建着色器模块，失败则抛错。
     VkShaderModule CreateShaderModuleHelper(const std::vector<char>& code,
                                             const std::string& filename);
+    // 当前帧缓冲宽高是否可用于绘制。
+    bool HasUsableFramebuffer() const;
+    // 记录失败并返回 false。
+    bool Fail(const std::string& message);
 
     // 处理 Vulkan 调试回调。
     static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(

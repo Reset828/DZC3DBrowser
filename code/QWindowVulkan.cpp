@@ -25,9 +25,14 @@ QWindowVulkan::~QWindowVulkan() {
 // 首次露出时创建后端并 Initialize。
 void QWindowVulkan::exposeEvent(QExposeEvent* event) {
     if (isExposed() && !m_initialized) {
+        if (!CreateVulkanSurface()) {
+            if (m_renderer) {
+                m_renderer->ReportError("创建 Vulkan Instance 或 Win32 Surface 失败");
+            }
+            emit vulkanReady();
+            return;
+        }
         m_initialized = true;
-
-        if (!CreateVulkanSurface()) return;
 
         uint32_t w = static_cast<uint32_t>(width() * devicePixelRatio());
         uint32_t h = static_cast<uint32_t>(height() * devicePixelRatio());
@@ -35,7 +40,10 @@ void QWindowVulkan::exposeEvent(QExposeEvent* event) {
         m_renderer->SetInstance(m_instance);
         m_renderer->SetSurface(m_surface);
         m_renderer->SetFramebufferSize(w, h);
-        m_renderer->Initialize("VulkanReference", w, h);
+        if (!m_renderer->Initialize("VulkanReference", w, h)) {
+            emit vulkanReady();
+            return;
+        }
 
         emit vulkanReady();
     }
@@ -44,11 +52,13 @@ void QWindowVulkan::exposeEvent(QExposeEvent* event) {
 // 窗口尺寸变化时更新帧缓冲大小。
 void QWindowVulkan::resizeEvent(QResizeEvent* event) {
     QWindow::resizeEvent(event);
-    if (m_renderer->IsInitialized()) {
+    if (m_renderer && m_renderer->IsInitialized()) {
         uint32_t w = static_cast<uint32_t>(event->size().width() * devicePixelRatio());
         uint32_t h = static_cast<uint32_t>(event->size().height() * devicePixelRatio());
         m_renderer->SetFramebufferSize(w, h);
-        m_renderer->SetFramebufferResized(true);
+        if (w > 0 && h > 0) {
+            m_renderer->SetFramebufferResized(true);
+        }
     }
 }
 

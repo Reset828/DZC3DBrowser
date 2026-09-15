@@ -40,18 +40,41 @@ bool GLRender::Initialize(const char* /*appName*/, uint32_t width, uint32_t heig
     m_framebufferWidth = width;
     m_framebufferHeight = height;
     m_shuttingDown = false;
+    m_deviceLost = false;
+    m_lastError.clear();
 
-    if (!m_context || !m_window) return false;
-    if (!m_context->makeCurrent(m_window)) return false;
+    if (!m_context || !m_window) {
+        SetLastError("OpenGL 上下文或窗口未就绪");
+        return false;
+    }
+    if (!m_context->makeCurrent(m_window)) {
+        SetLastError("OpenGL makeCurrent 失败");
+        return false;
+    }
 
     m_functions = m_context->versionFunctions<QOpenGLFunctions_4_2_Core>();
-    if (!m_functions) return false;
+    if (!m_functions) {
+        SetLastError("无法获取 OpenGL 4.2 Core 函数表");
+        return false;
+    }
     m_functions->initializeOpenGLFunctions();
 
-    if (!OnInitialize()) return false;
-    if (!CreateRenderPass()) return false;
-    if (!CreatePipelines()) return false;
-    if (!CreateFramebuffers()) return false;
+    if (!OnInitialize()) {
+        if (m_lastError.empty()) SetLastError("OpenGL 后端初始化失败");
+        return false;
+    }
+    if (!CreateRenderPass()) {
+        if (m_lastError.empty()) SetLastError("OpenGL 创建 RenderPass 失败");
+        return false;
+    }
+    if (!CreatePipelines()) {
+        if (m_lastError.empty()) SetLastError("OpenGL 创建管线失败");
+        return false;
+    }
+    if (!CreateFramebuffers()) {
+        if (m_lastError.empty()) SetLastError("OpenGL 创建 Framebuffer 失败");
+        return false;
+    }
 
     m_initialized = true;
     return true;
@@ -59,8 +82,6 @@ bool GLRender::Initialize(const char* /*appName*/, uint32_t width, uint32_t heig
 
 // 等待异步任务完成并使渲染器静止。
 void GLRender::Quiesce() {
-    if (!m_initialized) return;
-
     m_shuttingDown = true;
     QThreadPool::globalInstance()->waitForDone();
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
@@ -86,7 +107,8 @@ void GLRender::Shutdown() {
 
 // 开始一帧渲染。
 bool GLRender::BeginFrame() {
-    if (!m_initialized || !m_context || !m_window) return false;
+    if (!m_initialized || m_deviceLost || !m_context || !m_window) return false;
+    if (m_framebufferWidth == 0 || m_framebufferHeight == 0) return false;
     if (!m_context->makeCurrent(m_window)) return false;
 
     if (!m_functions) return false;
@@ -103,7 +125,8 @@ bool GLRender::BeginFrame() {
 
 // 结束当前帧并提交结果。
 void GLRender::EndFrame() {
-    if (!m_initialized || !m_context || !m_window) return;
+    if (!m_initialized || m_deviceLost || !m_context || !m_window) return;
+    if (m_framebufferWidth == 0 || m_framebufferHeight == 0) return;
     OnEndFrame();
     m_context->swapBuffers(m_window);
 }
@@ -271,6 +294,7 @@ void GLRender2D::UpdateCameraUBO() {}
 #include <vector>
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <QOpenGLFunctions_4_2_Core>
@@ -446,9 +470,18 @@ void GLRender3D::OnMouseWheel(float delta) {
 
 // 后端初始化完成后的钩子。
 bool GLRender3D::OnInitialize() {
-    if (!CreateShaderProgram()) return false;
-    if (!CreateUniformBuffers()) return false;
-    if (!CreateDummyShadowMap()) return false;
+    if (!CreateShaderProgram()) {
+        if (m_lastError.empty()) SetLastError("OpenGL 着色器程序创建失败");
+        return false;
+    }
+    if (!CreateUniformBuffers()) {
+        SetLastError("OpenGL 创建 UBO 失败");
+        return false;
+    }
+    if (!CreateDummyShadowMap()) {
+        SetLastError("OpenGL 创建占位阴影贴图失败");
+        return false;
+    }
     if (m_functions) {
         m_functions->glEnable(GL_DEPTH_TEST);
         m_functions->glDepthFunc(GL_LESS);
@@ -472,7 +505,6 @@ void GLRender3D::OnShutdown() {
 
 // 每帧开始时的钩子。
 void GLRender3D::OnBeginFrame() {
-    ProcessDepthReadback();
     if (m_functions && m_program != 0) {
         m_functions->glUseProgram(m_program);
         m_currentProgram = m_program;
@@ -483,7 +515,9 @@ void GLRender3D::OnBeginFrame() {
 }
 
 // 每帧结束时的钩子。
-void GLRender3D::OnEndFrame() {}
+void GLRender3D::OnEndFrame() {
+    ProcessDepthReadback();
+}
 
 // 交换链/帧缓冲重建后的钩子。
 void GLRender3D::OnRecreateSwapchain() {
@@ -665,6 +699,9 @@ void GLRender3D::UpdateUniformBuffer() {
         proj = glm::perspectiveRH_NO(verticalFov, aspect, 0.1f, 100.0f);
     }
 
+    m_invViewProj = glm::inverse(proj * view);
+    m_renderToSource = m_normalizedToWorld * glm::inverse(model);
+
     UniformBufferObject3D ubo{};
     memcpy(ubo.model, glm::value_ptr(model), sizeof(float) * 16);
     memcpy(ubo.view, glm::value_ptr(view), sizeof(float) * 16);
@@ -696,8 +733,65 @@ void GLRender3D::DestroyDepthResources() {}
 bool GLRender3D::CreateDepthReadbackResources() { return true; }
 // 销毁深度回读缓冲。
 void GLRender3D::DestroyDepthReadbackResources() {}
+
 // 把回读深度反投影为世界坐标。
-void GLRender3D::ProcessDepthReadback() {}
+void GLRender3D::ProcessDepthReadback() {
+    if (!m_depthReadbackRequested || !m_functions) return;
+    m_depthReadbackRequested = false;
+
+    if (m_framebufferWidth == 0 || m_framebufferHeight == 0) return;
+
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    int32_t pixelX = static_cast<int32_t>(m_requestedNDCX *
+        static_cast<float>(m_framebufferWidth));
+    int32_t pixelY = static_cast<int32_t>((1.0f - m_requestedNDCY) *
+        static_cast<float>(m_framebufferHeight));
+    pixelX = std::max(0, std::min(pixelX,
+        static_cast<int32_t>(m_framebufferWidth) - 1));
+    pixelY = std::max(0, std::min(pixelY,
+        static_cast<int32_t>(m_framebufferHeight) - 1));
+
+    float depth = 1.0f;
+    m_functions->glReadPixels(pixelX, pixelY, 1, 1,
+        GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
+
+    const float x_ndc = m_requestedNDCX * 2.0f - 1.0f;
+    const float y_ndc = 1.0f - m_requestedNDCY * 2.0f;
+    const float z_ndc = depth * 2.0f - 1.0f;
+
+    glm::vec4 worldPos{};
+    if (std::isfinite(depth) && depth >= 0.0f && depth < 0.999f) {
+        const glm::vec4 clipPos(x_ndc, y_ndc, z_ndc, 1.0f);
+        glm::vec4 renderPos = m_invViewProj * clipPos;
+        renderPos /= renderPos.w;
+        worldPos = m_renderToSource * renderPos;
+        worldPos /= worldPos.w;
+    } else {
+        glm::vec4 nearRender = m_invViewProj * glm::vec4(x_ndc, y_ndc, -1.0f, 1.0f);
+        glm::vec4 farRender  = m_invViewProj * glm::vec4(x_ndc, y_ndc,  1.0f, 1.0f);
+        nearRender /= nearRender.w;
+        farRender  /= farRender.w;
+
+        glm::vec4 nearWorld = m_renderToSource * nearRender;
+        glm::vec4 farWorld = m_renderToSource * farRender;
+        nearWorld /= nearWorld.w;
+        farWorld /= farWorld.w;
+
+        const glm::vec3 rayOrigin(nearWorld);
+        const glm::vec3 rayDirection = glm::normalize(glm::vec3(farWorld - nearWorld));
+        const float denominator = rayDirection.z;
+        const float distance = std::abs(denominator) > 1.0e-6f
+            ? -rayOrigin.z / denominator
+            : 0.0f;
+        worldPos = glm::vec4(rayOrigin + rayDirection * distance, 1.0f);
+    }
+
+    m_lastWorldCoord[0] = worldPos.x;
+    m_lastWorldCoord[1] = worldPos.y;
+    m_lastWorldCoord[2] = worldPos.z;
+    m_newCoordAvailable = true;
+}
 
 // 开关线框模式。
 void GLRender3D::SetWireframeEnabled(bool enabled) {
@@ -938,7 +1032,7 @@ bool GLRender3D::TryAllocateShadowMap(uint32_t size) {
 
 // 光照分析开启时保证阴影贴图可用。
 bool GLRender3D::EnsureShadowMapForAnalysis() {
-    if (!m_initialized || !m_lightAnalysisEnabled) return false;
+    if (!m_initialized || m_deviceLost || !m_lightAnalysisEnabled) return false;
     if (m_context && m_window) {
         m_context->makeCurrent(m_window);
     }
@@ -975,7 +1069,9 @@ bool GLRender3D::EnsureShadowMapForAnalysis() {
 
 // 开始向阴影贴图绘制。
 bool GLRender3D::BeginShadowPass() {
-    if (!m_initialized || !m_lightAnalysisEnabled || !m_sunAboveHorizon) return false;
+    if (!m_initialized || m_deviceLost) return false;
+    if (m_framebufferWidth == 0 || m_framebufferHeight == 0) return false;
+    if (!m_lightAnalysisEnabled || !m_sunAboveHorizon) return false;
     if (!m_context || !m_window || !m_context->makeCurrent(m_window)) return false;
     if (!EnsureShadowMapForAnalysis() || !m_shadowMapReady || m_shadowFbo == 0) return false;
     if (!m_functions) return false;

@@ -52,3 +52,17 @@ Required on a new machine:
 The `PrepareRuntimeShaders` target runs before compile: it copies GLSL from `code/res/` into `windows/shaders/` and compiles SPIR-V with `glslc --target-env=vulkan1.0`. After editing GLSL, rebuild so `windows/shaders/` refreshes.
 
 `code/res/` keeps GLSL sources only. Debug and Release share `windows/shaders/`.
+
+## Backends
+
+Vulkan is the primary backend and the startup default. OpenGL 4.2 Core is a switchable 3D backend with the same mesh, camera, display-mode, shadow, and world-coordinate features.
+
+| Capability | Vulkan | OpenGL |
+|------------|--------|--------|
+| 3D mesh, orbit camera, ortho | supported | supported |
+| Gray / dye / wireframe | supported | supported |
+| Light analysis + shadow map | supported | supported |
+| World-coord from depth | supported | supported |
+| 2D | partial (see task 0.4) | unsupported |
+
+The status bar shows the active backend. Switching backends clears the last world-coordinate readout. OpenGL 2D has no shader or draw path; do not treat the 2D/3D switch as equivalent on OpenGL.

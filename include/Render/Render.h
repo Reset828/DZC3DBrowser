@@ -68,6 +68,10 @@ public:
     bool IsShuttingDown() const;
     // 返回最近一次初始化或着色器加载失败的说明。
     const std::string& GetLastError() const;
+    // 查询逻辑设备是否已丢失。
+    bool IsDeviceLost() const;
+    // 记录失败原因（供窗口层在 Instance/Surface 创建失败时使用）。
+    void ReportError(std::string message);
 
     // 设置清屏颜色。
     void SetClearColor(float r, float g, float b, float a);
@@ -92,6 +96,8 @@ protected:
 
     // 记录最近一次失败原因。
     void SetLastError(std::string message);
+    // 标记设备丢失并记录原因。
+    void MarkDeviceLost(std::string message);
 
     bool m_initialized = false;
     uint32_t m_framebufferWidth = 800;
@@ -99,6 +105,7 @@ protected:
     Vec4 m_clearColor = { 0.1f, 0.1f, 0.12f, 1.0f };
     bool m_framebufferResized = false;
     std::atomic<bool> m_shuttingDown{ false };
+    bool m_deviceLost = false;
     MeshFactory m_meshFactory;
     std::string m_lastError;
 };

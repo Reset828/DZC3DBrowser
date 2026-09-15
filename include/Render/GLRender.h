@@ -327,6 +327,8 @@ protected:
     float m_requestedNDCY = 0.0f;
     float m_lastWorldCoord[3] = {};
     mutable bool m_newCoordAvailable = false;
+    glm::mat4 m_invViewProj = glm::mat4(1.0f);
+    glm::mat4 m_renderToSource = glm::mat4(1.0f);
     glm::mat4 m_normalizedToWorld = glm::mat4(1.0f);
 
     unsigned int m_program = 0;

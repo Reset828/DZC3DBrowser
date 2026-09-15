@@ -29,7 +29,13 @@ QWindowOpenGL::~QWindowOpenGL() {
 void QWindowOpenGL::exposeEvent(QExposeEvent* event) {
     Q_UNUSED(event);
     if (isExposed() && !m_initialized) {
-        if (!CreateOpenGLContext()) return;
+        if (!CreateOpenGLContext()) {
+            if (m_renderer) {
+                m_renderer->ReportError("创建 OpenGL 上下文失败");
+            }
+            emit openGLReady();
+            return;
+        }
         if (!m_renderer) return;
 
         m_initialized = true;
@@ -40,7 +46,10 @@ void QWindowOpenGL::exposeEvent(QExposeEvent* event) {
         m_renderer->SetContext(m_context);
         m_renderer->SetWindow(this);
         m_renderer->SetFramebufferSize(w, h);
-        m_renderer->Initialize("OpenGLReference", w, h);
+        if (!m_renderer->Initialize("OpenGLReference", w, h)) {
+            emit openGLReady();
+            return;
+        }
 
         emit openGLReady();
     }
@@ -53,7 +62,9 @@ void QWindowOpenGL::resizeEvent(QResizeEvent* event) {
         const uint32_t w = static_cast<uint32_t>(event->size().width() * devicePixelRatio());
         const uint32_t h = static_cast<uint32_t>(event->size().height() * devicePixelRatio());
         m_renderer->SetFramebufferSize(w, h);
-        m_renderer->SetFramebufferResized(true);
+        if (w > 0 && h > 0) {
+            m_renderer->SetFramebufferResized(true);
+        }
     }
 }
 

@@ -29,9 +29,8 @@ private:
 }
 
 #define VK_CHECK_RESULT(result, msg) \
-    if (result != VK_SUCCESS) { \
-        std::cerr << "Vulkan错误: " << msg << " (错误码: " << result << ")" << std::endl; \
-        return false; \
+    if ((result) != VK_SUCCESS) { \
+        return Fail(std::string(msg) + " (错误码: " + std::to_string(result) + ")"); \
     }
 
 // 判断图形队列和呈现队列是否均已找到。
@@ -53,6 +52,8 @@ VKRender::~VKRender() {
 bool VKRender::Initialize(const char* appName, uint32_t width, uint32_t height) {
     m_framebufferWidth = width;
     m_framebufferHeight = height;
+    m_deviceLost = false;
+    m_lastError.clear();
 
     if (m_instance == VK_NULL_HANDLE) {
         if (!CreateInstance(appName)) return false;
@@ -70,12 +71,18 @@ bool VKRender::Initialize(const char* appName, uint32_t width, uint32_t height) 
     m_shuttingDown = false;
     m_frameRecording = false;
 
-    if (!OnInitialize()) return false;
+    if (!OnInitialize()) {
+        if (m_lastError.empty()) SetLastError("后端初始化失败");
+        return false;
+    }
 
     if (!CreateRenderPass()) return false;
 
     try {
-        if (!CreatePipelines()) return false;
+        if (!CreatePipelines()) {
+            if (m_lastError.empty()) SetLastError("创建图形管线失败");
+            return false;
+        }
     } catch (const std::exception& e) {
         SetLastError(e.what());
         std::cerr << e.what() << std::endl;
@@ -94,8 +101,6 @@ bool VKRender::Initialize(const char* appName, uint32_t width, uint32_t height) 
 
 // 等待异步任务完成并使渲染器静止。
 void VKRender::Quiesce() {
-    if (!m_initialized) return;
-
     m_shuttingDown = true;
 
     if (m_asyncThreadPool) {
@@ -103,21 +108,39 @@ void VKRender::Quiesce() {
     }
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
-    vkDeviceWaitIdle(m_device);
+    if (m_device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(m_device);
+    }
 }
 
 // 关闭渲染器并释放资源。
 void VKRender::Shutdown() {
-    if (!m_initialized) return;
+    if (!m_initialized && m_device == VK_NULL_HANDLE && m_swapchain == VK_NULL_HANDLE) {
+        return;
+    }
 
-    Quiesce();
+    if (m_initialized || m_device != VK_NULL_HANDLE) {
+        Quiesce();
+    }
 
     CleanupSwapchain();
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroySemaphore(m_device, m_imageAvailableSemaphores[i], nullptr);
-        vkDestroySemaphore(m_device, m_renderFinishedSemaphores[i], nullptr);
-        vkDestroyFence(m_device, m_inFlightFences[i], nullptr);
+    if (m_device != VK_NULL_HANDLE) {
+        for (VkSemaphore semaphore : m_imageAvailableSemaphores) {
+            if (semaphore != VK_NULL_HANDLE) {
+                vkDestroySemaphore(m_device, semaphore, nullptr);
+            }
+        }
+        for (VkSemaphore semaphore : m_renderFinishedSemaphores) {
+            if (semaphore != VK_NULL_HANDLE) {
+                vkDestroySemaphore(m_device, semaphore, nullptr);
+            }
+        }
+        for (VkFence fence : m_inFlightFences) {
+            if (fence != VK_NULL_HANDLE) {
+                vkDestroyFence(m_device, fence, nullptr);
+            }
+        }
     }
 
     if (m_singleTimeCommandPool != VK_NULL_HANDLE) {
@@ -176,6 +199,19 @@ void VKRender::Shutdown() {
 
     m_initialized = false;
     m_shuttingDown = false;
+    m_deviceLost = false;
+}
+
+// 当前帧缓冲宽高是否可用于绘制。
+bool VKRender::HasUsableFramebuffer() const {
+    return m_framebufferWidth > 0 && m_framebufferHeight > 0;
+}
+
+// 记录失败并返回 false。
+bool VKRender::Fail(const std::string& message) {
+    SetLastError(message);
+    std::cerr << message << std::endl;
+    return false;
 }
 
 
@@ -185,6 +221,13 @@ void VKRender::Shutdown() {
 // 确保本帧已开始录制命令。
 bool VKRender::EnsureFrameRecording() {
     if (m_frameRecording) return true;
+    if (m_deviceLost || !m_initialized || m_device == VK_NULL_HANDLE) return false;
+    if (m_swapchain == VK_NULL_HANDLE || !HasUsableFramebuffer()) return false;
+
+    if (m_framebufferResized) {
+        m_framebufferResized = false;
+        if (!RecreateSwapchain()) return false;
+    }
 
     vkWaitForFences(m_device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
 
@@ -196,8 +239,16 @@ bool VKRender::EnsureFrameRecording() {
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         RecreateSwapchain();
         return false;
-    } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-        throw std::runtime_error("获取交换链图像失败");
+    }
+    if (result == VK_ERROR_DEVICE_LOST || result == VK_ERROR_SURFACE_LOST_KHR) {
+        MarkDeviceLost(result == VK_ERROR_DEVICE_LOST
+            ? "Vulkan 设备已丢失，请重启应用"
+            : "Vulkan 表面已丢失，请重启应用");
+        return false;
+    }
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        Fail("获取交换链图像失败 (错误码: " + std::to_string(result) + ")");
+        return false;
     }
 
     m_imageIndex = imageIndex;
@@ -245,6 +296,8 @@ void VKRender::BeginColorRenderPass() {
 
 // 开始一帧渲染。
 bool VKRender::BeginFrame() {
+    if (m_deviceLost || !m_initialized) return false;
+    if (!HasUsableFramebuffer()) return false;
     OnPrepareFrame();
     if (!EnsureFrameRecording()) return false;
     BeginColorRenderPass();
@@ -253,6 +306,8 @@ bool VKRender::BeginFrame() {
 
 // 结束当前帧并提交结果。
 void VKRender::EndFrame() {
+    if (!m_frameRecording) return;
+
     vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
 
     OnEndFrame();
@@ -274,8 +329,18 @@ void VKRender::EndFrame() {
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
-    if (vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, m_inFlightFences[m_currentFrame]) != VK_SUCCESS) {
-        throw std::runtime_error("提交命令缓冲区失败");
+    const VkResult submitResult = vkQueueSubmit(
+        m_graphicsQueue, 1, &submitInfo, m_inFlightFences[m_currentFrame]);
+    if (submitResult == VK_ERROR_DEVICE_LOST) {
+        m_frameRecording = false;
+        MarkDeviceLost("Vulkan 设备已丢失，请重启应用");
+        return;
+    }
+    if (submitResult != VK_SUCCESS) {
+        m_frameRecording = false;
+        Fail("提交命令缓冲区失败 (错误码: " + std::to_string(submitResult) + ")");
+        MarkDeviceLost(m_lastError);
+        return;
     }
 
     VkPresentInfoKHR presentInfo{};
@@ -290,15 +355,22 @@ void VKRender::EndFrame() {
 
     VkResult result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
 
+    m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    m_frameRecording = false;
+
+    if (result == VK_ERROR_DEVICE_LOST || result == VK_ERROR_SURFACE_LOST_KHR) {
+        MarkDeviceLost(result == VK_ERROR_DEVICE_LOST
+            ? "Vulkan 设备已丢失，请重启应用"
+            : "Vulkan 表面已丢失，请重启应用");
+        return;
+    }
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || m_framebufferResized) {
         m_framebufferResized = false;
         RecreateSwapchain();
     } else if (result != VK_SUCCESS) {
-        throw std::runtime_error("呈现图像失败");
+        Fail("呈现图像失败 (错误码: " + std::to_string(result) + ")");
+        MarkDeviceLost(m_lastError);
     }
-
-    m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-    m_frameRecording = false;
 }
 
 // 提交索引绘制命令。
@@ -493,8 +565,7 @@ std::vector<const char*> VKRender::GetRequiredExtensions() {
 // 创建 VkInstance。
 bool VKRender::CreateInstance(const char* appName) {
     if (m_enableValidationLayers && !CheckValidationLayerSupport()) {
-        std::cerr << "验证层不可用" << std::endl;
-        return false;
+        return Fail("Vulkan 验证层不可用");
     }
 
     VkApplicationInfo appInfo{};
@@ -535,8 +606,7 @@ bool VKRender::CreateInstance(const char* appName) {
 
     VkResult result = vkCreateInstance(&createInfo, nullptr, &m_instance);
     if (result != VK_SUCCESS) {
-        std::cerr << "创建Vulkan实例失败" << std::endl;
-        return false;
+        return Fail("创建 Vulkan Instance 失败");
     }
 
     return true;
@@ -559,8 +629,7 @@ bool VKRender::SetupDebugMessenger() {
     if (func) {
         VkResult result = func(m_instance, &createInfo, nullptr, &m_debugMessenger);
         if (result != VK_SUCCESS) {
-            std::cerr << "设置调试回调失败" << std::endl;
-            return false;
+            return Fail("设置 Vulkan 调试回调失败");
         }
     }
 
@@ -573,8 +642,7 @@ bool VKRender::PickPhysicalDevice() {
     vkEnumeratePhysicalDevices(m_instance, &deviceCount, nullptr);
 
     if (deviceCount == 0) {
-        std::cerr << "未找到支持Vulkan的GPU" << std::endl;
-        return false;
+        return Fail("未找到支持 Vulkan 的 GPU");
     }
 
     std::vector<VkPhysicalDevice> devices(deviceCount);
@@ -590,8 +658,7 @@ bool VKRender::PickPhysicalDevice() {
     }
 
     if (m_physicalDevice == VK_NULL_HANDLE) {
-        std::cerr << "未找到合适的GPU" << std::endl;
-        return false;
+        return Fail("未找到合适的 Vulkan GPU");
     }
 
     return true;
@@ -628,8 +695,7 @@ bool VKRender::CreateLogicalDevice() {
 
     VkResult result = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
     if (result != VK_SUCCESS) {
-        std::cerr << "创建逻辑设备失败" << std::endl;
-        return false;
+        return Fail("创建 Vulkan 逻辑设备失败");
     }
 
     vkGetDeviceQueue(m_device, indices.graphicsFamily, 0, &m_graphicsQueue);
@@ -640,11 +706,22 @@ bool VKRender::CreateLogicalDevice() {
 
 // 创建交换链。
 bool VKRender::CreateSwapchain() {
+    if (!HasUsableFramebuffer()) {
+        return Fail("窗口尺寸为 0，无法创建 Swapchain");
+    }
+
     VulkanSwapchainSupportDetails swapChainSupport = QuerySwapchainSupport(m_physicalDevice);
+
+    if (swapChainSupport.formats.empty() || swapChainSupport.presentModes.empty()) {
+        return Fail("Surface 不支持 Swapchain 格式或呈现模式");
+    }
 
     VkSurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(swapChainSupport.formats);
     VkPresentModeKHR presentMode = ChooseSwapPresentMode(swapChainSupport.presentModes);
     VkExtent2D extent = ChooseSwapExtent(swapChainSupport.capabilities);
+    if (extent.width == 0 || extent.height == 0) {
+        return false;
+    }
 
     uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
     if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
@@ -681,8 +758,7 @@ bool VKRender::CreateSwapchain() {
 
     VkResult result = vkCreateSwapchainKHR(m_device, &createInfo, nullptr, &m_swapchain);
     if (result != VK_SUCCESS) {
-        std::cerr << "创建交换链失败" << std::endl;
-        return false;
+        return Fail("创建 Swapchain 失败");
     }
 
     vkGetSwapchainImagesKHR(m_device, m_swapchain, &imageCount, nullptr);
@@ -697,16 +773,20 @@ bool VKRender::CreateSwapchain() {
 
 // 重建 Vulkan 交换链。
 bool VKRender::RecreateSwapchain() {
+    if (m_deviceLost || m_device == VK_NULL_HANDLE) return false;
+    if (!HasUsableFramebuffer()) return false;
+
     vkDeviceWaitIdle(m_device);
 
     CleanupSwapchain();
-
     OnRecreateSwapchain();
 
     if (!CreateSwapchain()) return false;
     if (!CreateImageViews()) return false;
     if (!CreateFramebuffers()) return false;
 
+    m_framebufferResized = false;
+    m_frameRecording = false;
     return true;
 }
 
@@ -731,8 +811,7 @@ bool VKRender::CreateImageViews() {
         createInfo.subresourceRange.layerCount = 1;
 
         if (vkCreateImageView(m_device, &createInfo, nullptr, &m_swapchainImageViews[i]) != VK_SUCCESS) {
-            std::cerr << "创建图像视图失败" << std::endl;
-            return false;
+            return Fail("创建 Swapchain 图像视图失败");
         }
     }
 
@@ -778,8 +857,7 @@ bool VKRender::CreateRenderPass() {
     renderPassInfo.pDependencies = &dependency;
 
     if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
-        std::cerr << "创建渲染通道失败" << std::endl;
-        return false;
+        return Fail("创建 RenderPass 失败");
     }
 
     return true;
@@ -807,8 +885,7 @@ bool VKRender::CreateFramebuffers() {
         framebufferInfo.layers = 1;
 
         if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_swapchainFramebuffers[i]) != VK_SUCCESS) {
-            std::cerr << "创建帧缓冲区失败" << std::endl;
-            return false;
+            return Fail("创建 Framebuffer 失败");
         }
     }
 
@@ -825,14 +902,12 @@ bool VKRender::CreateCommandPool() {
     poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
 
     if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_commandPool) != VK_SUCCESS) {
-        std::cerr << "创建命令池失败" << std::endl;
-        return false;
+        return Fail("创建命令池失败");
     }
 
     poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
     if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_singleTimeCommandPool) != VK_SUCCESS) {
-        std::cerr << "创建单次命令池失败" << std::endl;
-        return false;
+        return Fail("创建单次命令池失败");
     }
 
     return true;
@@ -849,8 +924,7 @@ bool VKRender::CreateCommandBuffers() {
     allocInfo.commandBufferCount = static_cast<uint32_t>(m_commandBuffers.size());
 
     if (vkAllocateCommandBuffers(m_device, &allocInfo, m_commandBuffers.data()) != VK_SUCCESS) {
-        std::cerr << "分配命令缓冲区失败" << std::endl;
-        return false;
+        return Fail("分配命令缓冲区失败");
     }
 
     return true;
@@ -858,9 +932,9 @@ bool VKRender::CreateCommandBuffers() {
 
 // 创建信号量与围栏。
 bool VKRender::CreateSyncObjects() {
-    m_imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    m_renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    m_inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+    m_imageAvailableSemaphores.assign(MAX_FRAMES_IN_FLIGHT, VK_NULL_HANDLE);
+    m_renderFinishedSemaphores.assign(MAX_FRAMES_IN_FLIGHT, VK_NULL_HANDLE);
+    m_inFlightFences.assign(MAX_FRAMES_IN_FLIGHT, VK_NULL_HANDLE);
 
     VkSemaphoreCreateInfo semaphoreInfo{};
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -873,8 +947,7 @@ bool VKRender::CreateSyncObjects() {
         if (vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_imageAvailableSemaphores[i]) != VK_SUCCESS ||
             vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_renderFinishedSemaphores[i]) != VK_SUCCESS ||
             vkCreateFence(m_device, &fenceInfo, nullptr, &m_inFlightFences[i]) != VK_SUCCESS) {
-            std::cerr << "创建同步对象失败" << std::endl;
-            return false;
+            return Fail("创建 Fence/Semaphore 失败");
         }
     }
 
@@ -883,20 +956,25 @@ bool VKRender::CreateSyncObjects() {
 
 // 清理 Vulkan 交换链资源。
 void VKRender::CleanupSwapchain() {
-    for (auto framebuffer : m_swapchainFramebuffers) {
-        vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+    if (m_device != VK_NULL_HANDLE) {
+        for (auto framebuffer : m_swapchainFramebuffers) {
+            if (framebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+            }
+        }
+        for (auto imageView : m_swapchainImageViews) {
+            if (imageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(m_device, imageView, nullptr);
+            }
+        }
+        if (m_swapchain != VK_NULL_HANDLE) {
+            vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+        }
     }
     m_swapchainFramebuffers.clear();
-
-    for (auto imageView : m_swapchainImageViews) {
-        vkDestroyImageView(m_device, imageView, nullptr);
-    }
     m_swapchainImageViews.clear();
-
-    if (m_swapchain != VK_NULL_HANDLE) {
-        vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
-        m_swapchain = VK_NULL_HANDLE;
-    }
+    m_swapchainImages.clear();
+    m_swapchain = VK_NULL_HANDLE;
 }
 
 
@@ -1113,7 +1191,7 @@ VkShaderModule VKRender::CreateShaderModuleHelper(const std::vector<char>& code,
 
 // 把任务丢进线程池异步执行。
 void VKRender::SubmitAsync(Render::AsyncTask task) {
-    if (!task || IsShuttingDown()) return;
+    if (!task || IsShuttingDown() || IsDeviceLost()) return;
     if (m_asyncThreadPool) {
         m_asyncThreadPool->start(new VKFunctionRunnable(std::move(task)));
     }
@@ -1121,7 +1199,7 @@ void VKRender::SubmitAsync(Render::AsyncTask task) {
 
 // 把任务丢进线程池异步执行。
 void VKRender::SubmitAsync(QRunnable* task) {
-    if (!task || IsShuttingDown()) return;
+    if (!task || IsShuttingDown() || IsDeviceLost()) return;
     if (m_asyncThreadPool) {
         m_asyncThreadPool->start(task);
     }
@@ -1199,10 +1277,22 @@ bool VKRender2D::OnInitialize() {
     m_clearValueCount = 1;
     m_clearValues[0].color = { m_clearColor.x, m_clearColor.y, m_clearColor.z, m_clearColor.w };
 
-    if (!CreateDescriptorSetLayout()) return false;
-    if (!CreateUniformBuffers()) return false;
-    if (!CreateDescriptorPool()) return false;
-    if (!CreateDescriptorSets()) return false;
+    if (!CreateDescriptorSetLayout()) {
+        if (m_lastError.empty()) SetLastError("2D: 创建描述符集布局失败");
+        return false;
+    }
+    if (!CreateUniformBuffers()) {
+        if (m_lastError.empty()) SetLastError("2D: 创建 UBO 失败");
+        return false;
+    }
+    if (!CreateDescriptorPool()) {
+        if (m_lastError.empty()) SetLastError("2D: 创建描述符池失败");
+        return false;
+    }
+    if (!CreateDescriptorSets()) {
+        if (m_lastError.empty()) SetLastError("2D: 创建描述符集失败");
+        return false;
+    }
     return true;
 }
 
@@ -1271,8 +1361,7 @@ bool VKRender2D::CreatePipelines() {
         pipelineLayoutInfo.setLayoutCount = 1;
         pipelineLayoutInfo.pSetLayouts = &m_descriptorSetLayout;
         if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-            std::cerr << "2D: 创建管线布局失败" << std::endl;
-            return false;
+            return Fail("2D: 创建管线布局失败");
         }
     }
 
@@ -1338,8 +1427,7 @@ bool VKRender2D::CreatePipelines() {
 
     VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipelines[DT_TRIANGLE]);
     if (result != VK_SUCCESS) {
-        std::cerr << "2D: 创建管线失败" << std::endl;
-        return false;
+        return Fail("2D: 创建图形管线失败");
     }
 
     vkDestroyShaderModule(m_device, fragShaderModule, nullptr);
@@ -1699,14 +1787,38 @@ bool VKRender3D::OnInitialize() {
     m_clearValues[0].color = { m_clearColor.x, m_clearColor.y, m_clearColor.z, m_clearColor.w };
     m_clearValues[1].depthStencil = { 1.0f, 0 };
 
-    if (!CreateDescriptorSetLayout()) return false;
-    if (!CreateUniformBuffers()) return false;
-    if (!CreateShadowSampler()) return false;
-    if (!CreateDummyShadowMap()) return false;
-    if (!CreateShadowRenderPass()) return false;
-    if (!CreateDescriptorPool()) return false;
-    if (!CreateDescriptorSets()) return false;
-    if (!CreateDepthReadbackResources()) return false;
+    if (!CreateDescriptorSetLayout()) {
+        if (m_lastError.empty()) SetLastError("3D: 创建描述符集布局失败");
+        return false;
+    }
+    if (!CreateUniformBuffers()) {
+        if (m_lastError.empty()) SetLastError("3D: 创建 UBO 失败");
+        return false;
+    }
+    if (!CreateShadowSampler()) {
+        if (m_lastError.empty()) SetLastError("3D: 创建阴影采样器失败");
+        return false;
+    }
+    if (!CreateDummyShadowMap()) {
+        if (m_lastError.empty()) SetLastError("3D: 创建占位阴影贴图失败");
+        return false;
+    }
+    if (!CreateShadowRenderPass()) {
+        if (m_lastError.empty()) SetLastError("3D: 创建阴影 RenderPass 失败");
+        return false;
+    }
+    if (!CreateDescriptorPool()) {
+        if (m_lastError.empty()) SetLastError("3D: 创建描述符池失败");
+        return false;
+    }
+    if (!CreateDescriptorSets()) {
+        if (m_lastError.empty()) SetLastError("3D: 创建描述符集失败");
+        return false;
+    }
+    if (!CreateDepthReadbackResources()) {
+        if (m_lastError.empty()) SetLastError("3D: 创建深度回读缓冲失败");
+        return false;
+    }
     return true;
 }
 
@@ -1815,8 +1927,7 @@ bool VKRender3D::CreateRenderPass() {
     renderPassInfo.pDependencies = &dependency;
 
     if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
-        std::cerr << "3D: 创建渲染通道失败" << std::endl;
-        return false;
+        return Fail("3D: 创建 RenderPass 失败");
     }
 
     return true;
@@ -1863,8 +1974,7 @@ bool VKRender3D::CreatePipelines() {
         pipelineLayoutInfo.setLayoutCount = 1;
         pipelineLayoutInfo.pSetLayouts = &m_descriptorSetLayout;
         if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-            std::cerr << "3D: 创建管线布局失败" << std::endl;
-            return false;
+            return Fail("3D: 创建管线布局失败");
         }
     }
 
@@ -1960,10 +2070,9 @@ bool VKRender3D::CreatePipelines() {
 
         VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipelines[topo]);
         if (result != VK_SUCCESS) {
-            std::cerr << "3D: 创建管线失败 (拓扑: " << topo << ")" << std::endl;
             vkDestroyShaderModule(m_device, fragShaderModule, nullptr);
             vkDestroyShaderModule(m_device, vertShaderModule, nullptr);
-            return false;
+            return Fail("3D: 创建图形管线失败");
         }
     }
 
@@ -1996,8 +2105,7 @@ bool VKRender3D::CreateFramebuffers() {
         framebufferInfo.layers = 1;
 
         if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_swapchainFramebuffers[i]) != VK_SUCCESS) {
-            std::cerr << "3D: 创建帧缓冲区失败" << std::endl;
-            return false;
+            return Fail("3D: 创建 Framebuffer 失败");
         }
     }
 
@@ -2794,8 +2902,7 @@ bool VKRender3D::CreateShadowPipeline() {
     vkDestroyShaderModule(m_device, fragShaderModule, nullptr);
     vkDestroyShaderModule(m_device, vertShaderModule, nullptr);
     if (result != VK_SUCCESS) {
-        std::cerr << "3D: 创建阴影管线失败" << std::endl;
-        return false;
+        return Fail("3D: 创建阴影管线失败");
     }
     return true;
 }
@@ -2969,7 +3076,7 @@ bool VKRender3D::TryAllocateShadowMap(uint32_t size) {
 
 // 光照分析开启时保证阴影贴图可用。
 bool VKRender3D::EnsureShadowMapForAnalysis() {
-    if (!m_initialized || !m_lightAnalysisEnabled) return false;
+    if (!m_initialized || m_deviceLost || !m_lightAnalysisEnabled) return false;
     if (m_shadowMapReady && m_allocatedShadowTextureSize == m_shadowTextureSize) {
         return true;
     }
@@ -3005,7 +3112,8 @@ bool VKRender3D::EnsureShadowMapForAnalysis() {
 
 // 开始向阴影贴图绘制。
 bool VKRender3D::BeginShadowPass() {
-    if (!m_initialized || !m_lightAnalysisEnabled || !m_sunAboveHorizon) return false;
+    if (!m_initialized || m_deviceLost || !HasUsableFramebuffer()) return false;
+    if (!m_lightAnalysisEnabled || !m_sunAboveHorizon) return false;
     EnsureDummyShadowReady();
     if (!EnsureShadowMapForAnalysis() || !m_shadowMapReady || m_shadowFramebuffer == VK_NULL_HANDLE) {
         return false;

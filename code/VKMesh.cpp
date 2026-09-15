@@ -16,7 +16,8 @@ VKMesh::~VKMesh() {
 // 启动 Mesh 数据的异步上传。
 void VKMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
                               std::vector<uint32_t>&& indices) {
-    if (!m_pRender || vertices.empty() || indices.empty()) return;
+    if (!m_pRender || m_pRender->IsShuttingDown() || m_pRender->IsDeviceLost()
+        || vertices.empty() || indices.empty()) return;
 
     DestroyBuffers();
     m_buffersReady = false;
@@ -51,7 +52,7 @@ void VKMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
                 }
                 return;
             }
-            if (gen != m_uploadGeneration) {
+            if (!m_pRender || m_pRender->IsShuttingDown() || gen != m_uploadGeneration) {
                 CleanupStaging(staging, stagingMem);
                 return;
             }
@@ -109,7 +110,7 @@ void VKMesh::OnCombinedBuffersUploaded(
     VkBuffer staging, VkDeviceMemory stagingMem,
     const std::vector<BufferUploadRunnable::UploadSegment>& segments)
 {
-    if (!m_pRender || segments.size() < 2) {
+    if (!m_pRender || m_pRender->IsShuttingDown() || segments.size() < 2) {
         CleanupStaging(staging, stagingMem);
         return;
     }

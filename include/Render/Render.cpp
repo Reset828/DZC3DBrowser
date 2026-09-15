@@ -34,6 +34,22 @@ void Render::SetLastError(std::string message) {
     m_lastError = std::move(message);
 }
 
+// 查询逻辑设备是否已丢失。
+bool Render::IsDeviceLost() const {
+    return m_deviceLost;
+}
+
+// 记录失败原因（供窗口层在 Instance/Surface 创建失败时使用）。
+void Render::ReportError(std::string message) {
+    SetLastError(std::move(message));
+}
+
+// 标记设备丢失并记录原因。
+void Render::MarkDeviceLost(std::string message) {
+    m_deviceLost = true;
+    SetLastError(std::move(message));
+}
+
 // 设置清屏颜色。
 void Render::SetClearColor(float r, float g, float b, float a) {
     m_clearColor = { r, g, b, a };

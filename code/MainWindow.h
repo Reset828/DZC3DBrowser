@@ -70,12 +70,16 @@ private:
     void RebuildRecentMenu();
     // 创建坐标状态栏。
     void SetupStatusBar();
+    // 刷新状态栏后端名称，并清空上次世界坐标。
+    void UpdateBackendStatus();
     // 创建 Vulkan 窗口容器并接渲染循环。
     void SetupVulkan();
     // 启动约 16ms 的帧定时器。
     void StartRenderLoop();
     // 弹出渲染器初始化或着色器加载失败说明。
     void ReportRendererError(Render* renderer, const QString& stage);
+    // 设备丢失时停循环并提示重启。
+    void HandleDeviceLost(Render* renderer);
     // 销毁三维渲染器并换成二维。
     void SwitchTo2D();
     // 销毁二维渲染器并换成三维。
@@ -158,6 +162,7 @@ private:
     QTimeEdit* m_pTimeEdit = nullptr;
     QDial* m_pTimeDial = nullptr;
 
+    QLabel* m_backendLabel = nullptr;
     QLabel* m_coordX = nullptr;
     QLabel* m_coordY = nullptr;
     QLabel* m_coordZ = nullptr;
