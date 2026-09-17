@@ -90,6 +90,9 @@
     <ClInclude Include="..\include\Math\EngineTypes.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="..\include\Path\AssetPath.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="..\include\Light\SolarPosition.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -149,6 +152,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="..\include\VertexType\VertexTypes.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\Path\AssetPath.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="..\include\Light\SolarPosition.cpp">

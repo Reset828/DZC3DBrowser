@@ -1,4 +1,5 @@
 ﻿#include "GLRender.h"
+#include "Path/AssetPath.h"
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -581,8 +582,10 @@ unsigned int GLRender3D::LinkProgram(unsigned int vert, unsigned int frag) {
 bool GLRender3D::CreateShaderProgram() {
     if (!m_functions) return false;
     try {
-        const std::vector<char> vertCode = ReadShaderFile("../windows/shaders/3d.vert");
-        const std::vector<char> fragCode = ReadShaderFile("../windows/shaders/3d.frag");
+        const std::string vertShaderPath = AssetPath::ShaderFile("3d.vert");
+        const std::string fragShaderPath = AssetPath::ShaderFile("3d.frag");
+        const std::vector<char> vertCode = ReadShaderFile(vertShaderPath);
+        const std::vector<char> fragCode = ReadShaderFile(fragShaderPath);
         std::string vertSource(vertCode.begin(), vertCode.end());
         std::string fragSource(fragCode.begin(), fragCode.end());
         unsigned int vert = CompileShader(GL_VERTEX_SHADER, vertSource.c_str());
@@ -590,19 +593,21 @@ bool GLRender3D::CreateShaderProgram() {
         if (vert == 0 || frag == 0) {
             if (vert) m_functions->glDeleteShader(vert);
             if (frag) m_functions->glDeleteShader(frag);
-            SetLastError("OpenGL 着色器编译失败: ../windows/shaders/3d.vert 或 3d.frag");
+            SetLastError("OpenGL 着色器编译失败: " + vertShaderPath + " 或 " + fragShaderPath);
             return false;
         }
         m_program = LinkProgram(vert, frag);
         m_functions->glDeleteShader(vert);
         m_functions->glDeleteShader(frag);
         if (m_program == 0) {
-            SetLastError("OpenGL 程序链接失败: ../windows/shaders/3d.vert / 3d.frag");
+            SetLastError("OpenGL 程序链接失败: " + vertShaderPath + " / " + fragShaderPath);
             return false;
         }
 
-        const std::vector<char> shadowVertCode = ReadShaderFile("../windows/shaders/3d_shadow.vert");
-        const std::vector<char> shadowFragCode = ReadShaderFile("../windows/shaders/3d_shadow.frag");
+        const std::string shadowVertShaderPath = AssetPath::ShaderFile("3d_shadow.vert");
+        const std::string shadowFragShaderPath = AssetPath::ShaderFile("3d_shadow.frag");
+        const std::vector<char> shadowVertCode = ReadShaderFile(shadowVertShaderPath);
+        const std::vector<char> shadowFragCode = ReadShaderFile(shadowFragShaderPath);
         std::string shadowVertSource(shadowVertCode.begin(), shadowVertCode.end());
         std::string shadowFragSource(shadowFragCode.begin(), shadowFragCode.end());
         unsigned int shadowVert = CompileShader(GL_VERTEX_SHADER, shadowVertSource.c_str());
@@ -610,14 +615,14 @@ bool GLRender3D::CreateShaderProgram() {
         if (shadowVert == 0 || shadowFrag == 0) {
             if (shadowVert) m_functions->glDeleteShader(shadowVert);
             if (shadowFrag) m_functions->glDeleteShader(shadowFrag);
-            SetLastError("OpenGL 着色器编译失败: ../windows/shaders/3d_shadow.vert 或 3d_shadow.frag");
+            SetLastError("OpenGL 着色器编译失败: " + shadowVertShaderPath + " 或 " + shadowFragShaderPath);
             return false;
         }
         m_shadowProgram = LinkProgram(shadowVert, shadowFrag);
         m_functions->glDeleteShader(shadowVert);
         m_functions->glDeleteShader(shadowFrag);
         if (m_shadowProgram == 0) {
-            SetLastError("OpenGL 程序链接失败: ../windows/shaders/3d_shadow.vert / 3d_shadow.frag");
+            SetLastError("OpenGL 程序链接失败: " + shadowVertShaderPath + " / " + shadowFragShaderPath);
             return false;
         }
         return true;

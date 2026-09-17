@@ -480,10 +480,14 @@ void MainWindow::SetupVulkan() {
 
     // 右栏：上方视口，下方消息区（projectPanel 右边、渲染视口下方、状态栏上方）。
     m_messageList = new QListWidget();
+    if (QStyle* listStyle = QStyleFactory::create(QStringLiteral("Fusion"))) {
+        listStyle->setParent(m_messageList);
+        m_messageList->setStyle(listStyle);
+    }
     m_messageList->setWordWrap(true);
     m_messageList->setSelectionMode(QAbstractItemView::NoSelection);
     m_messageList->setStyleSheet(QStringLiteral(
-        "QListWidget { background-color: #1a1a1a; border: none; }"
+        "QListWidget { background-color: #252526; color: #d4d4d4; border: none; outline: none; }"
         "QListWidget::item { padding: 1px 6px; }"));
 
     m_messageSplitter = new QSplitter(Qt::Vertical);
@@ -529,7 +533,7 @@ void MainWindow::ReportRendererError(Render* renderer, const QString& stage) {
     if (renderer && !renderer->GetLastError().empty()) {
         message += QStringLiteral("：") + QString::fromStdString(renderer->GetLastError());
     } else {
-        message += QStringLiteral("：未返回具体原因。请确认工作目录为 code/，且 ../windows/shaders/ 中有所需着色器。");
+        message += QStringLiteral("：未返回具体原因。请确认可执行文件旁的 shaders 目录中存在所需着色器。");
     }
     ShowMessage(message, true);
 }

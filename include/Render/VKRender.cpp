@@ -1,4 +1,5 @@
 ﻿#include "VKRender.h"
+#include "Path/AssetPath.h"
 #include <iostream>
 #include <fstream>
 #include <set>
@@ -1323,13 +1324,15 @@ void VKRender2D::OnEndFrame() {}
 
 // 创建图形管线。
 bool VKRender2D::CreatePipelines() {
-    auto vertShaderCode = ReadShaderFile("../windows/shaders/2d_vert.spv");
-    auto fragShaderCode = ReadShaderFile("../windows/shaders/2d_frag.spv");
+    const std::string vertShaderPath = AssetPath::ShaderFile("2d_vert.spv");
+    const std::string fragShaderPath = AssetPath::ShaderFile("2d_frag.spv");
+    auto vertShaderCode = ReadShaderFile(vertShaderPath);
+    auto fragShaderCode = ReadShaderFile(fragShaderPath);
 
     VkShaderModule vertShaderModule = CreateShaderModuleHelper(
-        vertShaderCode, "../windows/shaders/2d_vert.spv");
+        vertShaderCode, vertShaderPath);
     VkShaderModule fragShaderModule = CreateShaderModuleHelper(
-        fragShaderCode, "../windows/shaders/2d_frag.spv");
+        fragShaderCode, fragShaderPath);
 
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
     vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1936,13 +1939,15 @@ bool VKRender3D::CreateRenderPass() {
 
 // 创建图形管线。
 bool VKRender3D::CreatePipelines() {
-    auto vertShaderCode = ReadShaderFile("../windows/shaders/3d_vert.spv");
-    auto fragShaderCode = ReadShaderFile("../windows/shaders/3d_frag.spv");
+    const std::string vertShaderPath = AssetPath::ShaderFile("3d_vert.spv");
+    const std::string fragShaderPath = AssetPath::ShaderFile("3d_frag.spv");
+    auto vertShaderCode = ReadShaderFile(vertShaderPath);
+    auto fragShaderCode = ReadShaderFile(fragShaderPath);
 
     VkShaderModule vertShaderModule = CreateShaderModuleHelper(
-        vertShaderCode, "../windows/shaders/3d_vert.spv");
+        vertShaderCode, vertShaderPath);
     VkShaderModule fragShaderModule = CreateShaderModuleHelper(
-        fragShaderCode, "../windows/shaders/3d_frag.spv");
+        fragShaderCode, fragShaderPath);
 
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
     vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2814,12 +2819,14 @@ bool VKRender3D::CreateShadowRenderPass() {
 
 // 创建阴影图形管线。
 bool VKRender3D::CreateShadowPipeline() {
-    auto vertShaderCode = ReadShaderFile("../windows/shaders/3d_shadow_vert.spv");
-    auto fragShaderCode = ReadShaderFile("../windows/shaders/3d_shadow_frag.spv");
+    const std::string vertShaderPath = AssetPath::ShaderFile("3d_shadow_vert.spv");
+    const std::string fragShaderPath = AssetPath::ShaderFile("3d_shadow_frag.spv");
+    auto vertShaderCode = ReadShaderFile(vertShaderPath);
+    auto fragShaderCode = ReadShaderFile(fragShaderPath);
     VkShaderModule vertShaderModule = CreateShaderModuleHelper(
-        vertShaderCode, "../windows/shaders/3d_shadow_vert.spv");
+        vertShaderCode, vertShaderPath);
     VkShaderModule fragShaderModule = CreateShaderModuleHelper(
-        fragShaderCode, "../windows/shaders/3d_shadow_frag.spv");
+        fragShaderCode, fragShaderPath);
 
     VkPipelineShaderStageCreateInfo vertStage{};
     vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

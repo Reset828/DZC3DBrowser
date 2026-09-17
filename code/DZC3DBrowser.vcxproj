@@ -127,6 +127,7 @@
     <ClInclude Include="..\include\Asset\SceneAsset.h" />
     <ClInclude Include="..\include\VertexType\VertexTypes.h" />
     <ClInclude Include="..\include\Math\EngineTypes.h" />
+    <ClInclude Include="..\include\Path\AssetPath.h" />
     <ClInclude Include="..\include\Light\SolarPosition.h" />
     <ClInclude Include="..\include\Layer\Layer.h" />
     <ClInclude Include="..\include\Object\Object.h" />
@@ -151,6 +152,7 @@
     <ClCompile Include="VKMesh.cpp" />
     <ClCompile Include="GLMesh.cpp" />
     <ClCompile Include="..\include\VertexType\VertexTypes.cpp" />
+    <ClCompile Include="..\include\Path\AssetPath.cpp" />
     <ClCompile Include="..\include\Light\SolarPosition.cpp" />
     <ClCompile Include="..\include\Layer\Layer.cpp" />
     <ClCompile Include="..\include\Object\Object.cpp" />

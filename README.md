@@ -16,11 +16,7 @@ windows/              exe OutDir
 
 ## Runtime shader directory
 
-Visual Studio debugger working directory is `code/`. Loaders use this CWD-relative path:
-
-```text
-../windows/shaders/
-```
+Runtime assets are resolved **relative to the executable**, not the process working directory (`include/Path/AssetPath.*`). The exe lives in `windows/Debug` or `windows/Release`; the runtime shaders live in `windows/shaders/`. The loader walks up from the exe directory until it finds a `shaders` folder, so the same binary works no matter what the current working directory is (Visual Studio, Explorer double-click, shortcut, or any CWD).
 
 Do not put machine-local absolute paths in runtime loaders.
 
@@ -31,9 +27,9 @@ Do not put machine-local absolute paths in runtime loaders.
 | Vulkan shadow | `3d_shadow_vert.spv`, `3d_shadow_frag.spv` |
 | OpenGL 3D | `3d.vert`, `3d.frag`, `3d_shadow.vert`, `3d_shadow.frag` |
 
-Missing files, invalid SPIR-V, or shader-module creation failures surface as a dialog with the path. Confirm the working directory is `code/` and that `windows/shaders/` contains the files above.
+Missing files, invalid SPIR-V, or shader-module creation failures surface as a dialog with the resolved absolute path. Confirm that a `shaders/` directory with the files above sits next to (or above) the executable.
 
-Launching with working directory `windows/` is **not** supported with the current relative path. Use Visual Studio (CWD = `code/`) or start the process with CWD = `code/`.
+Launching the exe directly (e.g. double-clicking it in `windows/Debug` or `windows/Release`) is supported, because resolution is anchored to the exe location rather than the working directory.
 
 ## Build
 
