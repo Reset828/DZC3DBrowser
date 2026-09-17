@@ -402,15 +402,9 @@ void ObjParseRunnable::run() {
                         std::numeric_limits<float>::lowest(),
                         std::numeric_limits<float>::lowest()};
 
-        size_t warningCount = 0;
-        std::string firstWarning;
         auto addWarning = [&](size_t lineNumber, const char* reason) {
-            ++warningCount;
-            std::string text = "第 " + std::to_string(lineNumber) + " 行: " + reason;
-            if (firstWarning.empty()) {
-                firstWarning = text;
-            }
-            messages.push_back(ImportMessage{ text, false });
+            messages.push_back(ImportMessage{
+                "第 " + std::to_string(lineNumber) + " 行: " + reason, false });
         };
 
         // 结束当前 SubMesh，写入索引数量。
@@ -769,11 +763,6 @@ void ObjParseRunnable::run() {
             }
         }
 
-        if (warningCount > 0) {
-            report("OBJ 已加载，但跳过了 " + std::to_string(warningCount) +
-                   " 个无效数据行；首个问题：" + firstWarning, false);
-        }
-
         // 组装资产：包围盒、SubMesh 局部包围盒、诊断信息。
         MeshData mesh;
         mesh.name = std::filesystem::u8path(m_filePath).filename().u8string();
@@ -818,8 +807,9 @@ void ObjParseRunnable::run() {
                 }
             }, Qt::QueuedConnection);
     } catch (const std::exception& exception) {
-        report(exception.what(), true);
+        report(std::string("[错误] ") + std::filesystem::u8path(m_filePath).filename().u8string()
+                   + ": " + exception.what(), true);
     } catch (...) {
-        report("解析 OBJ 文件时发生未知错误", true);
+        report("[错误] 解析 OBJ 文件时发生未知错误", true);
     }
 }

@@ -29,6 +29,8 @@ class QDateEdit;
 class QTimeEdit;
 class QDial;
 class QMenu;
+class QListWidget;
+class QSplitter;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -66,8 +68,6 @@ private slots:
 private:
     // 创建菜单与工具栏控件。
     void SetupToolBar();
-    // 后台解析 OBJ 并加入场景。
-    void LoadFile(const QString& filePath);
     // 把路径写入最近文件列表。
     void AddRecentFile(const QString& filePath);
     // 从设置读取最近文件。
@@ -117,6 +117,12 @@ private:
     void SyncShadowTextureSizeCombo(uint32_t size);
     // 在状态栏显示阴影贴图消息。
     void ShowShadowMapStatus(const std::string& message);
+    // 在消息区追加一条提示（isError 用红色）。
+    void ShowMessage(const QString& text, bool isError);
+    // 清空消息区并逐条显示导入诊断。
+    void ShowImportMessages(const std::vector<ImportMessage>& messages);
+    // 按扩展名选择解析器并异步加载。
+    void LoadSceneAssetFile(const QString& filePath);
     // 把解析结果加入模型列表并建网格。
     void AddLoadedModel(const QString& filePath, SceneAsset&& asset);
     // 切换模型可见性。
@@ -136,7 +142,7 @@ private:
 
     struct LoadedModel {
         SceneAsset asset;
-        Object* mesh = nullptr;            // 所有权属于场景
+        std::vector<Object*> meshes;           // 每个 MeshData 一个；所有权属于场景
         QTreeWidgetItem* treeItem = nullptr;    // 所有权属于主面板
         bool visible = true;
     };
@@ -184,6 +190,9 @@ private:
     bool m_hasLastDrawnFrame = false;
     qint64 m_lastStatsTextNs = 0;
     bool m_statsPausedShown = false;
+
+    QSplitter* m_messageSplitter = nullptr;
+    QListWidget* m_messageList = nullptr;
 
     QMenu* m_recentMenu = nullptr;
     QStringList m_recentFiles;

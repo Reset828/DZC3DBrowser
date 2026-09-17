@@ -54,10 +54,19 @@
     <ClInclude Include="AssetMeshUpload.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="GltfParseRunnable.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="..\include\Asset\AssetVertex.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Asset\Texture.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Asset\Image.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Asset\Sampler.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Asset\Material.h">
@@ -67,6 +76,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Asset\MeshData.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Asset\SceneNode.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Asset\SceneAsset.h">
@@ -122,6 +134,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ObjParseRunnable.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="GltfParseRunnable.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="AssetMeshUpload.cpp">

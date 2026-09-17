@@ -3,8 +3,11 @@
 
 #include <string>
 #include <vector>
+#include "Asset/Image.h"
 #include "Asset/Material.h"
 #include "Asset/MeshData.h"
+#include "Asset/Sampler.h"
+#include "Asset/SceneNode.h"
 #include "Asset/Texture.h"
 
 // 导入过程中的一条诊断信息。
@@ -17,8 +20,11 @@ struct ImportMessage {
 struct SceneAsset {
     std::string sourcePath;
     std::vector<MeshData> meshes;
+    std::vector<SceneNode> nodes;
     std::vector<Material> materials;
     std::vector<Texture> textures;
+    std::vector<Image> images;
+    std::vector<Sampler> samplers;
     std::vector<ImportMessage> messages;
 };
 

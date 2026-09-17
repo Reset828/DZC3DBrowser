@@ -8,6 +8,7 @@
 #include "VKMesh.h"
 #include "GLMesh.h"
 #include "ObjParseRunnable.h"
+#include "GltfParseRunnable.h"
 #include <QWindow>
 #include <QString>
 #include <QAction>
@@ -32,8 +33,11 @@
 #include <QSplitter>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QListWidget>
 #include <QStyleFactory>
 #include <QStyle>
+#include <QColor>
+#include <QBrush>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -47,7 +51,6 @@
 #include <QtGlobal>
 #include <QSignalBlocker>
 #include <QSettings>
-#include <QMessageBox>
 #include <QFile>
 #include <algorithm>
 #include <cmath>
@@ -475,10 +478,32 @@ void MainWindow::SetupVulkan() {
     viewportLayout->addWidget(m_container, 1);
     viewportLayout->addWidget(m_lightAnalysisPanel, 0);
 
+    // 右栏：上方视口，下方消息区（projectPanel 右边、渲染视口下方、状态栏上方）。
+    m_messageList = new QListWidget();
+    m_messageList->setWordWrap(true);
+    m_messageList->setSelectionMode(QAbstractItemView::NoSelection);
+    m_messageList->setStyleSheet(QStringLiteral(
+        "QListWidget { background-color: #1a1a1a; border: none; }"
+        "QListWidget::item { padding: 1px 6px; }"));
+
+    m_messageSplitter = new QSplitter(Qt::Vertical);
+    m_messageSplitter->setHandleWidth(1);
+    m_messageSplitter->addWidget(viewportHost);
+    m_messageSplitter->addWidget(m_messageList);
+    m_messageSplitter->setStretchFactor(0, 1);
+    m_messageSplitter->setStretchFactor(1, 0);
+    m_messageSplitter->setSizes({ 600, 120 });
+
+    QWidget* rightHost = new QWidget();
+    QVBoxLayout* rightLayout = new QVBoxLayout(rightHost);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(0);
+    rightLayout->addWidget(m_messageSplitter);
+
     QSplitter* hSplitter = new QSplitter(Qt::Horizontal);
     hSplitter->setHandleWidth(1);
     hSplitter->addWidget(m_projectPanel);
-    hSplitter->addWidget(viewportHost);
+    hSplitter->addWidget(rightHost);
     hSplitter->setStretchFactor(0, 1);
     hSplitter->setStretchFactor(1, 2);
 
@@ -498,16 +523,35 @@ void MainWindow::SetupVulkan() {
     });
 }
 
-// 弹出渲染器初始化或着色器加载失败说明。
+// 把渲染器初始化或着色器加载失败写入消息区。
 void MainWindow::ReportRendererError(Render* renderer, const QString& stage) {
     QString message = stage;
     if (renderer && !renderer->GetLastError().empty()) {
-        message += QLatin1Char('\n');
-        message += QString::fromStdString(renderer->GetLastError());
+        message += QStringLiteral("：") + QString::fromStdString(renderer->GetLastError());
     } else {
-        message += QStringLiteral("\n未返回具体原因。请确认工作目录为 code/，且 ../windows/shaders/ 中有所需着色器。");
+        message += QStringLiteral("：未返回具体原因。请确认工作目录为 code/，且 ../windows/shaders/ 中有所需着色器。");
     }
-    QMessageBox::critical(this, QStringLiteral("渲染错误"), message);
+    ShowMessage(message, true);
+}
+
+// 在消息区追加一条提示（isError 用红色）。
+void MainWindow::ShowMessage(const QString& text, bool isError) {
+    if (!m_messageList) return;
+    QListWidgetItem* item = new QListWidgetItem(text);
+    if (isError) {
+        item->setForeground(QColor(0xF4, 0x87, 0x71));
+    }
+    m_messageList->addItem(item);
+    m_messageList->scrollToBottom();
+}
+
+// 清空消息区并逐条显示导入诊断。
+void MainWindow::ShowImportMessages(const std::vector<ImportMessage>& messages) {
+    if (!m_messageList) return;
+    m_messageList->clear();
+    for (const ImportMessage& message : messages) {
+        ShowMessage(QString::fromStdString(message.message), message.isError);
+    }
 }
 
 // 设备丢失时停循环并提示重启。
@@ -799,47 +843,57 @@ void MainWindow::SyncShadowTextureSizeCombo(uint32_t size) {
 // 在状态栏显示阴影贴图消息。
 void MainWindow::ShowShadowMapStatus(const std::string& message) {
     if (message.empty()) return;
-    statusBar()->showMessage(QString::fromStdString(message), 8000);
+    ShowMessage(QString::fromStdString(message), false);
 }
 
-// 弹出对话框打开 OBJ。
+// 弹出对话框打开模型文件。
 void MainWindow::onOpenFile() {
     QString filePath = QFileDialog::getOpenFileName(this,
-        QStringLiteral("选择 OBJ 文件"),
+        QStringLiteral("选择模型文件"),
         "",
-        QStringLiteral("OBJ 文件 (*.obj)"));
+        QStringLiteral("模型文件 (*.obj *.gltf *.glb);;OBJ 文件 (*.obj);;glTF 文件 (*.gltf *.glb)"));
 
     if (filePath.isEmpty()) return;
-    LoadFile(filePath);
+    LoadSceneAssetFile(filePath);
 }
 
-// 后台解析 OBJ 并加入场景。
-void MainWindow::LoadFile(const QString& filePath) {
+// 按扩展名选择解析器并异步加载。
+void MainWindow::LoadSceneAssetFile(const QString& filePath) {
     if (filePath.isEmpty()) return;
     if (!QFile::exists(filePath)) {
-        QMessageBox::warning(this, QStringLiteral("打开失败"),
-            QStringLiteral("无法打开文件:\n%1").arg(filePath));
+        ShowMessage(QStringLiteral("[错误] 无法打开文件: %1").arg(filePath), true);
         return;
     }
 
     const uint64_t loadGeneration = m_loadGeneration;
+    auto onParsed = [this, filePath, loadGeneration](SceneAsset&& asset) {
+        if (loadGeneration != m_loadGeneration) return;
+        if (!m_renderer || m_renderer->IsShuttingDown() || m_renderer->IsDeviceLost()) return;
+        ShowImportMessages(asset.messages);
+        AddLoadedModel(filePath, std::move(asset));
+    };
 
-    auto* runnable = new ObjParseRunnable(
-        filePath.toStdString(),
-        [this, filePath, loadGeneration](SceneAsset&& asset) {
+    const QString suffix = QFileInfo(filePath).suffix().toLower();
+    ObjParseRunnable::DiagnosticCallback diagnostics =
+        [this, loadGeneration](const std::string& message, bool isError) {
             if (loadGeneration != m_loadGeneration) return;
-            if (!m_renderer || m_renderer->IsShuttingDown() || m_renderer->IsDeviceLost()) return;
-            AddLoadedModel(filePath, std::move(asset));
-        });
+            ShowMessage(QString::fromStdString(message), isError);
+        };
 
-    QThreadPool::globalInstance()->start(runnable);
+    if (suffix == QStringLiteral("gltf") || suffix == QStringLiteral("glb")) {
+        QThreadPool::globalInstance()->start(new GltfParseRunnable(
+            filePath.toStdString(), onParsed, diagnostics));
+    } else {
+        QThreadPool::globalInstance()->start(new ObjParseRunnable(
+            filePath.toStdString(), onParsed, diagnostics));
+    }
 }
 
 // 打开最近文件菜单项对应路径。
 void MainWindow::onRecentFileTriggered() {
     auto* action = qobject_cast<QAction*>(sender());
     if (!action) return;
-    LoadFile(action->data().toString());
+    LoadSceneAssetFile(action->data().toString());
 }
 
 // 把路径写入最近文件列表。
@@ -917,8 +971,8 @@ void MainWindow::SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible) 
     if (it == m_loadedModels.end() || it->visible == visible) return;
 
     it->visible = visible;
-    if (it->mesh) {
-        it->mesh->SetVisible(visible);
+    for (Object* mesh : it->meshes) {
+        if (mesh) mesh->SetVisible(visible);
     }
     UpdateShadowSceneBounds();
 }
@@ -931,12 +985,14 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
         });
     if (it == m_loadedModels.end()) return;
 
-    if (it->mesh && m_scene) {
+    if (!it->meshes.empty() && m_scene) {
         if (m_renderer && m_renderer->IsInitialized()) {
             m_renderer->WaitForIdle();
         }
-        m_scene->RemoveChild(it->mesh);
-        it->mesh = nullptr;
+        for (Object* mesh : it->meshes) {
+            if (mesh) m_scene->RemoveChild(mesh);
+        }
+        it->meshes.clear();
     }
 
     delete it->treeItem;
@@ -954,9 +1010,11 @@ void MainWindow::ClearLoadedModels() {
     }
 
     for (LoadedModel& model : m_loadedModels) {
-        if (model.mesh && m_scene) {
-            m_scene->RemoveChild(model.mesh);
-            model.mesh = nullptr;
+        if (!model.meshes.empty() && m_scene) {
+            for (Object* mesh : model.meshes) {
+                if (mesh) m_scene->RemoveChild(mesh);
+            }
+            model.meshes.clear();
         }
         delete model.treeItem;
         model.treeItem = nullptr;
@@ -1198,44 +1256,47 @@ void MainWindow::RebuildSceneMeshes() {
 
     for (LoadedModel& model : m_loadedModels) {
         // 归一化资产顶点坐标（不改原始资产，复制一份用于上传）。
-        MeshData normalized;
-        if (!model.asset.meshes.empty()) {
-            normalized = model.asset.meshes.front();
-        }
-        for (AssetVertex& vertex : normalized.vertices) {
-            vertex.position[0] = (vertex.position[0] - center.x) * scale;
-            vertex.position[1] = (vertex.position[1] - center.y) * scale;
-            vertex.position[2] = (vertex.position[2] - center.z) * scale;
-        }
+        // 每个 MeshData 一个 Mesh 对象；节点变换已在解析时烘焙。
+        const size_t meshCount = model.asset.meshes.size();
+        model.meshes.resize(meshCount, nullptr);
 
-        if (useOpenGL) {
-            auto* glMesh = dynamic_cast<GLMesh*>(model.mesh);
-            if (!glMesh) {
-                Object* mesh = m_openglRenderer->CreateMesh();
-                glMesh = dynamic_cast<GLMesh*>(mesh);
+        for (size_t meshIndex = 0; meshIndex < meshCount; ++meshIndex) {
+            MeshData normalized = model.asset.meshes[meshIndex];
+            for (AssetVertex& vertex : normalized.vertices) {
+                vertex.position[0] = (vertex.position[0] - center.x) * scale;
+                vertex.position[1] = (vertex.position[1] - center.y) * scale;
+                vertex.position[2] = (vertex.position[2] - center.z) * scale;
+            }
+
+            if (useOpenGL) {
+                auto* glMesh = dynamic_cast<GLMesh*>(model.meshes[meshIndex]);
                 if (!glMesh) {
-                    delete mesh;
-                    continue;
+                    Object* mesh = m_openglRenderer->CreateMesh();
+                    glMesh = dynamic_cast<GLMesh*>(mesh);
+                    if (!glMesh) {
+                        delete mesh;
+                        continue;
+                    }
+                    glMesh->SetVisible(model.visible);
+                    model.meshes[meshIndex] = glMesh;
+                    m_scene->AddChild(glMesh);
                 }
-                glMesh->SetVisible(model.visible);
-                model.mesh = glMesh;
-                m_scene->AddChild(glMesh);
-            }
-            glMesh->SetMeshDataSync(normalized);
-        } else {
-            auto* vkMesh = dynamic_cast<VKMesh*>(model.mesh);
-            if (!vkMesh) {
-                Object* mesh = m_renderer->CreateMesh();
-                vkMesh = dynamic_cast<VKMesh*>(mesh);
+                glMesh->SetMeshDataSync(normalized);
+            } else {
+                auto* vkMesh = dynamic_cast<VKMesh*>(model.meshes[meshIndex]);
                 if (!vkMesh) {
-                    delete mesh;
-                    continue;
+                    Object* mesh = m_renderer->CreateMesh();
+                    vkMesh = dynamic_cast<VKMesh*>(mesh);
+                    if (!vkMesh) {
+                        delete mesh;
+                        continue;
+                    }
+                    vkMesh->SetVisible(model.visible);
+                    model.meshes[meshIndex] = vkMesh;
+                    m_scene->AddChild(vkMesh);
                 }
-                vkMesh->SetVisible(model.visible);
-                model.mesh = vkMesh;
-                m_scene->AddChild(vkMesh);
+                vkMesh->SetMeshData(normalized);
             }
-            vkMesh->SetMeshData(normalized);
         }
     }
     UpdateShadowSceneBounds();
@@ -1244,7 +1305,7 @@ void MainWindow::RebuildSceneMeshes() {
 // 把模型上的网格指针置空。
 void MainWindow::ResetLoadedMeshPointers() {
     for (LoadedModel& model : m_loadedModels) {
-        model.mesh = nullptr;
+        model.meshes.clear();
     }
 }
 

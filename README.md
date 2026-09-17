@@ -1,4 +1,4 @@
-# DZC3DBrowser
+﻿# DZC3DBrowser
 
 Windows-only Qt 5.12 + Vulkan 1.0 / OpenGL 4.2 mesh viewer. Single Visual Studio solution, C++17, MSVC v143.
 
@@ -66,3 +66,20 @@ Vulkan is the primary backend and the startup default. OpenGL 4.2 Core is a swit
 | 2D | partial (see task 0.4) | unsupported |
 
 The status bar shows the active backend. Switching backends clears the last world-coordinate readout. OpenGL 2D has no shader or draw path; do not treat the 2D/3D switch as equivalent on OpenGL.
+
+## Importing models
+
+`File → Open` accepts `*.obj`, `*.gltf`, `*.glb` (one `.obj` per file is still supported as a compatibility format).
+
+- **OBJ**: one mesh; SubMeshes split by `usemtl`; material base color from MTL `Kd` (default white). Textures are not loaded.
+- **glTF 2.0**: parsed with Qt's JSON reader plus manual binary reads — no third-party dependency. Supported subset:
+  - `.gltf` (JSON) and `.glb` (binary container).
+  - Buffers: embedded GLB BIN chunk, `data:` base64 URIs, or external files relative to the `.gltf`.
+  - Node hierarchy with local transform (`matrix` or TRS). The world transform is baked into vertex positions at import; nodes are kept as name/hierarchy metadata.
+  - Mesh primitives in `TRIANGLES` mode; `POSITION`, `NORMAL`, `TEXCOORD_0`, `COLOR_0`; indices as ubyte/ushort/uint.
+  - Accessors: float or normalized integer `VEC2/3/4`, compact or `byteStride` interleaved. `sparse` accessors are reported unsupported.
+  - `materials` (`pbrMetallicRoughness.baseColorFactor` / `baseColorTexture`), `textures`, `images`, `samplers` are parsed as declarations only — pixel data is **not** decoded yet (task 1.3).
+  - Not yet: animation, skinning, morph targets, `KHR_*` extensions, non-triangle primitive modes.
+- Import warnings/errors, shadow-map status, and renderer errors appear in the message panel below the viewport (one message per line, errors in red); there are no modal dialogs.
+
+Two self-contained samples live in `samples/`: `cube.gltf` (base64-embedded buffer + image) and `cube.glb`. See `samples/README.md`.
