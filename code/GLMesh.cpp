@@ -1,4 +1,5 @@
 ﻿#include "GLMesh.h"
+#include "AssetMeshUpload.h"
 #include "Render/GLRender.h"
 #include <QOpenGLFunctions_4_2_Core>
 #include <cstddef>
@@ -8,6 +9,14 @@ GLMesh::GLMesh() {
 }
 
 GLMesh::~GLMesh() {}
+
+// 从资产网格上传（内部拍平为 Vertex3D）。
+void GLMesh::SetMeshDataSync(const MeshData& mesh) {
+    std::vector<Vertex3D> vertices;
+    std::vector<uint32_t> indices;
+    BuildVertex3DArrays(mesh, vertices, indices);
+    SetMeshDataSync(vertices, indices);
+}
 
 // 同步上传 Mesh 数据。
 void GLMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,

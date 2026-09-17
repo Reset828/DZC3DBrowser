@@ -51,6 +51,27 @@
     <ClInclude Include="GLMesh.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="AssetMeshUpload.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Asset\AssetVertex.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Asset\Texture.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Asset\Material.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Asset\SubMesh.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Asset\MeshData.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Asset\SceneAsset.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="..\include\VertexType\VertexTypes.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -101,6 +122,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ObjParseRunnable.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="AssetMeshUpload.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="VKMesh.cpp">

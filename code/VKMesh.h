@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "Object/VKObject.h"
+#include "Asset/MeshData.h"
 #include "VertexType/VertexTypes.h"
 #include "BufferUploadRunnable.h"
 #include <memory>
@@ -10,6 +11,9 @@ class VKMesh : public VKObject {
 public:
     VKMesh();
     ~VKMesh() override;
+
+    // 从资产网格上传（内部拍平为 Vertex3D）。
+    void SetMeshData(const MeshData& mesh);
 
     // 启动 Mesh 数据的异步上传。
     void SetMeshData(std::vector<Vertex3D>&& vertices, std::vector<uint32_t>&& indices);

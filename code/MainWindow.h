@@ -2,7 +2,7 @@
 #define __MAIN_WINDOW_H__
 
 #include <QMainWindow>
-#include "VertexType/VertexTypes.h"
+#include "Asset/SceneAsset.h"
 #include <vector>
 #include <cstdint>
 #include <string>
@@ -118,7 +118,7 @@ private:
     // 在状态栏显示阴影贴图消息。
     void ShowShadowMapStatus(const std::string& message);
     // 把解析结果加入模型列表并建网格。
-    void AddLoadedModel(const QString& filePath, std::vector<Vertex3D>&& vertices, std::vector<uint32_t>&& indices);
+    void AddLoadedModel(const QString& filePath, SceneAsset&& asset);
     // 切换模型可见性。
     void SetLoadedModelVisible(QTreeWidgetItem* treeItem, bool visible);
     // 从场景和列表移除模型。
@@ -135,8 +135,7 @@ private:
     void ResetLoadedMeshPointers();
 
     struct LoadedModel {
-        std::vector<Vertex3D> sourceVertices;
-        std::vector<uint32_t> indices;
+        SceneAsset asset;
         Object* mesh = nullptr;            // 所有权属于场景
         QTreeWidgetItem* treeItem = nullptr;    // 所有权属于主面板
         bool visible = true;

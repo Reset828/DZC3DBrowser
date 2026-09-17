@@ -112,8 +112,15 @@
   <ItemGroup>
     <ClInclude Include="BufferUploadRunnable.h" />
     <ClInclude Include="ObjParseRunnable.h" />
+    <ClInclude Include="AssetMeshUpload.h" />
     <ClInclude Include="VKMesh.h" />
     <ClInclude Include="GLMesh.h" />
+    <ClInclude Include="..\include\Asset\AssetVertex.h" />
+    <ClInclude Include="..\include\Asset\Texture.h" />
+    <ClInclude Include="..\include\Asset\Material.h" />
+    <ClInclude Include="..\include\Asset\SubMesh.h" />
+    <ClInclude Include="..\include\Asset\MeshData.h" />
+    <ClInclude Include="..\include\Asset\SceneAsset.h" />
     <ClInclude Include="..\include\VertexType\VertexTypes.h" />
     <ClInclude Include="..\include\Math\EngineTypes.h" />
     <ClInclude Include="..\include\Light\SolarPosition.h" />
@@ -133,6 +140,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="MainWindow.cpp" />
     <ClCompile Include="ObjParseRunnable.cpp" />
+    <ClCompile Include="AssetMeshUpload.cpp" />
     <ClCompile Include="QWindowVulkan.cpp" />
     <ClCompile Include="QWindowOpenGL.cpp" />
     <ClCompile Include="VKMesh.cpp" />

@@ -1,4 +1,5 @@
 ﻿#include "VKMesh.h"
+#include "AssetMeshUpload.h"
 #include "BufferUploadRunnable.h"
 #include "Render/VKRender.h"
 
@@ -12,6 +13,14 @@ VKMesh::~VKMesh() {
     *m_alive = false; // 标记已销毁，阻止未执行的异步回调继续
 }
 
+
+// 从资产网格上传（内部拍平为 Vertex3D）。
+void VKMesh::SetMeshData(const MeshData& mesh) {
+    std::vector<Vertex3D> vertices;
+    std::vector<uint32_t> indices;
+    BuildVertex3DArrays(mesh, vertices, indices);
+    SetMeshData(std::move(vertices), std::move(indices));
+}
 
 // 启动 Mesh 数据的异步上传。
 void VKMesh::SetMeshData(std::vector<Vertex3D>&& vertices,

@@ -13,8 +13,10 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace {
 
@@ -316,6 +318,18 @@ std::vector<std::array<size_t, 3>> TriangulateFace(
     return triangles;
 }
 
+// 读取整个文件到 out（末尾附加一个 '\0'）；成功时 out.size() = 字节数 + 1。
+bool ReadWholeFile(const std::filesystem::path& path, std::vector<char>& out) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) return false;
+    const std::streamsize fileSize = file.tellg();
+    if (fileSize <= 0) return false;
+    file.seekg(0, std::ios::beg);
+    out.assign(static_cast<size_t>(fileSize) + 1, '\0');
+    if (!file.read(out.data(), fileSize)) return false;
+    return true;
+}
+
 } // 匿名命名空间
 
 ObjParseRunnable::ObjParseRunnable(std::string filePath, Callback callback,
@@ -359,13 +373,23 @@ void ObjParseRunnable::run() {
         std::vector<Vec3> positions;
         std::vector<TexCoord> texCoords;
         std::vector<Vec3> normals;
-        std::vector<Vertex3D> vertices;
+        std::vector<AssetVertex> vertices;
         std::vector<uint32_t> indices;
         std::unordered_map<VertexKey, uint32_t, VertexKeyHash> vertexLookup;
         std::vector<uint32_t> positionOnlyLookup;
         // 缺少 OBJ vn 时按位置累加面法线，供线框片元使用稳定的物体空间法线。
         std::vector<Vec3> generatedNormalSums;
         std::vector<uint32_t> generatedVertexPositions;
+
+        // 材质与 SubMesh 划分。
+        std::vector<Material> materials;
+        materials.push_back(Material{});  // 索引 0：默认白色材质
+        std::unordered_map<std::string, int> materialIndexByName;
+        std::vector<SubMesh> subMeshes;
+        int openSubMeshIndex = -1;
+        int currentMaterialIndex = 0;
+
+        std::vector<ImportMessage> messages;
 
         positions.reserve(static_cast<size_t>(fileSize) / 48);
         vertices.reserve(static_cast<size_t>(fileSize) / 48);
@@ -382,8 +406,98 @@ void ObjParseRunnable::run() {
         std::string firstWarning;
         auto addWarning = [&](size_t lineNumber, const char* reason) {
             ++warningCount;
+            std::string text = "第 " + std::to_string(lineNumber) + " 行: " + reason;
             if (firstWarning.empty()) {
-                firstWarning = "第 " + std::to_string(lineNumber) + " 行: " + reason;
+                firstWarning = text;
+            }
+            messages.push_back(ImportMessage{ text, false });
+        };
+
+        // 结束当前 SubMesh，写入索引数量。
+        auto closeOpenSubMesh = [&]() {
+            if (openSubMeshIndex < 0) return;
+            SubMesh& subMesh = subMeshes[openSubMeshIndex];
+            subMesh.indexCount =
+                static_cast<uint32_t>(indices.size()) - subMesh.indexOffset;
+            openSubMeshIndex = -1;
+        };
+        // 在当前索引位置开启一个新 SubMesh。
+        auto beginSubMesh = [&](int materialIndex) {
+            closeOpenSubMesh();
+            SubMesh subMesh;
+            subMesh.indexOffset = static_cast<uint32_t>(indices.size());
+            subMesh.indexCount = 0;
+            subMesh.materialIndex = materialIndex;
+            subMeshes.push_back(subMesh);
+            openSubMeshIndex = static_cast<int>(subMeshes.size()) - 1;
+        };
+        // 保证当前 SubMesh 使用指定材质。
+        auto ensureSubMesh = [&](int materialIndex) {
+            if (openSubMeshIndex >= 0 &&
+                subMeshes[openSubMeshIndex].materialIndex == materialIndex) {
+                return;
+            }
+            beginSubMesh(materialIndex);
+        };
+
+        // 解析 MTL：只取 newmtl 与 Kd；map_Kd 等纹理声明在 1.1 忽略。
+        auto loadMaterialLibrary = [&](const std::string& libraryName,
+                                       size_t lineNumber) {
+            const std::filesystem::path objPath =
+                std::filesystem::u8path(m_filePath);
+            const std::filesystem::path libraryPath =
+                objPath.parent_path() / std::filesystem::u8path(libraryName);
+
+            std::vector<char> content;
+            if (!ReadWholeFile(libraryPath, content)) {
+                addWarning(lineNumber, "无法打开材质库，已跳过");
+                return;
+            }
+
+            const char* cursor = content.data();
+            const char* end = content.data() + (content.size() - 1);
+            int current = -1;
+            while (cursor < end) {
+                const char* lineBegin = cursor;
+                while (cursor < end && *cursor != '\n') ++cursor;
+                const char* lineEnd = cursor;
+                if (lineEnd > lineBegin && lineEnd[-1] == '\r') --lineEnd;
+                if (cursor < end) ++cursor;
+
+                const char* ptr = lineBegin;
+                SkipSpace(ptr, lineEnd);
+                if (ptr >= lineEnd || *ptr == '#') continue;
+
+                const char* keywordBegin = ptr;
+                while (ptr < lineEnd && !IsSpace(*ptr)) ++ptr;
+                const std::string_view keyword(
+                    keywordBegin, static_cast<size_t>(ptr - keywordBegin));
+
+                if (keyword == "newmtl") {
+                    SkipSpace(ptr, lineEnd);
+                    while (lineEnd > ptr && IsSpace(lineEnd[-1])) --lineEnd;
+                    const std::string name(ptr, lineEnd);
+                    auto found = materialIndexByName.find(name);
+                    if (found != materialIndexByName.end()) {
+                        current = found->second;
+                    } else {
+                        Material material;
+                        material.name = name;
+                        materials.push_back(material);
+                        current = static_cast<int>(materials.size()) - 1;
+                        materialIndexByName.emplace(name, current);
+                    }
+                } else if (keyword == "Kd") {
+                    if (current >= 0) {
+                        Vec3 rgb{};
+                        if (ParseFloat(ptr, lineEnd, rgb.x) &&
+                            ParseFloat(ptr, lineEnd, rgb.y) &&
+                            ParseFloat(ptr, lineEnd, rgb.z)) {
+                            materials[current].baseColor =
+                                { rgb.x, rgb.y, rgb.z, 1.0f };
+                        }
+                    }
+                }
             }
         };
 
@@ -449,6 +563,32 @@ void ObjParseRunnable::run() {
                     continue;
                 }
                 normals.push_back(NormalizeOr(normal, {0.0f, 0.0f, 0.0f}));
+            } else if (keyword == "mtllib") {
+                SkipSpace(ptr, lineEnd);
+                while (ptr < lineEnd) {
+                    SkipSpace(ptr, lineEnd);
+                    if (ptr >= lineEnd || *ptr == '#') break;
+                    const char* tokenBegin = ptr;
+                    while (ptr < lineEnd && !IsSpace(*ptr) && *ptr != '#') ++ptr;
+                    loadMaterialLibrary(
+                        std::string(tokenBegin, static_cast<size_t>(ptr - tokenBegin)),
+                        lineNumber);
+                }
+            } else if (keyword == "usemtl") {
+                SkipSpace(ptr, lineEnd);
+                while (lineEnd > ptr && IsSpace(lineEnd[-1])) --lineEnd;
+                const std::string name(ptr, lineEnd);
+                auto found = materialIndexByName.find(name);
+                if (found != materialIndexByName.end()) {
+                    currentMaterialIndex = found->second;
+                } else {
+                    Material material;
+                    material.name = name;
+                    materials.push_back(material);
+                    currentMaterialIndex = static_cast<int>(materials.size()) - 1;
+                    materialIndexByName.emplace(name, currentMaterialIndex);
+                    addWarning(lineNumber, "找不到材质定义，已使用默认白色");
+                }
             } else if (keyword == "f") {
                 std::vector<FaceVertex>& face = faceScratch;
                 face.clear();
@@ -500,7 +640,7 @@ void ObjParseRunnable::run() {
                         throw std::runtime_error("OBJ 顶点数量超过 32 位索引上限");
                     }
 
-                    Vertex3D vertex{};
+                    AssetVertex vertex{};
                     const Vec3& position = positions[source.position];
                     vertex.position[0] = position.x;
                     vertex.position[1] = position.y;
@@ -555,6 +695,8 @@ void ObjParseRunnable::run() {
                     indices.push_back(found->second);
                 };
 
+                ensureSubMesh(currentMaterialIndex);
+
                 if (face.size() == 3) {
                     emitCorner(0);
                     emitCorner(1);
@@ -581,8 +723,10 @@ void ObjParseRunnable::run() {
             throw std::runtime_error("OBJ 文件中没有可渲染的有效面");
         }
 
+        closeOpenSubMesh();
+
         for (size_t i = 0; i < vertices.size(); ++i) {
-            Vertex3D& vertex = vertices[i];
+            AssetVertex& vertex = vertices[i];
             if (LengthSquared(Vec3{ vertex.normal[0], vertex.normal[1], vertex.normal[2] }) >
                 std::numeric_limits<float>::epsilon()) {
                 continue;
@@ -609,7 +753,7 @@ void ObjParseRunnable::run() {
         const float scale = maxSize > std::numeric_limits<float>::epsilon()
             ? 2.0f / maxSize : 1.0f;
 
-        for (Vertex3D& vertex : vertices) {
+        for (AssetVertex& vertex : vertices) {
             const float normalizedZ = (vertex.position[2] - center.z) * scale;
             const float t = std::clamp(normalizedZ * 0.5f + 0.5f, 0.0f, 1.0f);
             if (t < 0.5f) {
@@ -630,16 +774,47 @@ void ObjParseRunnable::run() {
                    " 个无效数据行；首个问题：" + firstWarning, false);
         }
 
-        auto sharedVertices =
-            std::make_shared<std::vector<Vertex3D>>(std::move(vertices));
-        auto sharedIndices =
-            std::make_shared<std::vector<uint32_t>>(std::move(indices));
+        // 组装资产：包围盒、SubMesh 局部包围盒、诊断信息。
+        MeshData mesh;
+        mesh.name = std::filesystem::u8path(m_filePath).filename().u8string();
+        mesh.vertices = std::move(vertices);
+        mesh.indices = std::move(indices);
+        mesh.subMeshes = std::move(subMeshes);
+        mesh.bounds.min = bboxMin;
+        mesh.bounds.max = bboxMax;
+
+        for (SubMesh& subMesh : mesh.subMeshes) {
+            Vec3 subMin = { std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max() };
+            Vec3 subMax = { std::numeric_limits<float>::lowest(),
+                            std::numeric_limits<float>::lowest(),
+                            std::numeric_limits<float>::lowest() };
+            const size_t end = static_cast<size_t>(subMesh.indexOffset) + subMesh.indexCount;
+            for (size_t i = subMesh.indexOffset; i < end && i < mesh.indices.size(); ++i) {
+                const AssetVertex& vertex = mesh.vertices[mesh.indices[i]];
+                subMin.x = std::min(subMin.x, vertex.position[0]);
+                subMin.y = std::min(subMin.y, vertex.position[1]);
+                subMin.z = std::min(subMin.z, vertex.position[2]);
+                subMax.x = std::max(subMax.x, vertex.position[0]);
+                subMax.y = std::max(subMax.y, vertex.position[1]);
+                subMax.z = std::max(subMax.z, vertex.position[2]);
+            }
+            subMesh.localBounds.min = subMin;
+            subMesh.localBounds.max = subMax;
+        }
+
+        auto asset = std::make_shared<SceneAsset>();
+        asset->sourcePath = m_filePath;
+        asset->meshes.push_back(std::move(mesh));
+        asset->materials = std::move(materials);
+        asset->messages = std::move(messages);
+
         auto callback = m_callback;
         QMetaObject::invokeMethod(QApplication::instance(),
-            [callback, sharedVertices, sharedIndices, center, scale]() {
+            [callback, asset]() {
                 if (callback) {
-                    callback(std::move(*sharedVertices), std::move(*sharedIndices),
-                             center, scale);
+                    callback(std::move(*asset));
                 }
             }, Qt::QueuedConnection);
     } catch (const std::exception& exception) {

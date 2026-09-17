@@ -761,17 +761,19 @@ void MainWindow::UpdateShadowSceneBounds() {
 
     for (const LoadedModel& model : m_loadedModels) {
         if (!model.visible) continue;
-        for (const Vertex3D& vertex : model.sourceVertices) {
-            const float x = (vertex.position[0] - m_sceneSourceCenter[0]) * m_sceneNormalizationScale;
-            const float y = (vertex.position[1] - m_sceneSourceCenter[1]) * m_sceneNormalizationScale;
-            const float z = (vertex.position[2] - m_sceneSourceCenter[2]) * m_sceneNormalizationScale;
-            bboxMin.x = std::min(bboxMin.x, x);
-            bboxMin.y = std::min(bboxMin.y, y);
-            bboxMin.z = std::min(bboxMin.z, z);
-            bboxMax.x = std::max(bboxMax.x, x);
-            bboxMax.y = std::max(bboxMax.y, y);
-            bboxMax.z = std::max(bboxMax.z, z);
-            anyVisible = true;
+        for (const MeshData& mesh : model.asset.meshes) {
+            for (const AssetVertex& vertex : mesh.vertices) {
+                const float x = (vertex.position[0] - m_sceneSourceCenter[0]) * m_sceneNormalizationScale;
+                const float y = (vertex.position[1] - m_sceneSourceCenter[1]) * m_sceneNormalizationScale;
+                const float z = (vertex.position[2] - m_sceneSourceCenter[2]) * m_sceneNormalizationScale;
+                bboxMin.x = std::min(bboxMin.x, x);
+                bboxMin.y = std::min(bboxMin.y, y);
+                bboxMin.z = std::min(bboxMin.z, z);
+                bboxMax.x = std::max(bboxMax.x, x);
+                bboxMax.y = std::max(bboxMax.y, y);
+                bboxMax.z = std::max(bboxMax.z, z);
+                anyVisible = true;
+            }
         }
     }
 
@@ -824,13 +826,10 @@ void MainWindow::LoadFile(const QString& filePath) {
 
     auto* runnable = new ObjParseRunnable(
         filePath.toStdString(),
-        [this, filePath, loadGeneration](std::vector<Vertex3D>&& vertices,
-                                         std::vector<uint32_t>&& indices,
-                                         const Vec3& /*sourceCenter*/,
-                                         float /*normalizationScale*/) {
+        [this, filePath, loadGeneration](SceneAsset&& asset) {
             if (loadGeneration != m_loadGeneration) return;
             if (!m_renderer || m_renderer->IsShuttingDown() || m_renderer->IsDeviceLost()) return;
-            AddLoadedModel(filePath, std::move(vertices), std::move(indices));
+            AddLoadedModel(filePath, std::move(asset));
         });
 
     QThreadPool::globalInstance()->start(runnable);
@@ -888,14 +887,18 @@ void MainWindow::RebuildRecentMenu() {
 }
 
 // 把解析结果加入模型列表并建网格。
-void MainWindow::AddLoadedModel(const QString& filePath,
-                                std::vector<Vertex3D>&& vertices,
-                                std::vector<uint32_t>&& indices) {
-    if (vertices.empty() || indices.empty()) return;
+void MainWindow::AddLoadedModel(const QString& filePath, SceneAsset&& asset) {
+    bool hasGeometry = false;
+    for (const MeshData& mesh : asset.meshes) {
+        if (!mesh.vertices.empty() && !mesh.indices.empty()) {
+            hasGeometry = true;
+            break;
+        }
+    }
+    if (!hasGeometry) return;
 
     LoadedModel model;
-    model.sourceVertices = std::move(vertices);
-    model.indices = std::move(indices);
+    model.asset = std::move(asset);
     model.treeItem = new QTreeWidgetItem(m_modelsTreeItem);
     model.treeItem->setText(0, QFileInfo(filePath).fileName());
     m_modelsTreeItem->setExpanded(true);
@@ -1009,13 +1012,15 @@ void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
                      std::numeric_limits<float>::lowest() };
 
     auto includeModelBounds = [&](const LoadedModel& model) {
-        for (const Vertex3D& vertex : model.sourceVertices) {
-            bboxMin.x = std::min(bboxMin.x, vertex.position[0]);
-            bboxMin.y = std::min(bboxMin.y, vertex.position[1]);
-            bboxMin.z = std::min(bboxMin.z, vertex.position[2]);
-            bboxMax.x = std::max(bboxMax.x, vertex.position[0]);
-            bboxMax.y = std::max(bboxMax.y, vertex.position[1]);
-            bboxMax.z = std::max(bboxMax.z, vertex.position[2]);
+        for (const MeshData& mesh : model.asset.meshes) {
+            for (const AssetVertex& vertex : mesh.vertices) {
+                bboxMin.x = std::min(bboxMin.x, vertex.position[0]);
+                bboxMin.y = std::min(bboxMin.y, vertex.position[1]);
+                bboxMin.z = std::min(bboxMin.z, vertex.position[2]);
+                bboxMax.x = std::max(bboxMax.x, vertex.position[0]);
+                bboxMax.y = std::max(bboxMax.y, vertex.position[1]);
+                bboxMax.z = std::max(bboxMax.z, vertex.position[2]);
+            }
         }
     };
 
@@ -1122,13 +1127,15 @@ void MainWindow::RebuildSceneMeshes() {
                      std::numeric_limits<float>::lowest() };
 
     for (const LoadedModel& model : m_loadedModels) {
-        for (const Vertex3D& vertex : model.sourceVertices) {
-            bboxMin.x = std::min(bboxMin.x, vertex.position[0]);
-            bboxMin.y = std::min(bboxMin.y, vertex.position[1]);
-            bboxMin.z = std::min(bboxMin.z, vertex.position[2]);
-            bboxMax.x = std::max(bboxMax.x, vertex.position[0]);
-            bboxMax.y = std::max(bboxMax.y, vertex.position[1]);
-            bboxMax.z = std::max(bboxMax.z, vertex.position[2]);
+        for (const MeshData& mesh : model.asset.meshes) {
+            for (const AssetVertex& vertex : mesh.vertices) {
+                bboxMin.x = std::min(bboxMin.x, vertex.position[0]);
+                bboxMin.y = std::min(bboxMin.y, vertex.position[1]);
+                bboxMin.z = std::min(bboxMin.z, vertex.position[2]);
+                bboxMax.x = std::max(bboxMax.x, vertex.position[0]);
+                bboxMax.y = std::max(bboxMax.y, vertex.position[1]);
+                bboxMax.z = std::max(bboxMax.z, vertex.position[2]);
+            }
         }
     }
 
@@ -1190,8 +1197,12 @@ void MainWindow::RebuildSceneMeshes() {
     if ((useOpenGL && !glRenderer) || (!useOpenGL && !vkRenderer)) return;
 
     for (LoadedModel& model : m_loadedModels) {
-        std::vector<Vertex3D> normalizedVertices = model.sourceVertices;
-        for (Vertex3D& vertex : normalizedVertices) {
+        // 归一化资产顶点坐标（不改原始资产，复制一份用于上传）。
+        MeshData normalized;
+        if (!model.asset.meshes.empty()) {
+            normalized = model.asset.meshes.front();
+        }
+        for (AssetVertex& vertex : normalized.vertices) {
             vertex.position[0] = (vertex.position[0] - center.x) * scale;
             vertex.position[1] = (vertex.position[1] - center.y) * scale;
             vertex.position[2] = (vertex.position[2] - center.z) * scale;
@@ -1210,7 +1221,7 @@ void MainWindow::RebuildSceneMeshes() {
                 model.mesh = glMesh;
                 m_scene->AddChild(glMesh);
             }
-            glMesh->SetMeshDataSync(normalizedVertices, model.indices);
+            glMesh->SetMeshDataSync(normalized);
         } else {
             auto* vkMesh = dynamic_cast<VKMesh*>(model.mesh);
             if (!vkMesh) {
@@ -1224,8 +1235,7 @@ void MainWindow::RebuildSceneMeshes() {
                 model.mesh = vkMesh;
                 m_scene->AddChild(vkMesh);
             }
-            auto indices = model.indices;
-            vkMesh->SetMeshData(std::move(normalizedVertices), std::move(indices));
+            vkMesh->SetMeshData(normalized);
         }
     }
     UpdateShadowSceneBounds();
