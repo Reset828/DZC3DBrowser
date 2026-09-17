@@ -36,7 +36,7 @@ struct UniformBufferObject3D {
     alignas(16) float displayOptions[4]; // x: 灰度  y: 染色  z: 光照分析  w: 太阳在地平线以上
     alignas(16) float sunDirection[4];   // xyz: 物体空间指向太阳（+X 东 +Y 北 +Z 上）
     alignas(16) float lightViewProj[4][4];
-    alignas(16) float shadowOptions[4];  // x: 阴影贴图可用  y: NDC深度从[-1,1]转到[0,1]  z: 线框模式
+    alignas(16) float shadowOptions[4];  // x: 阴影贴图可用  y: NDC深度从[-1,1]转到[0,1]  z: 线框模式  w: Vulkan 窗口Y向下标志（取反 dFdy）
 };
 
 #endif //__VERTEX_TYPES_H__

@@ -795,6 +795,8 @@ void MainWindow::ApplyLightAnalysisToRenderer() {
         applyShadow(vulkan3D);
     }
     UpdateShadowSceneBounds();
+    // 光照参数变化后让阴影通道立即重画一次，锁定新的光源矩阵。
+    m_lastShadowPassTimer.invalidate();
 }
 
 // 用已加载模型包围盒更新阴影范围。

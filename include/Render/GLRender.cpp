@@ -719,11 +719,19 @@ void GLRender3D::UpdateUniformBuffer() {
     ubo.sunDirection[1] = m_sunDirection.y;
     ubo.sunDirection[2] = m_sunDirection.z;
     ubo.sunDirection[3] = 0.0f;
-    m_lightViewProj = ComputeLightViewProj();
+    // 阴影贴图与采样矩阵必须成对更新：只在阴影通道中重算并锁定光源矩阵，
+    // 主绘制复用同一矩阵。否则贴图每 100ms 才刷新，而矩阵每帧随太阳变化，
+    // 光照变化期间会出现阴影游动/抽搐。
+    if (m_shadowPassActive) {
+        m_shadowLightViewProj = ComputeLightViewProj();
+        m_shadowMatrixValid = true;
+    }
+    m_lightViewProj = m_shadowLightViewProj;
     memcpy(ubo.lightViewProj, glm::value_ptr(m_lightViewProj), sizeof(float) * 16);
     ubo.shadowOptions[0] = ShouldRenderShadows() ? 1.0f : 0.0f;
     ubo.shadowOptions[1] = 1.0f;
     ubo.shadowOptions[2] = m_wireframeMode ? 1.0f : 0.0f;
+    // OpenGL 窗口 Y 向上：dFdy 无需取反（与着色器默认一致）。
     ubo.shadowOptions[3] = 0.0f;
 
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, m_ubo);
@@ -871,7 +879,8 @@ void GLRender3D::SetShadowMapStatus(const std::string& message) {
 
 // 判断当前是否应渲染阴影。
 bool GLRender3D::ShouldRenderShadows() const {
-    return m_lightAnalysisEnabled && m_sunAboveHorizon && m_shadowMapReady && !m_shadowPassActive;
+    return m_lightAnalysisEnabled && m_sunAboveHorizon && m_shadowMapReady
+        && m_shadowMatrixValid && !m_shadowPassActive;
 }
 
 // 计算光源视图投影矩阵。
@@ -895,9 +904,21 @@ glm::mat4 GLRender3D::ComputeLightViewProj() const {
         sun /= sunLength;
     }
 
-    glm::vec3 up(0.0f, 0.0f, 1.0f);
-    if (std::abs(glm::dot(sun, up)) > 0.99f) {
-        up = glm::vec3(0.0f, 1.0f, 0.0f);
+    // 选择与太阳最不平行的世界轴作为 up，避免太阳接近天顶时 lookAt 退化，
+    // 造成每帧 roll 剧烈摆动（阴影抖动）。此选择保证 |dot(sun, up)| <= 1/sqrt(3)。
+    const glm::vec3 worldAxes[3] = {
+        glm::vec3(1.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f),
+        glm::vec3(0.0f, 0.0f, 1.0f)
+    };
+    glm::vec3 up = worldAxes[0];
+    float minAlignment = std::abs(glm::dot(sun, worldAxes[0]));
+    for (int axis = 1; axis < 3; ++axis) {
+        const float alignment = std::abs(glm::dot(sun, worldAxes[axis]));
+        if (alignment < minAlignment) {
+            minAlignment = alignment;
+            up = worldAxes[axis];
+        }
     }
 
     const float radius = glm::length(extent);
@@ -1024,6 +1045,7 @@ void GLRender3D::DestroyShadowMap() {
     m_shadowTexture = 0;
     m_shadowMapReady = false;
     m_allocatedShadowTextureSize = 0;
+    m_shadowMatrixValid = false;
 }
 
 // 尝试分配指定尺寸的阴影贴图。
@@ -1032,6 +1054,7 @@ bool GLRender3D::TryAllocateShadowMap(uint32_t size) {
     if (!CreateShadowMap(size)) return false;
     m_shadowMapReady = true;
     m_allocatedShadowTextureSize = size;
+    m_shadowMatrixValid = false;
     return true;
 }
 

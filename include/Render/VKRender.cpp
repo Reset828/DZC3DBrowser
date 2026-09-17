@@ -2437,12 +2437,20 @@ void VKRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     ubo.sunDirection[1] = m_sunDirection.y;
     ubo.sunDirection[2] = m_sunDirection.z;
     ubo.sunDirection[3] = 0.0f;
-    m_lightViewProj = ComputeLightViewProj();
+    // 阴影贴图与采样矩阵必须成对更新：只在阴影通道中重算并锁定光源矩阵，
+    // 主绘制复用同一矩阵。否则贴图每 100ms 才刷新，而矩阵每帧随太阳变化，
+    // 光照变化期间会出现阴影游动/抽搐。
+    if (m_shadowPassActive) {
+        m_shadowLightViewProj = ComputeLightViewProj();
+        m_shadowMatrixValid = true;
+    }
+    m_lightViewProj = m_shadowLightViewProj;
     memcpy(ubo.lightViewProj, glm::value_ptr(m_lightViewProj), sizeof(float) * 16);
     ubo.shadowOptions[0] = ShouldRenderShadows() ? 1.0f : 0.0f;
     ubo.shadowOptions[1] = 0.0f;
     ubo.shadowOptions[2] = m_wireframeMode ? 1.0f : 0.0f;
-    ubo.shadowOptions[3] = 0.0f;
+    // Vulkan 窗口 Y 向下：告知着色器把 dFdy 取反，使几何法线与 OpenGL 一致。
+    ubo.shadowOptions[3] = 1.0f;
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
@@ -2515,7 +2523,8 @@ void VKRender3D::SetShadowMapStatus(const std::string& message) {
 
 // 判断当前是否应渲染阴影。
 bool VKRender3D::ShouldRenderShadows() const {
-    return m_lightAnalysisEnabled && m_sunAboveHorizon && m_shadowMapReady && !m_shadowPassActive;
+    return m_lightAnalysisEnabled && m_sunAboveHorizon && m_shadowMapReady
+        && m_shadowMatrixValid && !m_shadowPassActive;
 }
 
 // 获取阴影图形管线。
@@ -2544,9 +2553,21 @@ glm::mat4 VKRender3D::ComputeLightViewProj() const {
         sun /= sunLength;
     }
 
-    glm::vec3 up(0.0f, 0.0f, 1.0f);
-    if (std::abs(glm::dot(sun, up)) > 0.99f) {
-        up = glm::vec3(0.0f, 1.0f, 0.0f);
+    // 选择与太阳最不平行的世界轴作为 up，避免太阳接近天顶时 lookAt 退化，
+    // 造成每帧 roll 剧烈摆动（阴影抖动）。此选择保证 |dot(sun, up)| <= 1/sqrt(3)。
+    const glm::vec3 worldAxes[3] = {
+        glm::vec3(1.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f),
+        glm::vec3(0.0f, 0.0f, 1.0f)
+    };
+    glm::vec3 up = worldAxes[0];
+    float minAlignment = std::abs(glm::dot(sun, worldAxes[0]));
+    for (int axis = 1; axis < 3; ++axis) {
+        const float alignment = std::abs(glm::dot(sun, worldAxes[axis]));
+        if (alignment < minAlignment) {
+            minAlignment = alignment;
+            up = worldAxes[axis];
+        }
     }
 
     const float radius = glm::length(extent);
@@ -3037,6 +3058,7 @@ void VKRender3D::DestroyShadowMap() {
     }
     m_shadowMapReady = false;
     m_allocatedShadowTextureSize = 0;
+    m_shadowMatrixValid = false;
 }
 
 // 销毁占位阴影贴图。
@@ -3077,6 +3099,7 @@ bool VKRender3D::TryAllocateShadowMap(uint32_t size) {
     }
     m_shadowMapReady = true;
     m_allocatedShadowTextureSize = size;
+    m_shadowMatrixValid = false;
     UpdateShadowDescriptors();
     return true;
 }

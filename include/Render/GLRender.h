@@ -293,10 +293,14 @@ protected:
     uint32_t m_allocatedShadowTextureSize = 0;
     bool m_shadowMapReady = false;
     bool m_shadowPassActive = false;
+    // 阴影贴图创建后，是否已至少渲染过一次并锁定光源矩阵。
+    bool m_shadowMatrixValid = false;
     bool m_shadowBoundsValid = false;
     glm::vec3 m_shadowBoundsMin = glm::vec3(-1.0f);
     glm::vec3 m_shadowBoundsMax = glm::vec3(1.0f);
     glm::mat4 m_lightViewProj = glm::mat4(1.0f);
+    // 上次渲染阴影贴图时锁定的光源矩阵；主绘制采样必须与之一致，避免贴图与矩阵错位。
+    glm::mat4 m_shadowLightViewProj = glm::mat4(1.0f);
     std::string m_shadowMapStatus;
     float m_latitude = 36.0f;
     int m_lightYear = 2000;

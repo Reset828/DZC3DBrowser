@@ -121,8 +121,11 @@ float SunLambert() {
         }
         normal = objNormal;
     } else {
+        // Vulkan 窗口 Y 向下、OpenGL Y 向上，dFdy 符号相反。
+        // shadowOptions.w 由后端写入（Vulkan=1，OpenGL=0），据此统一几何法线朝向。
+        float screenYSign = ubo.shadowOptions.w > 0.5 ? -1.0 : 1.0;
         vec3 dpdx = dFdx(fragObjectPosition);
-        vec3 dpdy = dFdy(fragObjectPosition);
+        vec3 dpdy = dFdy(fragObjectPosition) * screenYSign;
         vec3 geometricCross = cross(dpdx, dpdy);
         float geometricLengthSquared = dot(geometricCross, geometricCross);
 
