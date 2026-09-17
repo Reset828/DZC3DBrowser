@@ -245,15 +245,21 @@ void MainWindow::SetupToolBar() {
 void MainWindow::SetupStatusBar() {
     statusBar()->setSizeGripEnabled(false);
 
+    m_frameClock.start();
+
     m_backendLabel = new QLabel();
     m_coordX = new QLabel();
     m_coordY = new QLabel();
     m_coordZ = new QLabel();
+    m_fpsLabel = new QLabel(QStringLiteral("FPS: —"));
+    m_frameTimeLabel = new QLabel(QStringLiteral("帧时间: —"));
 
     statusBar()->addPermanentWidget(m_backendLabel);
     statusBar()->addPermanentWidget(m_coordX);
     statusBar()->addPermanentWidget(m_coordY);
     statusBar()->addPermanentWidget(m_coordZ);
+    statusBar()->addPermanentWidget(m_fpsLabel);
+    statusBar()->addPermanentWidget(m_frameTimeLabel);
     UpdateBackendStatus();
 }
 
@@ -267,6 +273,39 @@ void MainWindow::UpdateBackendStatus() {
     if (m_coordX) m_coordX->setText(QStringLiteral("X: —"));
     if (m_coordY) m_coordY->setText(QStringLiteral("Y: —"));
     if (m_coordZ) m_coordZ->setText(QStringLiteral("Z: —"));
+}
+
+// 刷新 FPS 与 CPU 帧时间标签。
+void MainWindow::UpdateFrameStats(bool drewFrame, bool paused,
+                                  qint64 tickStartNs, qint64 tickEndNs) {
+    if (!m_fpsLabel || !m_frameTimeLabel) return;
+
+    if (paused) {
+        // 暂停不参与帧间隔，恢复后第一拍重新起算。
+        m_hasLastDrawnFrame = false;
+        m_fpsLabel->setText(QStringLiteral("FPS: —"));
+        m_frameTimeLabel->setText(QStringLiteral("帧时间: —"));
+        return;
+    }
+
+    // CPU 帧时间覆盖整个 tick：定时器触发到提交结束。
+    const qint64 tickNs = tickEndNs - tickStartNs;
+    m_frameTimeLabel->setText(QStringLiteral("帧时间: %1 ms")
+        .arg(static_cast<double>(tickNs) / 1.0e6, 0, 'f', 1));
+
+    // 瞬时 FPS：1000 / 距上一张已画帧的间隔。
+    if (m_hasLastDrawnFrame && tickEndNs > m_lastDrawnNs) {
+        const double intervalNs = static_cast<double>(tickEndNs - m_lastDrawnNs);
+        m_fpsLabel->setText(QStringLiteral("FPS: %1")
+            .arg(1.0e9 / intervalNs, 0, 'f', 1));
+    } else {
+        m_fpsLabel->setText(QStringLiteral("FPS: —"));
+    }
+
+    if (drewFrame) {
+        m_lastDrawnNs = tickEndNs;
+        m_hasLastDrawnFrame = true;
+    }
 }
 
 // 创建 Vulkan 窗口容器并接渲染循环。
@@ -554,8 +593,19 @@ void MainWindow::StartRenderLoop() {
     }
     m_renderTimer = new QTimer(this);
     connect(m_renderTimer, &QTimer::timeout, [this]() {
-        if (IsOpenGLBackend()) {
-            if (m_openglRenderer && m_openglRenderer->IsInitialized()) {
+        const qint64 tickStartNs = m_frameClock.nsecsElapsed();
+        const bool openGL = IsOpenGLBackend();
+        Render* activeRenderer = openGL ? m_openglRenderer : m_renderer;
+        QWindow* activeWindow = openGL
+            ? static_cast<QWindow*>(m_openglWindow)
+            : static_cast<QWindow*>(m_vulkanWindow);
+        const bool paused = !activeRenderer || !activeRenderer->IsInitialized()
+            || activeRenderer->IsDeviceLost()
+            || !activeWindow || activeWindow->width() == 0 || activeWindow->height() == 0;
+        bool drewFrame = false;
+
+        if (openGL) {
+            if (!paused) {
                 if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
                     if (m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
                         render3D->IsSunAboveHorizon()) {
@@ -568,9 +618,11 @@ void MainWindow::StartRenderLoop() {
                 if (m_openglRenderer->BeginFrame()) {
                     if (m_scene) m_scene->Render(0);
                     m_openglRenderer->EndFrame();
+                    drewFrame = true;
                 }
                 if (m_openglRenderer->IsDeviceLost()) {
                     HandleDeviceLost(m_openglRenderer);
+                    UpdateFrameStats(false, true, tickStartNs, m_frameClock.nsecsElapsed());
                     return;
                 }
                 if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
@@ -581,9 +633,11 @@ void MainWindow::StartRenderLoop() {
                     }
                 }
             }
+            UpdateFrameStats(drewFrame, paused, tickStartNs, m_frameClock.nsecsElapsed());
             return;
         }
-        if (m_renderer && m_renderer->IsInitialized()) {
+
+        if (!paused) {
             if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
                 if (m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
                     render3D->IsSunAboveHorizon()) {
@@ -596,9 +650,11 @@ void MainWindow::StartRenderLoop() {
             if (m_renderer->BeginFrame()) {
                 m_scene->Render(0);
                 m_renderer->EndFrame();
+                drewFrame = true;
             }
             if (m_renderer->IsDeviceLost()) {
                 HandleDeviceLost(m_renderer);
+                UpdateFrameStats(false, true, tickStartNs, m_frameClock.nsecsElapsed());
                 return;
             }
             if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
@@ -609,6 +665,7 @@ void MainWindow::StartRenderLoop() {
                 }
             }
         }
+        UpdateFrameStats(drewFrame, paused, tickStartNs, m_frameClock.nsecsElapsed());
     });
     m_renderTimer->start(16);
 }

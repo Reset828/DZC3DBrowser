@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <QStringList>
+#include <QElapsedTimer>
 
 class QWindowVulkan;
 class QWindowOpenGL;
@@ -72,6 +73,9 @@ private:
     void SetupStatusBar();
     // 刷新状态栏后端名称，并清空上次世界坐标。
     void UpdateBackendStatus();
+    // 刷新 FPS 与 CPU 帧时间标签。
+    void UpdateFrameStats(bool drewFrame, bool paused,
+                          qint64 tickStartNs, qint64 tickEndNs);
     // 创建 Vulkan 窗口容器并接渲染循环。
     void SetupVulkan();
     // 启动约 16ms 的帧定时器。
@@ -166,6 +170,11 @@ private:
     QLabel* m_coordX = nullptr;
     QLabel* m_coordY = nullptr;
     QLabel* m_coordZ = nullptr;
+    QLabel* m_fpsLabel = nullptr;
+    QLabel* m_frameTimeLabel = nullptr;
+    QElapsedTimer m_frameClock;
+    qint64 m_lastDrawnNs = 0;
+    bool m_hasLastDrawnFrame = false;
 
     QMenu* m_recentMenu = nullptr;
     QStringList m_recentFiles;
