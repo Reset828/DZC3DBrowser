@@ -15,6 +15,8 @@ QWindowOpenGL::QWindowOpenGL(GLRender* renderer)
     format.setDepthBufferSize(24);
     format.setStencilBufferSize(8);
     format.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+    // 关闭垂直同步：OpenGL 端不再被显示器刷新率限制，代价是可能出现撕裂。
+    format.setSwapInterval(0);
     setFormat(format);
     setSurfaceType(QSurface::OpenGLSurface);
 }

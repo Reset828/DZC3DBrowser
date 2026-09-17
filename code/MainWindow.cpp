@@ -273,6 +273,8 @@ void MainWindow::UpdateBackendStatus() {
     if (m_coordX) m_coordX->setText(QStringLiteral("X: —"));
     if (m_coordY) m_coordY->setText(QStringLiteral("Y: —"));
     if (m_coordZ) m_coordZ->setText(QStringLiteral("Z: —"));
+    // 切换后端/2D-3D 后让阴影通道立即重画一次。
+    m_lastShadowPassTimer.invalidate();
 }
 
 // 刷新 FPS 与 CPU 帧时间标签。
@@ -283,29 +285,42 @@ void MainWindow::UpdateFrameStats(bool drewFrame, bool paused,
     if (paused) {
         // 暂停不参与帧间隔，恢复后第一拍重新起算。
         m_hasLastDrawnFrame = false;
-        m_fpsLabel->setText(QStringLiteral("FPS: —"));
-        m_frameTimeLabel->setText(QStringLiteral("帧时间: —"));
-        return;
     }
 
-    // CPU 帧时间覆盖整个 tick：定时器触发到提交结束。
-    const qint64 tickNs = tickEndNs - tickStartNs;
-    m_frameTimeLabel->setText(QStringLiteral("帧时间: %1 ms")
-        .arg(static_cast<double>(tickNs) / 1.0e6, 0, 'f', 1));
-
-    // 瞬时 FPS：1000 / 距上一张已画帧的间隔。
-    if (m_hasLastDrawnFrame && tickEndNs > m_lastDrawnNs) {
-        const double intervalNs = static_cast<double>(tickEndNs - m_lastDrawnNs);
-        m_fpsLabel->setText(QStringLiteral("FPS: %1")
-            .arg(1.0e9 / intervalNs, 0, 'f', 1));
+    // 数值仍按每拍瞬时计算，文字按 kStatsRefreshMs 节流写入。
+    QString fpsText;
+    QString frameTimeText;
+    if (paused) {
+        fpsText = QStringLiteral("FPS: —");
+        frameTimeText = QStringLiteral("帧时间: —");
     } else {
-        m_fpsLabel->setText(QStringLiteral("FPS: —"));
+        // CPU 帧时间覆盖整个 tick：定时器触发到提交结束。
+        const qint64 tickNs = tickEndNs - tickStartNs;
+        frameTimeText = QStringLiteral("帧时间: %1 ms")
+            .arg(static_cast<double>(tickNs) / 1.0e6, 0, 'f', 1);
+
+        // 瞬时 FPS：1000 / 距上一张已画帧的间隔。
+        if (m_hasLastDrawnFrame && tickEndNs > m_lastDrawnNs) {
+            const double intervalNs = static_cast<double>(tickEndNs - m_lastDrawnNs);
+            fpsText = QStringLiteral("FPS: %1").arg(1.0e9 / intervalNs, 0, 'f', 1);
+        } else {
+            fpsText = QStringLiteral("FPS: —");
+        }
     }
 
     if (drewFrame) {
         m_lastDrawnNs = tickEndNs;
         m_hasLastDrawnFrame = true;
     }
+
+    const bool pausedChanged = (paused != m_statsPausedShown);
+    if (!pausedChanged && (tickEndNs - m_lastStatsTextNs) < kStatsRefreshMs * 1000000LL) {
+        return;
+    }
+    m_lastStatsTextNs = tickEndNs;
+    m_statsPausedShown = paused;
+    m_fpsLabel->setText(fpsText);
+    m_frameTimeLabel->setText(frameTimeText);
 }
 
 // 创建 Vulkan 窗口容器并接渲染循环。
@@ -585,13 +600,14 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     return QMainWindow::eventFilter(obj, event);
 }
 
-// 启动约 16ms 的帧定时器。
+// 启动渲染帧定时器（间隔 kRenderTickMs，不封顶节拍）。
 void MainWindow::StartRenderLoop() {
     if (m_renderTimer) {
-        m_renderTimer->start(16);
+        m_renderTimer->start(kRenderTickMs);
         return;
     }
     m_renderTimer = new QTimer(this);
+    m_renderTimer->setTimerType(Qt::PreciseTimer);
     connect(m_renderTimer, &QTimer::timeout, [this]() {
         const qint64 tickStartNs = m_frameClock.nsecsElapsed();
         const bool openGL = IsOpenGLBackend();
@@ -603,15 +619,19 @@ void MainWindow::StartRenderLoop() {
             || activeRenderer->IsDeviceLost()
             || !activeWindow || activeWindow->width() == 0 || activeWindow->height() == 0;
         bool drewFrame = false;
+        // 节拍快于阴影重画间隔时，本拍跳过阴影通道，复用现有阴影贴图。
+        const bool shadowDue = !m_lastShadowPassTimer.isValid()
+            || m_lastShadowPassTimer.elapsed() >= kShadowPassIntervalMs;
 
         if (openGL) {
             if (!paused) {
                 if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
-                    if (m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
+                    if (shadowDue && m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
                         render3D->IsSunAboveHorizon()) {
                         if (render3D->BeginShadowPass()) {
                             if (m_scene) m_scene->Render(Object::RM_SHADOW);
                             render3D->EndShadowPass();
+                            m_lastShadowPassTimer.start();
                         }
                     }
                 }
@@ -639,11 +659,12 @@ void MainWindow::StartRenderLoop() {
 
         if (!paused) {
             if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
-                if (m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
+                if (shadowDue && m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible() &&
                     render3D->IsSunAboveHorizon()) {
                     if (render3D->BeginShadowPass()) {
                         if (m_scene) m_scene->Render(Object::RM_SHADOW);
                         render3D->EndShadowPass();
+                        m_lastShadowPassTimer.start();
                     }
                 }
             }
@@ -667,7 +688,7 @@ void MainWindow::StartRenderLoop() {
         }
         UpdateFrameStats(drewFrame, paused, tickStartNs, m_frameClock.nsecsElapsed());
     });
-    m_renderTimer->start(16);
+    m_renderTimer->start(kRenderTickMs);
 }
 
 // 打开或关闭光照分析面板。
@@ -1253,7 +1274,7 @@ void MainWindow::SwitchTo3D() {
         render3D->SetWireframeEnabled(m_borderCheck && m_borderCheck->isChecked());
         ApplyLightAnalysisToRenderer();
         RebuildSceneMeshes();
-        m_renderTimer->start(16);
+        m_renderTimer->start(kRenderTickMs);
     } else {
         ReportRendererError(m_renderer, QStringLiteral("Vulkan 切换到三维失败"));
     }
@@ -1292,7 +1313,7 @@ void MainWindow::SwitchTo2D() {
     m_renderer->SetFramebufferSize(w, h);
     if (m_renderer->Initialize("VulkanReference", w, h)) {
         RebuildSceneMeshes();
-        m_renderTimer->start(16);
+        m_renderTimer->start(kRenderTickMs);
     } else {
         ReportRendererError(m_renderer, QStringLiteral("Vulkan 切换到二维失败"));
     }

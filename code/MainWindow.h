@@ -36,6 +36,13 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow();
 
+    // 渲染节拍（毫秒）。1 = 不封顶；实际帧率仍受 vsync / GPU 限制。
+    static constexpr int kRenderTickMs = 1;
+    // 阴影通道重画间隔（毫秒）。节拍快于此时跳过重画，复用现有阴影贴图。
+    static constexpr int kShadowPassIntervalMs = 100;
+    // FPS / 帧时间文字刷新间隔（毫秒）。数值仍按每拍计算。
+    static constexpr int kStatsRefreshMs = 250;
+
 protected:
     // 关闭窗口前停渲染并释放后端。
     void closeEvent(QCloseEvent* event) override;
@@ -173,8 +180,11 @@ private:
     QLabel* m_fpsLabel = nullptr;
     QLabel* m_frameTimeLabel = nullptr;
     QElapsedTimer m_frameClock;
+    QElapsedTimer m_lastShadowPassTimer;
     qint64 m_lastDrawnNs = 0;
     bool m_hasLastDrawnFrame = false;
+    qint64 m_lastStatsTextNs = 0;
+    bool m_statsPausedShown = false;
 
     QMenu* m_recentMenu = nullptr;
     QStringList m_recentFiles;
