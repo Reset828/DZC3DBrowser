@@ -532,6 +532,21 @@ void GltfParseRunnable::run() {
             const QJsonObject baseColorTexture =
                 pbr.value(QLatin1String("baseColorTexture")).toObject();
             entry.baseColorTexture = IntField(baseColorTexture, "index", -1);
+
+            // 透明度分类（1.4）：alphaMode 决定 Opaque/Mask/Blend，alphaCutoff 供 Mask 使用。
+            const std::string alphaMode = StringField(material, "alphaMode");
+            if (alphaMode == "MASK") {
+                entry.alphaMode = MaterialAlphaMode::Mask;
+            } else if (alphaMode == "BLEND") {
+                entry.alphaMode = MaterialAlphaMode::Blend;
+            } else {
+                entry.alphaMode = MaterialAlphaMode::Opaque;
+            }
+            if (material.contains(QLatin1String("alphaCutoff"))) {
+                entry.alphaCutoff = static_cast<float>(
+                    material.value(QLatin1String("alphaCutoff")).toDouble(0.5));
+            }
+
             asset.materials.push_back(std::move(entry));
         }
 

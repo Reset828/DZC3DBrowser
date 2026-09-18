@@ -532,6 +532,20 @@ void ObjParseRunnable::run() {
                                 { rgb.x, rgb.y, rgb.z, 1.0f };
                         }
                     }
+                } else if (keyword == "d" || keyword == "Tr") {
+                    // d（dissolve）直接给出 alpha；Tr 是其互补（透明度）。
+                    if (current >= 0) {
+                        float value = 1.0f;
+                        if (ParseFloat(ptr, lineEnd, value)) {
+                            value = std::clamp(value, 0.0f, 1.0f);
+                            if (keyword == "Tr") value = 1.0f - value;
+                            materials[current].baseColor.w = value;
+                            if (value < 1.0f) {
+                                materials[current].alphaMode =
+                                    MaterialAlphaMode::Blend;
+                            }
+                        }
+                    }
                 } else if (keyword == "map_Kd") {
                     if (current >= 0) {
                         // map_Kd 允许带选项（-o/-s/-bm 等）；取最后一个非选项 token 作为文件名。
@@ -821,20 +835,14 @@ void ObjParseRunnable::run() {
         const float scale = maxSize > std::numeric_limits<float>::epsilon()
             ? 2.0f / maxSize : 1.0f;
 
+        // 1.4：颜色改由材质 baseColor（MTL Kd）与纹理决定，顶点色统一为白。
+        // （此前烘焙的高度渐变已移除；顶点色保留白色以兼容后续顶点色路径。）
+        (void)center;
+        (void)scale;
         for (AssetVertex& vertex : vertices) {
-            const float normalizedZ = (vertex.position[2] - center.z) * scale;
-            const float t = std::clamp(normalizedZ * 0.5f + 0.5f, 0.0f, 1.0f);
-            if (t < 0.5f) {
-                const float u = t * 2.0f;
-                vertex.color[0] = u * 0.6f;
-                vertex.color[1] = 0.5f + u * -0.2f;
-                vertex.color[2] = 0.05f + u * 0.05f;
-            } else {
-                const float u = (t - 0.5f) * 2.0f;
-                vertex.color[0] = 0.6f + u * 0.3f;
-                vertex.color[1] = 0.3f + u * 0.6f;
-                vertex.color[2] = 0.1f + u * 0.8f;
-            }
+            vertex.color[0] = 1.0f;
+            vertex.color[1] = 1.0f;
+            vertex.color[2] = 1.0f;
         }
 
         // 组装资产：包围盒、SubMesh 局部包围盒、诊断信息。

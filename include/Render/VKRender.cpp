@@ -1,6 +1,7 @@
 ﻿#include "VKRender.h"
 #include "Path/AssetPath.h"
 #include "Texture/VKTexture.h"
+#include "Object/Object.h"
 #include <iostream>
 #include <fstream>
 #include <set>
@@ -313,6 +314,9 @@ bool VKRender::BeginFrame() {
 void VKRender::EndFrame() {
     if (!m_frameRecording) return;
 
+    // 主通道结束前刷新透明绘制（按深度排序）。
+    FlushTransparentDraws();
+
     vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
 
     OnEndFrame();
@@ -384,6 +388,14 @@ void VKRender::EndFrame() {
 // 提交索引绘制命令。
 void VKRender::DrawIndexed(uint32_t indexCount, uint32_t instanceCount) {
     vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], indexCount, instanceCount, 0, 0, 0);
+}
+
+// 提交带起始索引的索引绘制（SubMesh 范围）。
+void VKRender::DrawIndexedRange(uint32_t indexCount, uint32_t firstIndex,
+                                uint32_t vertexOffset) {
+    if (indexCount == 0) return;
+    vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], indexCount, 1,
+                     firstIndex, static_cast<int32_t>(vertexOffset), 0);
 }
 
 // 创建一张 GPU 纹理（staging 上传 + 布局转换 + mipmap）。
@@ -459,6 +471,7 @@ void VKRender::ProcessDeferredTextureDestruction() {
                     }
                 }
                 m_textureRefCount.erase(it->first);
+                OnTextureDestroyed(it->first);
                 found->second->Destroy();
                 m_textures.erase(found);
             }
@@ -476,6 +489,7 @@ void VKRender::ReleaseAllTextures() {
         vkDeviceWaitIdle(m_device);
     }
     for (auto& entry : m_textures) {
+        OnTextureDestroyed(entry.first);
         entry.second->Destroy();
     }
     m_textures.clear();
@@ -1916,6 +1930,10 @@ bool VKRender3D::OnInitialize() {
         if (m_lastError.empty()) SetLastError("3D: 创建描述符集布局失败");
         return false;
     }
+    if (!CreateMaterialDescriptors()) {
+        if (m_lastError.empty()) SetLastError("3D: 创建材质描述符失败");
+        return false;
+    }
     if (!CreateUniformBuffers()) {
         if (m_lastError.empty()) SetLastError("3D: 创建 UBO 失败");
         return false;
@@ -1958,6 +1976,7 @@ void VKRender3D::OnShutdown() {
         vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
         m_descriptorPool = VK_NULL_HANDLE;
     }
+    DestroyMaterialDescriptors();
     DestroyUniformBuffers();
     if (m_descriptorSetLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
@@ -1976,6 +1995,11 @@ void VKRender3D::OnDestroyPipelines() {
 // 开始录制命令前的钩子。
 void VKRender3D::OnPrepareFrame() {
     EnsureDummyShadowReady();
+    // 命令池此时已可用，安全创建默认白纹理（无纹理材质使用），
+    // 并预分配其 set 1，避免绘制时 set 1 尚未绑定。
+    if (EnsureDefaultWhiteTexture() != 0) {
+        MaterialDescriptorSetFor(m_defaultWhiteHandle);
+    }
 }
 
 // 每帧开始时的钩子。
@@ -2096,10 +2120,18 @@ bool VKRender3D::CreatePipelines() {
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
     {
+        VkPushConstantRange pushRange{};
+        pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushRange.offset = 0;
+        pushRange.size = sizeof(MaterialParams);
+
+        VkDescriptorSetLayout setLayouts[2] = { m_descriptorSetLayout, m_materialSetLayout };
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pipelineLayoutInfo.setLayoutCount = 1;
-        pipelineLayoutInfo.pSetLayouts = &m_descriptorSetLayout;
+        pipelineLayoutInfo.setLayoutCount = 2;
+        pipelineLayoutInfo.pSetLayouts = setLayouts;
+        pipelineLayoutInfo.pushConstantRangeCount = 1;
+        pipelineLayoutInfo.pPushConstantRanges = &pushRange;
         if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
             return Fail("3D: 创建管线布局失败");
         }
@@ -2114,7 +2146,7 @@ bool VKRender3D::CreatePipelines() {
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    DrawTopology topologies[] = { DT_TRIANGLE, DT_TRIANGLE_WIREFRAME, DT_LINE, DT_POINT };
+    DrawTopology topologies[] = { DT_TRIANGLE, DT_TRIANGLE_WIREFRAME, DT_LINE, DT_POINT, DT_TRIANGLE_BLEND };
     for (auto topo : topologies) {
         VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
         inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -2145,6 +2177,9 @@ bool VKRender3D::CreatePipelines() {
         case DT_POINT:
             inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
             break;
+        case DT_TRIANGLE_BLEND:
+            inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            break;
         default:
             inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             break;
@@ -2172,6 +2207,18 @@ bool VKRender3D::CreatePipelines() {
         colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                                VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
         colorBlendAttachment.blendEnable = VK_FALSE;
+
+        // 透明混合：srcAlpha / 1-srcAlpha，且不写深度（按远到近排序绘制）。
+        if (topo == DT_TRIANGLE_BLEND) {
+            depthStencil.depthWriteEnable = VK_FALSE;
+            colorBlendAttachment.blendEnable = VK_TRUE;
+            colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+            colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+        }
 
         VkPipelineColorBlendStateCreateInfo colorBlending{};
         colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -2383,6 +2430,141 @@ bool VKRender3D::CreateDescriptorSetLayout() {
         return false;
     }
     return true;
+}
+
+// 创建材质（set 1）描述符布局与描述符池。
+// 默认白纹理在首次需要时惰性创建（依赖命令池，OnInitialize 阶段尚不可用）。
+bool VKRender3D::CreateMaterialDescriptors() {
+    VkDescriptorSetLayoutBinding textureBinding{};
+    textureBinding.binding = 0;
+    textureBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    textureBinding.descriptorCount = 1;
+    textureBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    textureBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &textureBinding;
+    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_materialSetLayout) != VK_SUCCESS) {
+        std::cerr << "3D: 创建材质描述符集布局失败" << std::endl;
+        return false;
+    }
+
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = static_cast<uint32_t>(kMaterialDescriptorPoolSize);
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = static_cast<uint32_t>(kMaterialDescriptorPoolSize);
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_materialDescriptorPool) != VK_SUCCESS) {
+        std::cerr << "3D: 创建材质描述符池失败" << std::endl;
+        return false;
+    }
+    return true;
+}
+
+// 销毁材质描述符资源（含默认白纹理句柄与缓存映射）。
+void VKRender3D::DestroyMaterialDescriptors() {
+    m_materialDescriptorSets.clear();
+    m_materialSetAllocatedFrame.clear();
+    m_defaultWhiteHandle = 0;
+    if (m_materialDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device, m_materialDescriptorPool, nullptr);
+        m_materialDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (m_materialSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_materialSetLayout, nullptr);
+        m_materialSetLayout = VK_NULL_HANDLE;
+    }
+}
+
+// 确保默认白纹理存在（无纹理材质使用），返回其句柄。
+TextureHandle VKRender3D::EnsureDefaultWhiteTexture() {
+    if (m_defaultWhiteHandle != 0 && IsTextureValid(m_defaultWhiteHandle)) {
+        return m_defaultWhiteHandle;
+    }
+    const uint8_t white[4] = { 255, 255, 255, 255 };
+    TextureDesc desc;
+    desc.width = 1;
+    desc.height = 1;
+    desc.semantic = TextureSemantic::Color;
+    desc.generateMipmaps = false;
+    desc.pixels = white;
+    desc.sizeBytes = sizeof(white);
+    desc.debugName = "default-white";
+    desc.cacheKey = "builtin:default-white";
+    m_defaultWhiteHandle = CreateTexture(desc);
+    return m_defaultWhiteHandle;
+}
+
+// 取得（或惰性分配）某纹理对应的 set 1 描述符集。
+VkDescriptorSet VKRender3D::MaterialDescriptorSetFor(TextureHandle handle) {
+    if (m_device == VK_NULL_HANDLE || m_materialSetLayout == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+
+    VkImageView view = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    if (handle != 0 && IsTextureValid(handle)) {
+        view = GetTextureImageView(handle);
+        sampler = GetTextureSampler(handle);
+    }
+    if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) {
+        handle = EnsureDefaultWhiteTexture();
+        if (handle == 0 || !IsTextureValid(handle)) return VK_NULL_HANDLE;
+        view = GetTextureImageView(handle);
+        sampler = GetTextureSampler(handle);
+        if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    }
+
+    const auto found = m_materialDescriptorSets.find(handle);
+    if (found != m_materialDescriptorSets.end()) {
+        return found->second;
+    }
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_materialDescriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_materialSetLayout;
+
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(m_device, &allocInfo, &set) != VK_SUCCESS) {
+        return VK_NULL_HANDLE;
+    }
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = sampler;
+    imageInfo.imageView = view;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = set;
+    write.dstBinding = 0;
+    write.dstArrayElement = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+
+    m_materialDescriptorSets.emplace(handle, set);
+    m_materialSetAllocatedFrame[handle] = m_textureFrameCounter;
+    return set;
+}
+
+// 释放某纹理句柄对应的材质描述符集（纹理销毁时调用）。
+void VKRender3D::ReleaseMaterialDescriptorSet(TextureHandle handle) {
+    const auto found = m_materialDescriptorSets.find(handle);
+    if (found == m_materialDescriptorSets.end()) return;
+    if (m_materialDescriptorPool != VK_NULL_HANDLE && found->second != VK_NULL_HANDLE) {
+        vkFreeDescriptorSets(m_device, m_materialDescriptorPool, 1, &found->second);
+    }
+    m_materialDescriptorSets.erase(found);
+    m_materialSetAllocatedFrame.erase(handle);
 }
 
 // 创建并映射 UBO。
@@ -3405,6 +3587,53 @@ void VKRender3D::InitIdentityMatrix(float mat[4][4]) {
     mat[1][1] = 1.0f;
     mat[2][2] = 1.0f;
     mat[3][3] = 1.0f;
+}
+
+// 以材质参数（push constant）+ set 1 纹理绑定后绘制当前网格。
+// 注意：不在此处绑定管线，调用方（VKMesh::DrawSubMesh）已按不透明/透明选好管线。
+void VKRender3D::ApplyMaterial(const MaterialParams& params, TextureHandle texture) {
+    if (m_pipelineLayout == VK_NULL_HANDLE) return;
+    VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(MaterialParams), &params);
+
+    const VkDescriptorSet materialSet = MaterialDescriptorSetFor(texture);
+    if (materialSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
+                                1, 1, &materialSet, 0, nullptr);
+    }
+}
+
+// 计算点（上传坐标空间）到相机的距离，用于透明排序。
+float VKRender3D::ComputeDrawDistance(const float center[3]) const {
+    const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
+    const glm::mat4 model = glm::translate(glm::mat4(1.0f), m_panOffset)
+        * glm::mat4_cast(m_modelRotation)
+        * glm::translate(glm::mat4(1.0f), -m_orbitCenter);
+    const glm::vec3 world = glm::vec3(model * glm::vec4(center[0], center[1], center[2], 1.0f));
+    return glm::length(eye - world);
+}
+
+// 按距离从远到近排序并绘制已收集的透明请求。
+void VKRender3D::FlushTransparentDraws() {
+    if (m_transparentDraws.empty()) return;
+
+    std::stable_sort(m_transparentDraws.begin(), m_transparentDraws.end(),
+        [](const TransparentDraw& a, const TransparentDraw& b) {
+            return a.distance > b.distance;  // 远的先画
+        });
+
+    for (const TransparentDraw& draw : m_transparentDraws) {
+        if (draw.object) {
+            draw.object->DrawSubMesh(draw.subMeshIndex, Object::RM_TRANSPARENT);
+        }
+    }
+    m_transparentDraws.clear();
+}
+
+// 纹理销毁时释放其材质描述符集。
+void VKRender3D::OnTextureDestroyed(TextureHandle handle) {
+    ReleaseMaterialDescriptorSet(handle);
 }
 
 

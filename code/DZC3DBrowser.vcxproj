@@ -116,6 +116,7 @@
     <ClInclude Include="AssetMeshUpload.h" />
     <ClInclude Include="TextureCache.h" />
     <ClInclude Include="TextureImport.h" />
+    <ClInclude Include="MeshDrawInfo.h" />
     <ClInclude Include="VKMesh.h" />
     <ClInclude Include="GLMesh.h" />
     <ClInclude Include="..\include\Asset\AssetVertex.h" />
@@ -154,6 +155,7 @@
     <ClCompile Include="AssetMeshUpload.cpp" />
     <ClCompile Include="TextureCache.cpp" />
     <ClCompile Include="TextureImport.cpp" />
+    <ClCompile Include="MeshDrawInfo.cpp" />
     <ClCompile Include="QWindowVulkan.cpp" />
     <ClCompile Include="QWindowOpenGL.cpp" />
     <ClCompile Include="VKMesh.cpp" />

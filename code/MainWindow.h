@@ -61,6 +61,8 @@ public:
         std::unordered_map<int, TextureHandle> textureHandles;
         // 是否为当前后端完成过纹理导入（避免重建时重复解码/上传）。
         bool texturesImported = false;
+        // 材质可见性（1.4）：键为 SceneAsset::materials 索引；缺省视为可见。
+        std::unordered_map<int, bool> materialVisible;
     };
 
 protected:
@@ -78,6 +80,8 @@ private slots:
     void on3DController();
     // 打开或关闭光照分析面板。
     void onLightAnalysis();
+    // 打开或关闭材质可见性面板。
+    void onMaterialPanel();
     // 打开最近文件菜单项对应路径。
     void onRecentFileTriggered();
     // 在 Vulkan / OpenGL 后端间切换。
@@ -163,6 +167,12 @@ private:
     void ReleaseModelTextures(LoadedModel& model);
     // 释放全部模型纹理引用（切换后端/清空场景时）。
     void ReleaseAllModelTextures();
+    // 重建材质面板内容（按模型分组 + 每材质复选框）。
+    void RebuildMaterialPanel();
+    // 应用某模型的材质可见性到其网格。
+    void ApplyModelMaterialVisibility(LoadedModel& model);
+    // 为所有已加载模型的网格构建逐 SubMesh 绘制信息。
+    void RebuildSubMeshDrawInfos();
 
 
 
@@ -189,8 +199,11 @@ private:
     QCheckBox* m_dyeCheck = nullptr;
     QCheckBox* m_orthographicCheck = nullptr;
     QPushButton* m_lightAnalysisButton = nullptr;
+    QPushButton* m_materialButton = nullptr;
     QComboBox* m_backendEngineCombo = nullptr;
     QWidget* m_lightAnalysisPanel = nullptr;
+    QWidget* m_materialPanel = nullptr;
+    QTreeWidget* m_materialTree = nullptr;
     QComboBox* m_pComboTexSize = nullptr;
     QLineEdit* m_pLatitudeEdit = nullptr;
     QDateEdit* m_pDateEdit = nullptr;

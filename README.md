@@ -80,7 +80,7 @@ The status bar shows the active backend. Switching backends clears the last worl
 
 ## Texture system (task 1.3)
 
-A backend-independent texture resource system decodes referenced images and creates GPU textures. It does **not** sample them in a shader yet (that is task 1.4).
+A backend-independent texture resource system decodes referenced images and creates GPU textures. Textures are sampled in the shader as the base-color map (task 1.4).
 
 - **Decode**: images are decoded with Qt's `QImage` (PNG/JPEG/...), normalized to tightly packed RGBA8. No third-party image library.
 - **CPU cache** (`code/TextureCache.*`, owned by `MainWindow`): keyed by normalized absolute path for external files, or by an FNV-1a content hash for embedded images. Survives model delete and backend switches, so the same image is decoded once.
@@ -92,3 +92,17 @@ A backend-independent texture resource system decodes referenced images and crea
 - **Dedup**: the renderer keys live GPU textures by `TextureDesc::cacheKey`, so identical images shared across materials/models upload once (reference-counted).
 
 Two self-contained samples live in `samples/`: `cube.gltf` (base64-embedded buffer + image) and `cube.glb`. See `samples/README.md`.
+
+## Materials and SubMeshes (task 1.4)
+
+A model is split into SubMeshes (index ranges, each with a material). The renderer draws one `DrawIndexed` per SubMesh and binds that SubMesh's material.
+
+- **Material** (`include/Asset/Material.h`): `baseColor`, `baseColorTexture`, `alphaMode` (Opaque / Mask / Blend), `alphaCutoff`. PBR parameters are task 1.5. OBJ reads MTL `Kd` and `d`/`Tr`; glTF reads `baseColorFactor`, `alphaMode`, `alphaCutoff`.
+- **Material parameters** reach the shader through a single code path per backend:
+  - Vulkan: fragment **push constant** (`MaterialParams`) + a per-texture descriptor set (set 1). Untextured materials use a built-in 1x1 white texture.
+  - OpenGL: plain uniforms (`uMaterialBaseColor`, `uAlphaCutoff`, `uAlphaMode`) + texture unit 2, with the same white default.
+- **Base color** = `material.baseColor.rgb * vertex color * baseColorTexture.rgb`; alpha = `material.baseColor.a * texture alpha`. `Mask` discards below `alphaCutoff`; `Blend` is drawn in a separate, back-to-front sorted transparent pass (blend pipeline, depth write off) after all opaque SubMeshes.
+- **Material visibility**: the 材质 button on the toolbar toggles a panel (directly above the message list, spanning the right column). It lists each loaded model's materials with checkboxes (plus a per-model master toggle). Unchecking hides that material in both the main pass and the shadow pass.
+- **Sample**: `samples/multi_material.obj` (+ `.mtl` + `checker.png`) shows three cubes in one scene using a textured material, a solid red material, and a semi-transparent blue material.
+
+Because a SubMesh only stores an index range into the mesh's single vertex/index buffer, all SubMeshes share one VBO/IBO; a scene with several materials still uploads one buffer per mesh.

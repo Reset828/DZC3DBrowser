@@ -38,6 +38,9 @@ public:
     void EndFrame() override;
     // 提交索引绘制命令。
     void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1) override;
+    // 提交带起始索引的索引绘制（SubMesh 范围）。
+    void DrawIndexedRange(uint32_t indexCount, uint32_t firstIndex,
+                          uint32_t vertexOffset = 0) override;
     // 切换填充/线框多边形模式。
     void SetPolygonWireframe(bool enabled);
 
@@ -239,6 +242,13 @@ public:
     // 查询是否开启线框。
     bool IsWireframeEnabled() const override { return m_wireframeMode; }
 
+    // 以材质参数（普通 uniform）+ 纹理单元绑定后绘制当前网格。
+    void ApplyMaterial(const MaterialParams& params, TextureHandle texture) override;
+    // 按距离从远到近排序并绘制已收集的透明请求。
+    void FlushTransparentDraws() override;
+    // 计算点（上传坐标空间）到相机的距离。
+    float ComputeDrawDistance(const float center[3]) const override;
+
     // 请求把屏幕点反算为世界坐标。
     void RequestCoordReadback(float ndcX, float ndcY);
     // 查询是否有新的世界坐标可读。
@@ -371,6 +381,14 @@ protected:
     unsigned int m_dummyShadowTexture = 0;
     unsigned int m_shadowTexture = 0;
     unsigned int m_shadowFbo = 0;
+
+    // 材质（1.4）：普通 uniform 位置 + 默认白纹理。
+    TextureHandle m_defaultWhiteHandle = 0;
+    int m_uBaseColorLoc = -1;
+    int m_uAlphaCutoffLoc = -1;
+    int m_uAlphaModeLoc = -1;
+    int m_uBaseColorTextureLoc = -1;
+    static constexpr int kMaterialTextureUnit = 2;
 };
 
 #endif //__GL_RENDER_H__

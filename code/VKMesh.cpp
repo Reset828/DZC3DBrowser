@@ -22,6 +22,20 @@ void VKMesh::SetMeshData(const MeshData& mesh) {
     SetMeshData(std::move(vertices), std::move(indices));
 }
 
+// 设置逐 SubMesh 绘制信息。
+void VKMesh::SetSubMeshDrawInfos(std::vector<SubMeshDrawInfo>&& infos) {
+    m_subMeshInfos = std::move(infos);
+}
+
+// 切换某材质的可见性（同材质索引的所有 SubMesh 一起）。
+void VKMesh::SetMaterialVisible(int materialIndex, bool visible) {
+    for (SubMeshDrawInfo& info : m_subMeshInfos) {
+        if (info.materialIndex == materialIndex) {
+            info.visible = visible;
+        }
+    }
+}
+
 // 启动 Mesh 数据的异步上传。
 void VKMesh::SetMeshData(std::vector<Vertex3D>&& vertices,
                               std::vector<uint32_t>&& indices) {
@@ -87,15 +101,74 @@ void VKMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
     m_buffersReady = true;
 }
 
-// 绑定管线与缓冲并按当前模式绘制。
+// 绑定管线与缓冲并按当前模式逐 SubMesh 绘制。
 void VKMesh::Render(int mode) {
     if (!IsVisible() || !m_buffersReady || !m_pRender) return;
     if (m_indexCount == 0) return;
 
+    // 没有 SubMesh 信息时退化为整网格一次绘制（兼容旧路径）。
+    if (m_subMeshInfos.empty()) {
+        VkCommandBuffer cmd = m_pRender->GetCurrentCommandBuffer();
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        if (mode == Object::RM_SHADOW) {
+            pipeline = m_pRender->GetShadowPipeline();
+        } else {
+            pipeline = m_pRender->GetPipeline(m_pRender->IsWireframeEnabled()
+                ? VKRender::DT_TRIANGLE_WIREFRAME
+                : VKRender::DT_TRIANGLE);
+        }
+        if (pipeline == VK_NULL_HANDLE) return;
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        VkBuffer vb[] = { m_vertexBuffer };
+        VkDeviceSize offsets[] = { 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
+        vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        if (mode != Object::RM_SHADOW) {
+            m_pRender->ApplyMaterial(MaterialParams{}, 0);
+        }
+        m_pRender->DrawIndexed(m_indexCount);
+        return;
+    }
+
+    const bool shadowPass = (mode == Object::RM_SHADOW);
+    for (size_t i = 0; i < m_subMeshInfos.size(); ++i) {
+        const SubMeshDrawInfo& info = m_subMeshInfos[i];
+        if (!info.visible || info.indexCount == 0) continue;
+        if (shadowPass) {
+            DrawSubMeshImpl(info, false, true);
+            continue;
+        }
+        const bool blend =
+            (info.material.alphaMode == static_cast<int>(MaterialAlphaMode::Blend));
+        if (blend) {
+            // 透明 SubMesh 交给渲染器收集，主通道结束前统一排序绘制。
+            float distance = m_pRender->ComputeDrawDistance(info.center);
+            m_pRender->QueueTransparentDraw(this, static_cast<int>(i), distance);
+            continue;
+        }
+        DrawSubMeshImpl(info, false, false);
+    }
+}
+
+// 只绘制指定的 SubMesh（透明排序 flush 时逐个调用）。
+void VKMesh::DrawSubMesh(int subMeshIndex, int iMode) {
+    if (!IsVisible() || !m_buffersReady || !m_pRender) return;
+    if (subMeshIndex < 0 || subMeshIndex >= static_cast<int>(m_subMeshInfos.size())) return;
+    const SubMeshDrawInfo& info = m_subMeshInfos[static_cast<size_t>(subMeshIndex)];
+    if (!info.visible || info.indexCount == 0) return;
+    const bool shadow = (iMode == Object::RM_SHADOW);
+    DrawSubMeshImpl(info, iMode == Object::RM_TRANSPARENT, shadow);
+}
+
+// 绘制单个 SubMesh：选管线 -> 绑定 VBO/IBO -> 应用材质 -> 范围绘制。
+void VKMesh::DrawSubMeshImpl(const SubMeshDrawInfo& info, bool blend, bool shadow) {
     VkCommandBuffer cmd = m_pRender->GetCurrentCommandBuffer();
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (mode == Object::RM_SHADOW) {
+    if (shadow) {
         pipeline = m_pRender->GetShadowPipeline();
+    } else if (blend) {
+        pipeline = m_pRender->GetPipeline(VKRender::DT_TRIANGLE_BLEND);
     } else {
         pipeline = m_pRender->GetPipeline(m_pRender->IsWireframeEnabled()
             ? VKRender::DT_TRIANGLE_WIREFRAME
@@ -110,7 +183,11 @@ void VKMesh::Render(int mode) {
     vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
     vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-    m_pRender->DrawIndexed(m_indexCount);
+    // 阴影通道不需要材质参数；主/透明通道应用材质。
+    if (!shadow) {
+        m_pRender->ApplyMaterial(info.material, info.texture);
+    }
+    m_pRender->DrawIndexedRange(info.indexCount, info.indexOffset);
 }
 
 

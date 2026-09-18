@@ -51,7 +51,21 @@ void GLMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
     m_buffersReady = (m_vao != 0 && m_indexCount > 0);
 }
 
-// 绑定 VAO 并按当前模式绘制。
+// 设置逐 SubMesh 绘制信息。
+void GLMesh::SetSubMeshDrawInfos(std::vector<SubMeshDrawInfo>&& infos) {
+    m_subMeshInfos = std::move(infos);
+}
+
+// 切换某材质的可见性（同材质索引的所有 SubMesh 一起）。
+void GLMesh::SetMaterialVisible(int materialIndex, bool visible) {
+    for (SubMeshDrawInfo& info : m_subMeshInfos) {
+        if (info.materialIndex == materialIndex) {
+            info.visible = visible;
+        }
+    }
+}
+
+// 绑定 VAO 并按当前模式逐 SubMesh 绘制。
 void GLMesh::Render(int mode) {
     if (!IsVisible() || !m_buffersReady || !m_pRender) return;
     if (m_indexCount == 0 || m_vao == 0) return;
@@ -65,14 +79,63 @@ void GLMesh::Render(int mode) {
         gl->glUseProgram(shadowProgram);
         m_pRender->SetPolygonWireframe(false);
         gl->glBindVertexArray(m_vao);
-        m_pRender->DrawIndexed(m_indexCount);
+        // 阴影通道逐 SubMesh 绘制，但材质可见性仍生效。
+        if (m_subMeshInfos.empty()) {
+            m_pRender->DrawIndexed(m_indexCount);
+        } else {
+            for (const SubMeshDrawInfo& info : m_subMeshInfos) {
+                if (!info.visible || info.indexCount == 0) continue;
+                m_pRender->DrawIndexedRange(info.indexCount, info.indexOffset);
+            }
+        }
         gl->glBindVertexArray(0);
         return;
     }
 
     m_pRender->SetPolygonWireframe(m_pRender->IsWireframeEnabled());
     gl->glBindVertexArray(m_vao);
-    m_pRender->DrawIndexed(m_indexCount);
+
+    if (m_subMeshInfos.empty()) {
+        // 兼容旧路径：整网格一次绘制（应用默认材质）。
+        m_pRender->ApplyMaterial(MaterialParams{}, 0);
+        m_pRender->DrawIndexed(m_indexCount);
+    } else {
+        for (size_t i = 0; i < m_subMeshInfos.size(); ++i) {
+            const SubMeshDrawInfo& info = m_subMeshInfos[i];
+            if (!info.visible || info.indexCount == 0) continue;
+            const bool blend =
+                info.material.alphaMode == static_cast<int>(MaterialAlphaMode::Blend);
+            if (blend) {
+                // 透明 SubMesh 交给渲染器收集，主通道结束前统一排序绘制。
+                float distance = m_pRender->ComputeDrawDistance(info.center);
+                m_pRender->QueueTransparentDraw(this, static_cast<int>(i), distance);
+                continue;
+            }
+            DrawSubMeshImpl(info);
+        }
+    }
+
     gl->glBindVertexArray(0);
     m_pRender->SetPolygonWireframe(false);
+}
+
+// 只绘制指定的 SubMesh（透明排序 flush 时逐个调用）。
+void GLMesh::DrawSubMesh(int subMeshIndex, int iMode) {
+    if (!IsVisible() || !m_buffersReady || !m_pRender) return;
+    if (subMeshIndex < 0 || subMeshIndex >= static_cast<int>(m_subMeshInfos.size())) return;
+    const SubMeshDrawInfo& info = m_subMeshInfos[static_cast<size_t>(subMeshIndex)];
+    if (!info.visible || info.indexCount == 0) return;
+
+    QOpenGLFunctions_4_2_Core* gl = m_pRender->GetFunctions();
+    if (!gl) return;
+    gl->glBindVertexArray(m_vao);
+    DrawSubMeshImpl(info);
+    gl->glBindVertexArray(0);
+}
+
+// 绘制单个 SubMesh：应用材质 -> 范围绘制。
+// 透明混合状态由 FlushTransparentDraws 统一开关，这里无需再判断。
+void GLMesh::DrawSubMeshImpl(const SubMeshDrawInfo& info) {
+    m_pRender->ApplyMaterial(info.material, info.texture);
+    m_pRender->DrawIndexedRange(info.indexCount, info.indexOffset);
 }

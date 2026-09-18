@@ -11,6 +11,7 @@
 #include "GltfParseRunnable.h"
 #include "TextureCache.h"
 #include "TextureImport.h"
+#include "MeshDrawInfo.h"
 #include <QWindow>
 #include <QString>
 #include <QAction>
@@ -223,6 +224,10 @@ void MainWindow::SetupToolBar() {
     m_orthographicCheck->setLayoutDirection(Qt::RightToLeft);
     m_orthographicCheck->setChecked(false);
     toolbar->addWidget(m_orthographicCheck);
+
+    m_materialButton = new QPushButton(QStringLiteral("材质"));
+    toolbar->addWidget(m_materialButton);
+    connect(m_materialButton, &QPushButton::clicked, this, &MainWindow::onMaterialPanel);
 
     m_lightAnalysisButton = new QPushButton(QStringLiteral("光照分析"));
     toolbar->addWidget(m_lightAnalysisButton);
@@ -496,10 +501,68 @@ void MainWindow::SetupVulkan() {
     m_messageSplitter = new QSplitter(Qt::Vertical);
     m_messageSplitter->setHandleWidth(1);
     m_messageSplitter->addWidget(viewportHost);
+
+    // 材质面板：位于渲染窗口正下方、消息提示框正上方，横跨整个右栏。
+    m_materialPanel = new QWidget();
+    m_materialPanel->setAutoFillBackground(true);
+    m_materialPanel->setStyleSheet(QStringLiteral("background-color: #252526; border: 1px solid #3c3c3c;"));
+    QVBoxLayout* materialLayout = new QVBoxLayout(m_materialPanel);
+    materialLayout->setContentsMargins(4, 2, 4, 2);
+    materialLayout->setSpacing(2);
+    QLabel* materialTitle = new QLabel(QStringLiteral("材质可见性"));
+    materialTitle->setStyleSheet(QStringLiteral("color: #d4d4d4; font-size: 12px; border: none;"));
+    materialLayout->addWidget(materialTitle);
+    m_materialTree = new QTreeWidget();
+    m_materialTree->setHeaderHidden(true);
+    m_materialTree->setRootIsDecorated(true);
+    m_materialTree->setIndentation(16);
+    m_materialTree->setStyleSheet(QStringLiteral(
+        "QTreeWidget { background-color: #1e1e1e; color: #d4d4d4; border: none; outline: none; }"
+        "QTreeWidget::item { padding: 1px 4px; }"
+        "QTreeWidget::item:selected { background-color: #094771; }"));
+    materialLayout->addWidget(m_materialTree);
+    m_materialPanel->setVisible(false);
+
+    // 材质勾选变化：应用到对应模型的网格（材质级或整模型组）。
+    connect(m_materialTree, &QTreeWidget::itemChanged, this,
+            [this](QTreeWidgetItem* item, int column) {
+        if (!item || column != 0) return;
+        const QVariant modelData = item->data(0, Qt::UserRole);
+        if (!modelData.isValid()) return;
+        const int modelIndex = modelData.toInt();
+        if (modelIndex < 0 || modelIndex >= static_cast<int>(m_loadedModels.size())) return;
+        LoadedModel& model = m_loadedModels[static_cast<size_t>(modelIndex)];
+        const bool visible = item->checkState(0) == Qt::Checked;
+        const int materialIndex = item->data(0, Qt::UserRole + 1).toInt();
+
+        if (materialIndex < 0) {
+            // 组节点：把状态应用到该模型下所有材质。
+            for (int index = 0;
+                 index < static_cast<int>(model.asset.materials.size());
+                 ++index) {
+                model.materialVisible[index] = visible;
+            }
+            ApplyModelMaterialVisibility(model);
+            // 同步子项勾选状态（阻止递归触发）。
+            const QSignalBlocker blocker(m_materialTree);
+            for (int child = 0; child < item->childCount(); ++child) {
+                item->child(child)->setCheckState(0, visible ? Qt::Checked : Qt::Unchecked);
+            }
+            return;
+        }
+
+        // 材质节点：只切换该材质。
+        model.materialVisible[materialIndex] = visible;
+        ApplyModelMaterialVisibility(model);
+    });
+
+    m_messageSplitter->addWidget(m_materialPanel);
+
     m_messageSplitter->addWidget(m_messageList);
     m_messageSplitter->setStretchFactor(0, 1);
     m_messageSplitter->setStretchFactor(1, 0);
-    m_messageSplitter->setSizes({ 600, 120 });
+    m_messageSplitter->setStretchFactor(2, 0);
+    m_messageSplitter->setSizes({ 600, 120, 120 });
 
     QWidget* rightHost = new QWidget();
     QVBoxLayout* rightLayout = new QVBoxLayout(rightHost);
@@ -755,9 +818,87 @@ void MainWindow::onLightAnalysis() {
     ApplyLightAnalysisToRenderer();
 }
 
+// 打开或关闭材质可见性面板。
+void MainWindow::onMaterialPanel() {
+    if (!m_materialPanel) return;
+    const bool open = !m_materialPanel->isVisible();
+    m_materialPanel->setVisible(open);
+    if (m_materialButton) {
+        m_materialButton->setStyleSheet(open
+            ? QStringLiteral("background-color: #0078d4; color: #ffffff;")
+            : QString());
+    }
+    if (open) {
+        RebuildMaterialPanel();
+    }
+}
+
+// 重建材质面板内容（按模型分组 + 每材质复选框 + 组内总开关）。
+void MainWindow::RebuildMaterialPanel() {
+    if (!m_materialTree) return;
+    // 重建期间屏蔽 itemChanged，避免勾选状态写入触发回调。
+    const QSignalBlocker blocker(m_materialTree);
+    m_materialTree->clear();
+
+    for (size_t modelIndex = 0; modelIndex < m_loadedModels.size(); ++modelIndex) {
+        LoadedModel& model = m_loadedModels[modelIndex];
+        if (model.asset.materials.empty()) continue;
+
+        const QString modelName = model.treeItem
+            ? model.treeItem->text(0)
+            : QFileInfo(QString::fromStdString(model.asset.sourcePath)).fileName();
+        QTreeWidgetItem* groupItem = new QTreeWidgetItem(m_materialTree);
+        groupItem->setText(0, modelName);
+        groupItem->setFlags(groupItem->flags() | Qt::ItemIsUserCheckable);
+        groupItem->setExpanded(true);
+        groupItem->setData(0, Qt::UserRole, static_cast<int>(modelIndex));
+        groupItem->setData(0, Qt::UserRole + 1, -1);  // -1 = 组节点
+
+        bool allVisible = true;
+        for (int materialIndex = 0;
+             materialIndex < static_cast<int>(model.asset.materials.size());
+             ++materialIndex) {
+            const Material& material = model.asset.materials[static_cast<size_t>(materialIndex)];
+            const bool visible = model.materialVisible.count(materialIndex) == 0
+                ? true
+                : model.materialVisible[materialIndex];
+            if (!visible) allVisible = false;
+
+            QTreeWidgetItem* materialItem = new QTreeWidgetItem(groupItem);
+            QString label = material.name.empty()
+                ? QStringLiteral("材质 %1").arg(materialIndex)
+                : QString::fromStdString(material.name);
+            if (material.alphaMode == MaterialAlphaMode::Blend) {
+                label += QStringLiteral("（透明）");
+            } else if (material.alphaMode == MaterialAlphaMode::Mask) {
+                label += QStringLiteral("（遮罩）");
+            }
+            materialItem->setText(0, label);
+            materialItem->setFlags(materialItem->flags() | Qt::ItemIsUserCheckable);
+            materialItem->setCheckState(0, visible ? Qt::Checked : Qt::Unchecked);
+            materialItem->setData(0, Qt::UserRole, static_cast<int>(modelIndex));
+            materialItem->setData(0, Qt::UserRole + 1, materialIndex);
+        }
+        groupItem->setCheckState(0, allVisible ? Qt::Checked : Qt::Unchecked);
+    }
+}
+
+// 应用某模型的材质可见性到其网格对象。
+void MainWindow::ApplyModelMaterialVisibility(LoadedModel& model) {
+    for (Object* mesh : model.meshes) {
+        if (!mesh) continue;
+        for (const auto& entry : model.materialVisible) {
+            if (auto* vkMesh = dynamic_cast<VKMesh*>(mesh)) {
+                vkMesh->SetMaterialVisible(entry.first, entry.second);
+            } else if (auto* glMesh = dynamic_cast<GLMesh*>(mesh)) {
+                glMesh->SetMaterialVisible(entry.first, entry.second);
+            }
+        }
+    }
+}
+
 // 把光照面板参数写进当前三维渲染器。
-void MainWindow::ApplyLightAnalysisToRenderer() {
-    auto applySun = [this](auto* render3D) {
+void MainWindow::ApplyLightAnalysisToRenderer() {    auto applySun = [this](auto* render3D) {
         if (!render3D) return;
         if (m_pLatitudeEdit) {
             bool ok = false;
@@ -1010,6 +1151,9 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
     it->treeItem = nullptr;
     m_loadedModels.erase(it);
     UpdateShadowSceneBounds();
+    if (m_materialPanel && m_materialPanel->isVisible()) {
+        RebuildMaterialPanel();
+    }
 }
 
 // 清空全部已加载模型。
@@ -1060,6 +1204,9 @@ void MainWindow::ClearLoadedModels() {
     m_coordY->setText(QStringLiteral("Y: 0.000"));
     m_coordZ->setText(QStringLiteral("Z: 0.000"));
     UpdateShadowSceneBounds();
+    if (m_materialPanel && m_materialPanel->isVisible()) {
+        RebuildMaterialPanel();
+    }
 }
 
 // 把相机对准场景或指定模型。
@@ -1315,7 +1462,47 @@ void MainWindow::RebuildSceneMeshes() {
     }
     // 网格就绪后导入纹理（CPU 缓存 + 当前后端 GPU 上传）。
     ImportModelTextures();
+    // 纹理句柄就绪后，构建逐 SubMesh 绘制信息（材质 + 纹理 + 可见性）。
+    RebuildSubMeshDrawInfos();
     UpdateShadowSceneBounds();
+}
+
+// 为所有已加载模型的网格构建逐 SubMesh 绘制信息。
+void MainWindow::RebuildSubMeshDrawInfos() {
+    const Vec3 center = {
+        m_sceneSourceCenter[0], m_sceneSourceCenter[1], m_sceneSourceCenter[2] };
+    const float scale = m_sceneNormalizationScale;
+
+    for (LoadedModel& model : m_loadedModels) {
+        for (size_t meshIndex = 0; meshIndex < model.asset.meshes.size(); ++meshIndex) {
+            if (meshIndex >= model.meshes.size() || !model.meshes[meshIndex]) continue;
+            // 与上传一致：归一化顶点坐标后再计算 SubMesh 中心/半径。
+            MeshData normalized = model.asset.meshes[meshIndex];
+            for (AssetVertex& vertex : normalized.vertices) {
+                vertex.position[0] = (vertex.position[0] - center.x) * scale;
+                vertex.position[1] = (vertex.position[1] - center.y) * scale;
+                vertex.position[2] = (vertex.position[2] - center.z) * scale;
+            }
+            std::vector<SubMeshDrawInfo> infos = BuildSubMeshDrawInfos(
+                normalized, model.asset.materials, model.textureHandles);
+            // 应用已保存的材质可见性。
+            for (SubMeshDrawInfo& info : infos) {
+                const auto found = model.materialVisible.find(info.materialIndex);
+                if (found != model.materialVisible.end()) {
+                    info.visible = found->second;
+                }
+            }
+            if (auto* vkMesh = dynamic_cast<VKMesh*>(model.meshes[meshIndex])) {
+                vkMesh->SetSubMeshDrawInfos(std::move(infos));
+            } else if (auto* glMesh = dynamic_cast<GLMesh*>(model.meshes[meshIndex])) {
+                glMesh->SetSubMeshDrawInfos(std::move(infos));
+            }
+        }
+    }
+
+    if (m_materialPanel && m_materialPanel->isVisible()) {
+        RebuildMaterialPanel();
+    }
 }
 
 // 把模型上的网格指针置空。

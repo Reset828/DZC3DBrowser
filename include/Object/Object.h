@@ -30,7 +30,8 @@ public:
 
     enum RenderMode {
         RM_DEFAULT = 0,
-        RM_SHADOW = 1
+        RM_SHADOW = 1,
+        RM_TRANSPARENT = 2  // 透明通道：只画 Blend SubMesh，由渲染器排序后调用
     };
 
     enum FlagType {
@@ -65,6 +66,12 @@ public:
 
     // 绘制自身。
     virtual void Render(int iMode = 0) = 0;
+
+    // 只绘制指定的 SubMesh（透明排序 flush 时逐个调用）。默认空实现。
+    virtual void DrawSubMesh(int subMeshIndex, int iMode = RM_DEFAULT) {
+        (void)subMeshIndex;
+        (void)iMode;
+    }
 
 protected:
     uint8_t m_uType = OT_OBJECT;

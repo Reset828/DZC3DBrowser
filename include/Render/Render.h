@@ -5,12 +5,32 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "Math/EngineTypes.h"
 #include "Texture/TextureTypes.h"
 
 
 class Object;
+
+// 材质参数块（1.4）。Vulkan 用 push constant，OpenGL 用普通 uniform；
+// 两者共用同一字段布局，GLSL 侧 3d.frag 以 #ifdef VULKAN 选择声明方式。
+// 字段偏移须与 GLSL 一致：baseColor@0(16) + alphaCutoff@16(4) + alphaMode@20(4)。
+// 尾部填充到 32 字节，兼容 std430 把块大小向上取整到 16 对齐的情形。
+struct MaterialParams {
+    float baseColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };  // 基础色（alpha 用于 Mask/Blend）
+    float alphaCutoff = 0.5f;                          // Mask 阈值
+    int alphaMode = 0;                                 // 0 Opaque / 1 Mask / 2 Blend
+    int pad0 = 0;
+    int pad1 = 0;
+};
+
+// 一个待排序的透明 SubMesh 绘制请求（帧内有效，flush 后清空）。
+struct TransparentDraw {
+    Object* object = nullptr;
+    int subMeshIndex = 0;
+    float distance = 0.0f;  // 到相机的距离，越大越先画
+};
 
 /******************************************************
     Render                 生命周期 / 帧循环 / Mesh 工厂
@@ -34,6 +54,7 @@ public:
         DT_TRIANGLE_WIREFRAME,
         DT_LINE,
         DT_POINT,
+        DT_TRIANGLE_BLEND,  // 透明混合三角形（depth write 关闭 + alpha 混合）
         DT_COUNT
     };
 
@@ -50,6 +71,31 @@ public:
     virtual void EndFrame() = 0;
     // 提交索引绘制命令。
     virtual void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1) = 0;
+    // 提交带起始索引的索引绘制（SubMesh 范围）。
+    virtual void DrawIndexedRange(uint32_t indexCount, uint32_t firstIndex,
+                                  uint32_t vertexOffset = 0) {
+        (void)indexCount; (void)firstIndex; (void)vertexOffset;
+    }
+
+    // 以给定材质参数与纹理绘制当前绑定的网格。
+    // Vulkan 用 push constant + set 1；OpenGL 用普通 uniform + 纹理单元。
+    // texture 为 0 时使用默认白纹理（无纹理材质）。
+    virtual void ApplyMaterial(const MaterialParams& params, TextureHandle texture) {
+        (void)params; (void)texture;
+    }
+
+    // 提交一个透明 SubMesh 绘制请求（帧内收集，EndFrame 前统一排序 flush）。
+    void QueueTransparentDraw(Object* object, int subMeshIndex, float distance) {
+        if (!object) return;
+        m_transparentDraws.push_back({ object, subMeshIndex, distance });
+    }
+    // 按到相机距离从远到近排序并绘制全部已收集的透明请求（后端实现）。
+    virtual void FlushTransparentDraws() {}
+
+    // 计算某点（上传坐标空间）到相机的距离，用于透明排序。
+    virtual float ComputeDrawDistance(const float center[3]) const {
+        (void)center; return 0.0f;
+    }
 
     // 等待 GPU 与异步任务完成。
     virtual void WaitForIdle() = 0;
@@ -120,6 +166,9 @@ protected:
     bool m_deviceLost = false;
     MeshFactory m_meshFactory;
     std::string m_lastError;
+
+    // 帧内透明绘制请求（对象 + SubMesh + 到相机距离）。
+    std::vector<TransparentDraw> m_transparentDraws;
 };
 
 #endif //__RENDER_H__

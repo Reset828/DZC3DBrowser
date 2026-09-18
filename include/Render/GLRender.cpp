@@ -1,6 +1,7 @@
 ﻿#include "GLRender.h"
 #include "Path/AssetPath.h"
 #include "Texture/GLTexture.h"
+#include "Object/Object.h"
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -131,6 +132,8 @@ bool GLRender::BeginFrame() {
 void GLRender::EndFrame() {
     if (!m_initialized || m_deviceLost || !m_context || !m_window) return;
     if (m_framebufferWidth == 0 || m_framebufferHeight == 0) return;
+    // 主通道结束前刷新透明绘制（按深度排序）。
+    FlushTransparentDraws();
     OnEndFrame();
     // 推进纹理延迟销毁队列（每帧一次）。
     ProcessDeferredTextureDestruction();
@@ -251,6 +254,22 @@ void GLRender::DrawIndexed(uint32_t indexCount, uint32_t instanceCount) {
     if (!m_functions || indexCount == 0) return;
     m_functions->glDrawElementsInstanced(GL_TRIANGLES, static_cast<int>(indexCount),
         GL_UNSIGNED_INT, nullptr, static_cast<int>(instanceCount));
+}
+
+// 提交带起始索引的索引绘制（SubMesh 范围）。
+void GLRender::DrawIndexedRange(uint32_t indexCount, uint32_t firstIndex,
+                                uint32_t vertexOffset) {
+    if (!m_functions || indexCount == 0) return;
+    const void* offset = reinterpret_cast<const void*>(
+        static_cast<uintptr_t>(firstIndex) * sizeof(uint32_t));
+    if (vertexOffset != 0) {
+        // 顶点偏移用 glDrawElementsBaseVertex。
+        m_functions->glDrawElementsBaseVertex(GL_TRIANGLES, static_cast<int>(indexCount),
+            GL_UNSIGNED_INT, offset, static_cast<int>(vertexOffset));
+    } else {
+        m_functions->glDrawElements(GL_TRIANGLES, static_cast<int>(indexCount),
+            GL_UNSIGNED_INT, offset);
+    }
 }
 
 // 切换填充/线框多边形模式。
@@ -781,6 +800,16 @@ bool GLRender3D::CreateUniformBuffers() {
         m_functions->glUniform1i(shadowMapLocation, 1);
         m_functions->glUseProgram(0);
     }
+    // 材质 uniform 位置（1.4）：baseColor / alphaCutoff / alphaMode / 基础色纹理。
+    m_uBaseColorLoc = m_functions->glGetUniformLocation(m_program, "uMaterialBaseColor");
+    m_uAlphaCutoffLoc = m_functions->glGetUniformLocation(m_program, "uAlphaCutoff");
+    m_uAlphaModeLoc = m_functions->glGetUniformLocation(m_program, "uAlphaMode");
+    m_uBaseColorTextureLoc = m_functions->glGetUniformLocation(m_program, "baseColorTexture");
+    if (m_uBaseColorTextureLoc >= 0) {
+        m_functions->glUseProgram(m_program);
+        m_functions->glUniform1i(m_uBaseColorTextureLoc, kMaterialTextureUnit);
+        m_functions->glUseProgram(0);
+    }
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, 0);
     return true;
 }
@@ -851,6 +880,88 @@ void GLRender3D::UpdateUniformBuffer() {
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, m_ubo);
     m_functions->glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(ubo), &ubo);
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, 0);
+}
+
+// 以材质参数（普通 uniform）+ 纹理单元绑定后绘制当前网格。
+void GLRender3D::ApplyMaterial(const MaterialParams& params, TextureHandle texture) {
+    if (!m_functions || m_program == 0) return;
+    m_functions->glUseProgram(m_program);
+    m_currentProgram = m_program;
+    m_functions->glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_ubo);
+
+    if (m_uBaseColorLoc >= 0) {
+        m_functions->glUniform4f(m_uBaseColorLoc, params.baseColor[0], params.baseColor[1],
+                                 params.baseColor[2], params.baseColor[3]);
+    }
+    if (m_uAlphaCutoffLoc >= 0) {
+        m_functions->glUniform1f(m_uAlphaCutoffLoc, params.alphaCutoff);
+    }
+    if (m_uAlphaModeLoc >= 0) {
+        m_functions->glUniform1i(m_uAlphaModeLoc, params.alphaMode);
+    }
+
+    // 绑定基础色纹理；无纹理时用默认白纹理。
+    unsigned int glTexture = 0;
+    if (texture != 0 && IsTextureValid(texture)) {
+        glTexture = GetTextureObject(texture);
+    }
+    if (glTexture == 0) {
+        if (m_defaultWhiteHandle == 0 || !IsTextureValid(m_defaultWhiteHandle)) {
+            const uint8_t white[4] = { 255, 255, 255, 255 };
+            TextureDesc desc;
+            desc.width = 1;
+            desc.height = 1;
+            desc.semantic = TextureSemantic::Color;
+            desc.generateMipmaps = false;
+            desc.pixels = white;
+            desc.sizeBytes = sizeof(white);
+            desc.debugName = "default-white";
+            desc.cacheKey = "builtin:default-white";
+            m_defaultWhiteHandle = CreateTexture(desc);
+        }
+        if (m_defaultWhiteHandle != 0 && IsTextureValid(m_defaultWhiteHandle)) {
+            glTexture = GetTextureObject(m_defaultWhiteHandle);
+        }
+    }
+    m_functions->glActiveTexture(GL_TEXTURE0 + kMaterialTextureUnit);
+    m_functions->glBindTexture(GL_TEXTURE_2D, glTexture);
+    m_functions->glActiveTexture(GL_TEXTURE0);
+}
+
+// 计算点（上传坐标空间）到相机的距离，用于透明排序。
+float GLRender3D::ComputeDrawDistance(const float center[3]) const {
+    const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
+    const glm::mat4 model = glm::translate(glm::mat4(1.0f), m_panOffset)
+        * glm::mat4_cast(m_modelRotation)
+        * glm::translate(glm::mat4(1.0f), -m_orbitCenter);
+    const glm::vec3 world = glm::vec3(model * glm::vec4(center[0], center[1], center[2], 1.0f));
+    return glm::length(eye - world);
+}
+
+// 按距离从远到近排序并绘制已收集的透明请求。
+void GLRender3D::FlushTransparentDraws() {
+    if (m_transparentDraws.empty()) return;
+
+    std::stable_sort(m_transparentDraws.begin(), m_transparentDraws.end(),
+        [](const TransparentDraw& a, const TransparentDraw& b) {
+            return a.distance > b.distance;  // 远的先画
+        });
+
+    if (m_functions) {
+        m_functions->glEnable(GL_BLEND);
+        m_functions->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        m_functions->glDepthMask(GL_FALSE);  // 透明不写深度
+    }
+    for (const TransparentDraw& draw : m_transparentDraws) {
+        if (draw.object) {
+            draw.object->DrawSubMesh(draw.subMeshIndex, Object::RM_TRANSPARENT);
+        }
+    }
+    if (m_functions) {
+        m_functions->glDepthMask(GL_TRUE);
+        m_functions->glDisable(GL_BLEND);
+    }
+    m_transparentDraws.clear();
 }
 // 创建深度附件。
 bool GLRender3D::CreateDepthResources() { return true; }

@@ -65,17 +65,22 @@ public:
     void ReleaseAllTextures() override;
     // 查询句柄是否有效。
     bool IsTextureValid(TextureHandle handle) const override;
+    // 某纹理真正销毁时的回调（子类可清理其描述符集等派生资源）。
+    virtual void OnTextureDestroyed(TextureHandle handle) { (void)handle; }
     // 返回纹理的 VkImageView（供未来 descriptor 绑定）；无效返回 VK_NULL_HANDLE。
     VkImageView GetTextureImageView(TextureHandle handle) const;
     // 返回纹理的 VkSampler；无效返回 VK_NULL_HANDLE。
     VkSampler GetTextureSampler(TextureHandle handle) const;
-
     // 返回 Vulkan 逻辑设备。
     VkDevice GetDevice() const;
     // 返回 Vulkan 物理设备。
     VkPhysicalDevice GetPhysicalDevice() const;
     // 返回当前帧命令缓冲。
     VkCommandBuffer GetCurrentCommandBuffer() const;
+
+    // 提交带起始索引的索引绘制（SubMesh 范围）。
+    void DrawIndexedRange(uint32_t indexCount, uint32_t firstIndex,
+                          uint32_t vertexOffset = 0) override;
 
 
     // 创建 Vulkan 缓冲区并绑定内存。
@@ -452,6 +457,10 @@ protected:
 
     // 创建描述符集布局。
     bool CreateDescriptorSetLayout();
+    // 创建材质（set 1）描述符布局与池。
+    bool CreateMaterialDescriptors();
+    // 销毁材质描述符资源。
+    void DestroyMaterialDescriptors();
     // 创建并映射 UBO。
     bool CreateUniformBuffers();
     // 创建描述符池。
@@ -504,6 +513,21 @@ protected:
     void ApplyConstrainedLocalRotation(const glm::vec3& localAxis, float angle);
     // 初始化单位矩阵。
     static void InitIdentityMatrix(float mat[4][4]);
+
+    // 以材质参数（push constant）+ set 1 纹理绑定后绘制当前网格。
+    void ApplyMaterial(const MaterialParams& params, TextureHandle texture) override;
+    // 按距离从远到近排序并绘制已收集的透明请求。
+    void FlushTransparentDraws() override;
+    // 计算点（上传坐标空间）到相机的距离。
+    float ComputeDrawDistance(const float center[3]) const override;
+    // 取得（或惰性分配）某纹理对应的 set 1 描述符集。
+    VkDescriptorSet MaterialDescriptorSetFor(TextureHandle handle);
+    // 确保默认白纹理存在，返回其句柄。
+    TextureHandle EnsureDefaultWhiteTexture();
+    // 纹理销毁时释放其材质描述符集。
+    void OnTextureDestroyed(TextureHandle handle) override;
+    // 释放某纹理句柄对应的材质描述符集。
+    void ReleaseMaterialDescriptorSet(TextureHandle handle);
 
     // 创建深度附件。
     bool CreateDepthResources();
@@ -589,6 +613,14 @@ protected:
     std::vector<VkBuffer> m_uniformBuffers;
     std::vector<VkDeviceMemory> m_uniformBuffersMemory;
     std::vector<void*> m_uniformBuffersMapped;
+
+    // 材质（set 1）：每纹理一个描述符集 + 默认白纹理。
+    VkDescriptorSetLayout m_materialSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_materialDescriptorPool = VK_NULL_HANDLE;
+    TextureHandle m_defaultWhiteHandle = 0;
+    std::unordered_map<TextureHandle, VkDescriptorSet> m_materialDescriptorSets;
+    std::unordered_map<TextureHandle, uint64_t> m_materialSetAllocatedFrame;
+    static constexpr uint32_t kMaterialDescriptorPoolSize = 512;
 
     VkSampler m_shadowSampler = VK_NULL_HANDLE;
     VkRenderPass m_shadowRenderPass = VK_NULL_HANDLE;

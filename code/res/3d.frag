@@ -11,13 +11,37 @@ layout(std140, binding = 0) uniform UniformBufferObject {
 
 layout(binding = 1) uniform sampler2DShadow shadowMap;
 
+// 材质参数（1.4）。
+//   Vulkan：push constant（VK 独有），纹理在 set 1 binding 0。
+//   OpenGL：普通 uniform + 纹理单元 2。
+// 两分支字段语义一致：baseColor(rgb=基础色, a=材质 alpha)、alphaCutoff、alphaMode。
+#ifdef VULKAN
+layout(push_constant) uniform MaterialPush {
+    vec4 baseColor;
+    float alphaCutoff;
+    int alphaMode;
+} mat;
+layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
+#define MAT_BASECOLOR mat.baseColor
+#define MAT_ALPHACUTOFF mat.alphaCutoff
+#define MAT_ALPHAMODE mat.alphaMode
+#else
+uniform vec4 uMaterialBaseColor;
+uniform float uAlphaCutoff;
+uniform int uAlphaMode;
+uniform sampler2D baseColorTexture;
+#define MAT_BASECOLOR uMaterialBaseColor
+#define MAT_ALPHACUTOFF uAlphaCutoff
+#define MAT_ALPHAMODE uAlphaMode
+#endif
+
 layout(location = 0) in vec3 fragViewPosition;
 layout(location = 1) in vec3 fragViewNormal;
 layout(location = 2) in vec3 fragWorldPosition;
 layout(location = 3) in vec3 fragObjectPosition;
 layout(location = 4) in vec3 fragObjectNormal;
 layout(location = 5) in vec3 fragColor;
-layout(location = 6) in vec2 fragTexCoord; // forwarded, not sampled yet
+layout(location = 6) in vec2 fragTexCoord; // sampled by the base-color texture (1.4)
 
 layout(location = 0) out vec4 outColor;
 
@@ -188,14 +212,27 @@ float SunLighting() {
 }
 
 void main() {
-    // Color order (fill and wireframe share this path; texCoord is not sampled):
-    // 1. Base = interpolated Vertex3D.color (fragColor).
+    // Color order (fill and wireframe share this path):
+    // 1. Base = material.baseColor.rgb * interpolated Vertex3D.color * baseColorTexture.rgb.
+    //    No texture -> default 1x1 white texture (sampled as white).
     // 2. Dye on: replace base with DyeColor().
     // 3. Gray on: if dye, multiply by ArtisticGray; else replace with gray.
     // 4. Light analysis on: multiply result by SunLighting().
+    // Alpha = material.baseColor.a * texture.a (1.4). Mask: discard below cutoff.
     const float grayEnabled = ubo.displayOptions.x;
     const float dyeEnabled = ubo.displayOptions.y;
     const float lightAnalysisEnabled = ubo.displayOptions.z;
+
+    vec4 texColor = texture(baseColorTexture, fragTexCoord);
+    vec3 baseColor = MAT_BASECOLOR.rgb * fragColor * texColor.rgb;
+    float alpha = MAT_BASECOLOR.a * texColor.a;
+
+    if (MAT_ALPHAMODE == 1) {  // Mask
+        if (alpha < MAT_ALPHACUTOFF) {
+            discard;
+        }
+        alpha = 1.0;
+    }
 
     vec3 color;
     if (dyeEnabled > 0.5) {
@@ -206,12 +243,12 @@ void main() {
     } else if (grayEnabled > 0.5) {
         color = vec3(ArtisticGray(ShadedViewNormal()));
     } else {
-        color = fragColor;
+        color = baseColor;
     }
 
     if (lightAnalysisEnabled > 0.5) {
         color *= SunLighting();
     }
 
-    outColor = vec4(color, 1.0);
+    outColor = vec4(color, alpha);
 }
