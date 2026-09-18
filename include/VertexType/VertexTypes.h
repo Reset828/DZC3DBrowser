@@ -22,6 +22,8 @@ struct Vertex3D {
     float color[3];
     float texCoord[2];
     float normal[3];
+    // 切线空间基（1.5）：xyz = 切线，w = 副切线手性符号。location 4。
+    float tangent[4];
 
     // 返回顶点绑定描述。
     static VkVertexInputBindingDescription GetBindingDescription();
@@ -37,6 +39,7 @@ struct UniformBufferObject3D {
     alignas(16) float sunDirection[4];   // xyz: 物体空间指向太阳（+X 东 +Y 北 +Z 上）
     alignas(16) float lightViewProj[4][4];
     alignas(16) float shadowOptions[4];  // x: 阴影贴图可用  y: NDC深度从[-1,1]转到[0,1]  z: 线框模式  w: Vulkan 窗口Y向下标志（取反 dFdy）
+    alignas(16) float cameraObjectPosition[4]; // xyz: 相机在物体空间的位置（PBR 视线向量），w 未用
 };
 
 #endif //__VERTEX_TYPES_H__

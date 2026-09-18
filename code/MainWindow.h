@@ -36,6 +36,7 @@ class QDial;
 class QMenu;
 class QListWidget;
 class QSplitter;
+class QSlider;
 
 
 
@@ -82,6 +83,8 @@ private slots:
     void onLightAnalysis();
     // 打开或关闭材质可见性面板。
     void onMaterialPanel();
+    // 打开或关闭 PBR 调试面板。
+    void onPbrPanel();
     // 打开最近文件菜单项对应路径。
     void onRecentFileTriggered();
     // 在 Vulkan / OpenGL 后端间切换。
@@ -133,6 +136,8 @@ private:
     void SwitchOpenGLTo3D();
     // 把光照面板参数写进当前三维渲染器。
     void ApplyLightAnalysisToRenderer();
+    // 把 PBR 调试面板（金属度/粗糙度/自发光覆盖）参数写进当前三维渲染器。
+    void ApplyPbrToRenderer();
     // 用已加载模型包围盒更新阴影范围。
     void UpdateShadowSceneBounds();
     // 同步阴影贴图尺寸下拉框。
@@ -200,6 +205,15 @@ private:
     QCheckBox* m_orthographicCheck = nullptr;
     QPushButton* m_lightAnalysisButton = nullptr;
     QPushButton* m_materialButton = nullptr;
+    // PBR 调试面板（1.5）：金属度 / 粗糙度 / 自发光覆盖开关 + 滑块。
+    QPushButton* m_pbrButton = nullptr;
+    QWidget* m_pbrPanel = nullptr;
+    QCheckBox* m_metallicOverrideCheck = nullptr;
+    QSlider* m_metallicSlider = nullptr;
+    QCheckBox* m_roughnessOverrideCheck = nullptr;
+    QSlider* m_roughnessSlider = nullptr;
+    QCheckBox* m_emissiveOverrideCheck = nullptr;
+    QSlider* m_emissiveSlider = nullptr;
     QComboBox* m_backendEngineCombo = nullptr;
     QWidget* m_lightAnalysisPanel = nullptr;
     QWidget* m_materialPanel = nullptr;

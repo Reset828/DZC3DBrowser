@@ -205,6 +205,10 @@ public:
     void SetDyeEnabled(bool enabled);
     // 开关光照分析。
     void SetLightAnalysisEnabled(bool enabled);
+    // PBR 调试覆盖（1.5）：enabled 时用 value 覆盖材质的 metallic/roughness/emissive。
+    void SetMetallicOverride(bool enabled, float value);
+    void SetRoughnessOverride(bool enabled, float value);
+    void SetEmissiveOverride(bool enabled, float value);
     // 设置阴影贴图边长。
     void SetShadowTextureSize(uint32_t size);
     // 返回阴影贴图边长。
@@ -243,7 +247,7 @@ public:
     bool IsWireframeEnabled() const override { return m_wireframeMode; }
 
     // 以材质参数（普通 uniform）+ 纹理单元绑定后绘制当前网格。
-    void ApplyMaterial(const MaterialParams& params, TextureHandle texture) override;
+    void ApplyMaterial(const MaterialParams& params, const MaterialTextureSet& textures) override;
     // 按距离从远到近排序并绘制已收集的透明请求。
     void FlushTransparentDraws() override;
     // 计算点（上传坐标空间）到相机的距离。
@@ -329,6 +333,13 @@ protected:
     bool m_grayEnabled = false;
     bool m_dyeEnabled = false;
     bool m_lightAnalysisEnabled = false;
+    // PBR 调试覆盖（1.5）。
+    bool m_metallicOverrideEnabled = false;
+    float m_metallicOverride = 0.0f;
+    bool m_roughnessOverrideEnabled = false;
+    float m_roughnessOverride = 0.5f;
+    bool m_emissiveOverrideEnabled = false;
+    float m_emissiveOverride = 0.0f;
     uint32_t m_shadowTextureSize = 2048;
     uint32_t m_allocatedShadowTextureSize = 0;
     bool m_shadowMapReady = false;
@@ -382,13 +393,29 @@ protected:
     unsigned int m_shadowTexture = 0;
     unsigned int m_shadowFbo = 0;
 
-    // 材质（1.4）：普通 uniform 位置 + 默认白纹理。
+    // 材质（1.4 / 1.5）：普通 uniform 位置 + 默认白/平面法线纹理 + 5 个纹理单元。
     TextureHandle m_defaultWhiteHandle = 0;
+    TextureHandle m_defaultFlatNormalHandle = 0;
     int m_uBaseColorLoc = -1;
     int m_uAlphaCutoffLoc = -1;
     int m_uAlphaModeLoc = -1;
     int m_uBaseColorTextureLoc = -1;
+    int m_uMetallicLoc = -1;
+    int m_uRoughnessLoc = -1;
+    int m_uEmissiveFactorLoc = -1;
+    int m_uEmissiveStrengthLoc = -1;
+    int m_uNormalScaleLoc = -1;
+    int m_uOcclusionStrengthLoc = -1;
+    int m_uMetallicRoughnessTextureLoc = -1;
+    int m_uNormalTextureLoc = -1;
+    int m_uOcclusionTextureLoc = -1;
+    int m_uEmissiveTextureLoc = -1;
+    // 纹理单元分配：2=baseColor, 3=metallicRoughness, 4=normal, 5=occlusion, 6=emissive。
     static constexpr int kMaterialTextureUnit = 2;
+    static constexpr int kMetallicRoughnessTextureUnit = 3;
+    static constexpr int kNormalTextureUnit = 4;
+    static constexpr int kOcclusionTextureUnit = 5;
+    static constexpr int kEmissiveTextureUnit = 6;
 };
 
 #endif //__GL_RENDER_H__

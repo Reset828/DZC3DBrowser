@@ -19,6 +19,10 @@ void BuildVertex3DArrays(const MeshData& mesh,
         vertex.normal[0] = source.normal[0];
         vertex.normal[1] = source.normal[1];
         vertex.normal[2] = source.normal[2];
+        vertex.tangent[0] = source.tangent[0];
+        vertex.tangent[1] = source.tangent[1];
+        vertex.tangent[2] = source.tangent[2];
+        vertex.tangent[3] = source.tangent[3];
         outVertices.push_back(vertex);
     }
     outIndices = mesh.indices;

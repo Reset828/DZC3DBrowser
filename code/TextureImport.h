@@ -29,9 +29,10 @@ struct TextureImportResult {
     TextureImportStats stats;
 };
 
-// 纹理资源导入器（1.3）。
-// 只处理“被材质引用的图像”：解码（经 TextureCache）-> 创建 GPU 纹理（经 Render）。
-// 不参与着色采样；采样与材质链路属于 1.4。
+// 纹理资源导入器（1.3 / 1.5）。
+// 处理“被材质引用的图像”：解码（经 TextureCache）-> 创建 GPU 纹理（经 Render）。
+// 1.5 起覆盖全部 PBR 贴图（baseColor / metallicRoughness / normal / occlusion /
+// emissive），并按语义选择颜色空间（颜色/自发光 = sRGB，数据贴图 = 线性）。
 class TextureImport {
 public:
     // 处理一个资产中所有被材质引用的图像。
@@ -45,6 +46,15 @@ public:
     static std::string BuildSummary(const TextureImportStats& stats);
 
 private:
-    // 依据纹理语义推断颜色空间（1.3 里 baseColor 一律视为颜色纹理）。
-    static TextureSemantic SemanticForBaseColor();
+    // 依据纹理语义推断颜色空间（1.5：按语义映射 sRGB / 线性）。
+    static TextureSemantic SemanticForUsage(int usage);
+};
+
+// 材质贴图用途（决定颜色空间）；与 TextureImport 内部的遍历顺序一致。
+enum class MaterialTextureUsage {
+    BaseColor = 0,
+    MetallicRoughness,
+    Normal,
+    Occlusion,
+    Emissive
 };

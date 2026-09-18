@@ -1995,10 +1995,10 @@ void VKRender3D::OnDestroyPipelines() {
 // 开始录制命令前的钩子。
 void VKRender3D::OnPrepareFrame() {
     EnsureDummyShadowReady();
-    // 命令池此时已可用，安全创建默认白纹理（无纹理材质使用），
+    // 命令池此时已可用，安全创建默认白/平面法线纹理（无纹理材质使用），
     // 并预分配其 set 1，避免绘制时 set 1 尚未绑定。
-    if (EnsureDefaultWhiteTexture() != 0) {
-        MaterialDescriptorSetFor(m_defaultWhiteHandle);
+    if (EnsureDefaultWhiteTexture() != 0 && EnsureDefaultFlatNormalTexture() != 0) {
+        MaterialDescriptorSetFor(MaterialTextureSet{});
     }
 }
 
@@ -2433,19 +2433,22 @@ bool VKRender3D::CreateDescriptorSetLayout() {
 }
 
 // 创建材质（set 1）描述符布局与描述符池。
-// 默认白纹理在首次需要时惰性创建（依赖命令池，OnInitialize 阶段尚不可用）。
+// 1.5：set 1 含 5 个 combined image sampler（baseColor / metallicRoughness /
+// normal / occlusion / emissive）。默认白/平面法线纹理在首次需要时惰性创建。
 bool VKRender3D::CreateMaterialDescriptors() {
-    VkDescriptorSetLayoutBinding textureBinding{};
-    textureBinding.binding = 0;
-    textureBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    textureBinding.descriptorCount = 1;
-    textureBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    textureBinding.pImmutableSamplers = nullptr;
+    VkDescriptorSetLayoutBinding textureBindings[kMaterialTextureSlotCount]{};
+    for (uint32_t slot = 0; slot < kMaterialTextureSlotCount; ++slot) {
+        textureBindings[slot].binding = slot;
+        textureBindings[slot].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        textureBindings[slot].descriptorCount = 1;
+        textureBindings[slot].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        textureBindings[slot].pImmutableSamplers = nullptr;
+    }
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &textureBinding;
+    layoutInfo.bindingCount = kMaterialTextureSlotCount;
+    layoutInfo.pBindings = textureBindings;
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_materialSetLayout) != VK_SUCCESS) {
         std::cerr << "3D: 创建材质描述符集布局失败" << std::endl;
         return false;
@@ -2453,7 +2456,7 @@ bool VKRender3D::CreateMaterialDescriptors() {
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = static_cast<uint32_t>(kMaterialDescriptorPoolSize);
+    poolSize.descriptorCount = static_cast<uint32_t>(kMaterialDescriptorPoolSize * kMaterialTextureSlotCount);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -2468,11 +2471,11 @@ bool VKRender3D::CreateMaterialDescriptors() {
     return true;
 }
 
-// 销毁材质描述符资源（含默认白纹理句柄与缓存映射）。
+// 销毁材质描述符资源（含默认白/平面法线纹理句柄与缓存映射）。
 void VKRender3D::DestroyMaterialDescriptors() {
     m_materialDescriptorSets.clear();
-    m_materialSetAllocatedFrame.clear();
     m_defaultWhiteHandle = 0;
+    m_defaultFlatNormalHandle = 0;
     if (m_materialDescriptorPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_device, m_materialDescriptorPool, nullptr);
         m_materialDescriptorPool = VK_NULL_HANDLE;
@@ -2483,7 +2486,7 @@ void VKRender3D::DestroyMaterialDescriptors() {
     }
 }
 
-// 确保默认白纹理存在（无纹理材质使用），返回其句柄。
+// 确保默认白纹理存在（baseColor / metallicRoughness / occlusion / emissive 无贴图时使用）。
 TextureHandle VKRender3D::EnsureDefaultWhiteTexture() {
     if (m_defaultWhiteHandle != 0 && IsTextureValid(m_defaultWhiteHandle)) {
         return m_defaultWhiteHandle;
@@ -2502,27 +2505,53 @@ TextureHandle VKRender3D::EnsureDefaultWhiteTexture() {
     return m_defaultWhiteHandle;
 }
 
-// 取得（或惰性分配）某纹理对应的 set 1 描述符集。
-VkDescriptorSet VKRender3D::MaterialDescriptorSetFor(TextureHandle handle) {
+// 确保默认平面法线纹理存在（无 normal 贴图时使用）。切线空间法线 (0,0,1) -> (0.5,0.5,1)。
+TextureHandle VKRender3D::EnsureDefaultFlatNormalTexture() {
+    if (m_defaultFlatNormalHandle != 0 && IsTextureValid(m_defaultFlatNormalHandle)) {
+        return m_defaultFlatNormalHandle;
+    }
+    const uint8_t flatNormal[4] = { 128, 128, 255, 255 };
+    TextureDesc desc;
+    desc.width = 1;
+    desc.height = 1;
+    desc.semantic = TextureSemantic::Normal;
+    desc.generateMipmaps = false;
+    desc.pixels = flatNormal;
+    desc.sizeBytes = sizeof(flatNormal);
+    desc.debugName = "default-flat-normal";
+    desc.cacheKey = "builtin:default-flat-normal";
+    m_defaultFlatNormalHandle = CreateTexture(desc);
+    return m_defaultFlatNormalHandle;
+}
+
+// 取得（或惰性分配）某组纹理对应的 set 1 描述符集。
+VkDescriptorSet VKRender3D::MaterialDescriptorSetFor(const MaterialTextureSet& textures) {
     if (m_device == VK_NULL_HANDLE || m_materialSetLayout == VK_NULL_HANDLE) return VK_NULL_HANDLE;
 
-    VkImageView view = VK_NULL_HANDLE;
-    VkSampler sampler = VK_NULL_HANDLE;
-    if (handle != 0 && IsTextureValid(handle)) {
-        view = GetTextureImageView(handle);
-        sampler = GetTextureSampler(handle);
-    }
-    if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) {
-        handle = EnsureDefaultWhiteTexture();
-        if (handle == 0 || !IsTextureValid(handle)) return VK_NULL_HANDLE;
-        view = GetTextureImageView(handle);
-        sampler = GetTextureSampler(handle);
-        if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    // 把每个槽解析为有效纹理句柄；缺失的槽用默认贴图补齐。
+    TextureHandle resolved[kMaterialTextureSlotCount];
+    resolved[0] = (textures.baseColor != 0 && IsTextureValid(textures.baseColor))
+        ? textures.baseColor : EnsureDefaultWhiteTexture();
+    resolved[1] = (textures.metallicRoughness != 0 && IsTextureValid(textures.metallicRoughness))
+        ? textures.metallicRoughness : EnsureDefaultWhiteTexture();
+    resolved[2] = (textures.normal != 0 && IsTextureValid(textures.normal))
+        ? textures.normal : EnsureDefaultFlatNormalTexture();
+    resolved[3] = (textures.occlusion != 0 && IsTextureValid(textures.occlusion))
+        ? textures.occlusion : EnsureDefaultWhiteTexture();
+    resolved[4] = (textures.emissive != 0 && IsTextureValid(textures.emissive))
+        ? textures.emissive : EnsureDefaultWhiteTexture();
+
+    // 缓存键 = 5 个句柄的组合；任一句柄变化即视为不同描述符集。
+    std::string cacheKey;
+    cacheKey.reserve(kMaterialTextureSlotCount * 12);
+    for (uint32_t slot = 0; slot < kMaterialTextureSlotCount; ++slot) {
+        cacheKey += std::to_string(resolved[slot]);
+        cacheKey.push_back('|');
     }
 
-    const auto found = m_materialDescriptorSets.find(handle);
+    const auto found = m_materialDescriptorSets.find(cacheKey);
     if (found != m_materialDescriptorSets.end()) {
-        return found->second;
+        return found->second.set;
     }
 
     VkDescriptorSetAllocateInfo allocInfo{};
@@ -2536,35 +2565,41 @@ VkDescriptorSet VKRender3D::MaterialDescriptorSetFor(TextureHandle handle) {
         return VK_NULL_HANDLE;
     }
 
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.sampler = sampler;
-    imageInfo.imageView = view;
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo imageInfos[kMaterialTextureSlotCount]{};
+    VkWriteDescriptorSet writes[kMaterialTextureSlotCount]{};
+    bool valid = true;
+    for (uint32_t slot = 0; slot < kMaterialTextureSlotCount; ++slot) {
+        const VkImageView view = GetTextureImageView(resolved[slot]);
+        const VkSampler sampler = GetTextureSampler(resolved[slot]);
+        if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) {
+            valid = false;
+            break;
+        }
+        imageInfos[slot].sampler = sampler;
+        imageInfos[slot].imageView = view;
+        imageInfos[slot].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = set;
-    write.dstBinding = 0;
-    write.dstArrayElement = 0;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.descriptorCount = 1;
-    write.pImageInfo = &imageInfo;
-    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
-
-    m_materialDescriptorSets.emplace(handle, set);
-    m_materialSetAllocatedFrame[handle] = m_textureFrameCounter;
-    return set;
-}
-
-// 释放某纹理句柄对应的材质描述符集（纹理销毁时调用）。
-void VKRender3D::ReleaseMaterialDescriptorSet(TextureHandle handle) {
-    const auto found = m_materialDescriptorSets.find(handle);
-    if (found == m_materialDescriptorSets.end()) return;
-    if (m_materialDescriptorPool != VK_NULL_HANDLE && found->second != VK_NULL_HANDLE) {
-        vkFreeDescriptorSets(m_device, m_materialDescriptorPool, 1, &found->second);
+        writes[slot].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[slot].dstSet = set;
+        writes[slot].dstBinding = slot;
+        writes[slot].dstArrayElement = 0;
+        writes[slot].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[slot].descriptorCount = 1;
+        writes[slot].pImageInfo = &imageInfos[slot];
     }
-    m_materialDescriptorSets.erase(found);
-    m_materialSetAllocatedFrame.erase(handle);
+    if (!valid) {
+        vkFreeDescriptorSets(m_device, m_materialDescriptorPool, 1, &set);
+        return VK_NULL_HANDLE;
+    }
+    vkUpdateDescriptorSets(m_device, kMaterialTextureSlotCount, writes, 0, nullptr);
+
+    MaterialDescriptorSetEntry entry;
+    entry.set = set;
+    for (uint32_t slot = 0; slot < kMaterialTextureSlotCount; ++slot) {
+        entry.handles[slot] = resolved[slot];
+    }
+    m_materialDescriptorSets.emplace(cacheKey, entry);
+    return set;
 }
 
 // 创建并映射 UBO。
@@ -2755,6 +2790,12 @@ void VKRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     ubo.shadowOptions[2] = m_wireframeMode ? 1.0f : 0.0f;
     // Vulkan 窗口 Y 向下：告知着色器把 dFdy 取反，使几何法线与 OpenGL 一致。
     ubo.shadowOptions[3] = 1.0f;
+    // PBR 视线向量：把相机（世界空间）变换到物体空间，与物体空间法线/太阳方向一致。
+    const glm::vec3 cameraObject = glm::vec3(glm::inverse(model) * glm::vec4(eye, 1.0f));
+    ubo.cameraObjectPosition[0] = cameraObject.x;
+    ubo.cameraObjectPosition[1] = cameraObject.y;
+    ubo.cameraObjectPosition[2] = cameraObject.z;
+    ubo.cameraObjectPosition[3] = 0.0f;
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
@@ -2786,6 +2827,24 @@ void VKRender3D::SetLightAnalysisEnabled(bool enabled) {
         return;
     }
     EnsureShadowMapForAnalysis();
+}
+
+// PBR 调试覆盖（1.5）：覆盖材质的 metallic。
+void VKRender3D::SetMetallicOverride(bool enabled, float value) {
+    m_metallicOverrideEnabled = enabled;
+    m_metallicOverride = value;
+}
+
+// PBR 调试覆盖（1.5）：覆盖材质的 roughness。
+void VKRender3D::SetRoughnessOverride(bool enabled, float value) {
+    m_roughnessOverrideEnabled = enabled;
+    m_roughnessOverride = value;
+}
+
+// PBR 调试覆盖（1.5）：覆盖材质的自发光倍率。
+void VKRender3D::SetEmissiveOverride(bool enabled, float value) {
+    m_emissiveOverrideEnabled = enabled;
+    m_emissiveOverride = value;
 }
 
 // 设置阴影贴图边长。
@@ -3589,15 +3648,20 @@ void VKRender3D::InitIdentityMatrix(float mat[4][4]) {
     mat[3][3] = 1.0f;
 }
 
-// 以材质参数（push constant）+ set 1 纹理绑定后绘制当前网格。
+// 以材质参数（push constant）+ set 1（5 个纹理槽）绑定后绘制当前网格。
 // 注意：不在此处绑定管线，调用方（VKMesh::DrawSubMesh）已按不透明/透明选好管线。
-void VKRender3D::ApplyMaterial(const MaterialParams& params, TextureHandle texture) {
+void VKRender3D::ApplyMaterial(const MaterialParams& params, const MaterialTextureSet& textures) {
     if (m_pipelineLayout == VK_NULL_HANDLE) return;
     VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+    // PBR 调试覆盖：按 UI 开关替换对应参数后再上传 push constant。
+    MaterialParams effective = params;
+    if (m_metallicOverrideEnabled) effective.metallic = m_metallicOverride;
+    if (m_roughnessOverrideEnabled) effective.roughness = m_roughnessOverride;
+    if (m_emissiveOverrideEnabled) effective.emissiveStrength = m_emissiveOverride;
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(MaterialParams), &params);
+                       0, sizeof(MaterialParams), &effective);
 
-    const VkDescriptorSet materialSet = MaterialDescriptorSetFor(texture);
+    const VkDescriptorSet materialSet = MaterialDescriptorSetFor(textures);
     if (materialSet != VK_NULL_HANDLE) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
                                 1, 1, &materialSet, 0, nullptr);
@@ -3631,9 +3695,29 @@ void VKRender3D::FlushTransparentDraws() {
     m_transparentDraws.clear();
 }
 
-// 纹理销毁时释放其材质描述符集。
+// 纹理销毁时回收引用它的材质描述符集（其余缓存保留，避免整表重建）。
 void VKRender3D::OnTextureDestroyed(TextureHandle handle) {
-    ReleaseMaterialDescriptorSet(handle);
+    if (m_materialDescriptorPool == VK_NULL_HANDLE) {
+        m_materialDescriptorSets.clear();
+        return;
+    }
+    for (auto it = m_materialDescriptorSets.begin(); it != m_materialDescriptorSets.end();) {
+        bool referencesHandle = false;
+        for (uint32_t slot = 0; slot < kMaterialTextureSlotCount; ++slot) {
+            if (it->second.handles[slot] == handle) {
+                referencesHandle = true;
+                break;
+            }
+        }
+        if (referencesHandle) {
+            if (it->second.set != VK_NULL_HANDLE) {
+                vkFreeDescriptorSets(m_device, m_materialDescriptorPool, 1, &it->second.set);
+            }
+            it = m_materialDescriptorSets.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 

@@ -6,7 +6,7 @@
 
 namespace {
 
-// 取材质基础色/透明度分类到材质参数块。
+// 取材质基础色/PBR/透明度分类到材质参数块（1.5）。
 MaterialParams MakeMaterialParams(const Material* material) {
     MaterialParams params;
     if (material) {
@@ -14,18 +14,37 @@ MaterialParams MakeMaterialParams(const Material* material) {
         params.baseColor[1] = material->baseColor.y;
         params.baseColor[2] = material->baseColor.z;
         params.baseColor[3] = material->baseColor.w;
+        params.emissiveFactor[0] = material->emissiveFactor.x;
+        params.emissiveFactor[1] = material->emissiveFactor.y;
+        params.emissiveFactor[2] = material->emissiveFactor.z;
+        params.emissiveFactor[3] = 0.0f;
         params.alphaCutoff = material->alphaCutoff;
+        params.metallic = material->metallic;
+        params.roughness = material->roughness;
+        params.normalScale = material->normalScale;
+        params.occlusionStrength = material->occlusionStrength;
+        params.emissiveStrength = material->emissiveStrength;
         params.alphaMode = static_cast<int>(material->alphaMode);
     }
     return params;
 }
 
-// 解析材质引用的 baseColor 纹理句柄（无则 0）。
-TextureHandle ResolveTexture(const Material* material,
-                             const std::unordered_map<int, TextureHandle>& handles) {
-    if (!material || material->baseColorTexture < 0) return 0;
-    const auto found = handles.find(material->baseColorTexture);
-    return found == handles.end() ? 0 : found->second;
+// 解析材质引用的各 PBR 纹理句柄（无则 0，交给渲染器替换默认贴图）。
+MaterialTextureSet ResolveTextures(const Material* material,
+                                   const std::unordered_map<int, TextureHandle>& handles) {
+    MaterialTextureSet set;
+    if (!material) return set;
+    auto resolve = [&handles](int textureIndex) -> TextureHandle {
+        if (textureIndex < 0) return 0;
+        const auto found = handles.find(textureIndex);
+        return found == handles.end() ? 0 : found->second;
+    };
+    set.baseColor = resolve(material->baseColorTexture);
+    set.metallicRoughness = resolve(material->metallicRoughnessTexture);
+    set.normal = resolve(material->normalTexture);
+    set.occlusion = resolve(material->occlusionTexture);
+    set.emissive = resolve(material->emissiveTexture);
+    return set;
 }
 
 // 计算一段索引区间的中心与半径（上传坐标空间）。
@@ -84,7 +103,7 @@ std::vector<SubMeshDrawInfo> BuildSubMeshDrawInfos(
                 ? &materials[static_cast<size_t>(materialIndex)]
                 : nullptr;
         info.material = MakeMaterialParams(material);
-        info.texture = ResolveTexture(material, textureHandles);
+        info.textures = ResolveTextures(material, textureHandles);
         info.visible = true;
         ComputeRangeBounds(mesh, offset, count, info.center, info.radius);
         infos.push_back(info);

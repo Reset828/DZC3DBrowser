@@ -44,7 +44,7 @@ VkVertexInputBindingDescription Vertex3D::GetBindingDescription() {
 
 // 返回顶点属性描述。
 std::vector<VkVertexInputAttributeDescription> Vertex3D::GetAttributeDescriptions() {
-    std::vector<VkVertexInputAttributeDescription> attrs(4);
+    std::vector<VkVertexInputAttributeDescription> attrs(5);
 
     attrs[0].binding = 0;
     attrs[0].location = 0;
@@ -65,6 +65,12 @@ std::vector<VkVertexInputAttributeDescription> Vertex3D::GetAttributeDescription
     attrs[3].location = 3;
     attrs[3].format = VK_FORMAT_R32G32B32_SFLOAT;
     attrs[3].offset = offsetof(Vertex3D, normal);
+
+    // 切线（location 4）：vec4，xyz 切线 + w 手性。
+    attrs[4].binding = 0;
+    attrs[4].location = 4;
+    attrs[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attrs[4].offset = offsetof(Vertex3D, tangent);
 
     return attrs;
 }

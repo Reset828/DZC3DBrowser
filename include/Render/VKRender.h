@@ -384,6 +384,10 @@ public:
     void SetDyeEnabled(bool enabled);
     // 开关光照分析。
     void SetLightAnalysisEnabled(bool enabled);
+    // PBR 调试覆盖（1.5）：enabled 时用 value 覆盖材质的 metallic/roughness/emissive。
+    void SetMetallicOverride(bool enabled, float value);
+    void SetRoughnessOverride(bool enabled, float value);
+    void SetEmissiveOverride(bool enabled, float value);
     // 设置阴影贴图边长。
     void SetShadowTextureSize(uint32_t size);
     // 返回阴影贴图边长。
@@ -514,20 +518,20 @@ protected:
     // 初始化单位矩阵。
     static void InitIdentityMatrix(float mat[4][4]);
 
-    // 以材质参数（push constant）+ set 1 纹理绑定后绘制当前网格。
-    void ApplyMaterial(const MaterialParams& params, TextureHandle texture) override;
+    // 以材质参数（push constant）+ set 1（5 个纹理槽）绑定后绘制当前网格。
+    void ApplyMaterial(const MaterialParams& params, const MaterialTextureSet& textures) override;
     // 按距离从远到近排序并绘制已收集的透明请求。
     void FlushTransparentDraws() override;
     // 计算点（上传坐标空间）到相机的距离。
     float ComputeDrawDistance(const float center[3]) const override;
-    // 取得（或惰性分配）某纹理对应的 set 1 描述符集。
-    VkDescriptorSet MaterialDescriptorSetFor(TextureHandle handle);
-    // 确保默认白纹理存在，返回其句柄。
+    // 取得（或惰性分配）某组纹理对应的 set 1 描述符集。
+    VkDescriptorSet MaterialDescriptorSetFor(const MaterialTextureSet& textures);
+    // 确保默认白纹理存在（baseColor / metallicRoughness / occlusion / emissive 用），返回其句柄。
     TextureHandle EnsureDefaultWhiteTexture();
-    // 纹理销毁时释放其材质描述符集。
+    // 确保默认平面法线纹理存在（无 normal 贴图时使用），返回其句柄。
+    TextureHandle EnsureDefaultFlatNormalTexture();
+    // 纹理销毁时回收引用它的材质描述符集。
     void OnTextureDestroyed(TextureHandle handle) override;
-    // 释放某纹理句柄对应的材质描述符集。
-    void ReleaseMaterialDescriptorSet(TextureHandle handle);
 
     // 创建深度附件。
     bool CreateDepthResources();
@@ -548,6 +552,13 @@ protected:
     bool m_grayEnabled = false;
     bool m_dyeEnabled = false;
     bool m_lightAnalysisEnabled = false;
+    // PBR 调试覆盖（1.5）。
+    bool m_metallicOverrideEnabled = false;
+    float m_metallicOverride = 0.0f;
+    bool m_roughnessOverrideEnabled = false;
+    float m_roughnessOverride = 0.5f;
+    bool m_emissiveOverrideEnabled = false;
+    float m_emissiveOverride = 0.0f;
     uint32_t m_shadowTextureSize = 2048;
     uint32_t m_allocatedShadowTextureSize = 0;
     bool m_shadowMapReady = false;
@@ -614,12 +625,20 @@ protected:
     std::vector<VkDeviceMemory> m_uniformBuffersMemory;
     std::vector<void*> m_uniformBuffersMapped;
 
-    // 材质（set 1）：每纹理一个描述符集 + 默认白纹理。
+    // 材质（set 1）：每个纹理集合一个描述符集 + 默认白/平面法线纹理。
+    // 描述符集缓存按纹理集合键（5 个句柄的组合）索引；同时记录其引用的句柄，
+    // 以便纹理销毁时只回收引用它的描述符集（避免误释放仍在用的集合）。
+    // set 1 纹理槽数量（baseColor / metallicRoughness / normal / occlusion / emissive）。
+    static constexpr uint32_t kMaterialTextureSlotCount = 5;
+    struct MaterialDescriptorSetEntry {
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        TextureHandle handles[kMaterialTextureSlotCount] = {};
+    };
     VkDescriptorSetLayout m_materialSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_materialDescriptorPool = VK_NULL_HANDLE;
     TextureHandle m_defaultWhiteHandle = 0;
-    std::unordered_map<TextureHandle, VkDescriptorSet> m_materialDescriptorSets;
-    std::unordered_map<TextureHandle, uint64_t> m_materialSetAllocatedFrame;
+    TextureHandle m_defaultFlatNormalHandle = 0;
+    std::unordered_map<std::string, MaterialDescriptorSetEntry> m_materialDescriptorSets;
     static constexpr uint32_t kMaterialDescriptorPoolSize = 512;
 
     VkSampler m_shadowSampler = VK_NULL_HANDLE;

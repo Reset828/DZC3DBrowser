@@ -125,7 +125,7 @@ void VKMesh::Render(int mode) {
         vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
         vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
         if (mode != Object::RM_SHADOW) {
-            m_pRender->ApplyMaterial(MaterialParams{}, 0);
+            m_pRender->ApplyMaterial(MaterialParams{}, MaterialTextureSet{});
         }
         m_pRender->DrawIndexed(m_indexCount);
         return;
@@ -185,7 +185,7 @@ void VKMesh::DrawSubMeshImpl(const SubMeshDrawInfo& info, bool blend, bool shado
 
     // 阴影通道不需要材质参数；主/透明通道应用材质。
     if (!shadow) {
-        m_pRender->ApplyMaterial(info.material, info.texture);
+        m_pRender->ApplyMaterial(info.material, info.textures);
     }
     m_pRender->DrawIndexedRange(info.indexCount, info.indexOffset);
 }

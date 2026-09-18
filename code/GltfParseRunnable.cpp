@@ -1,5 +1,7 @@
 ﻿#include "GltfParseRunnable.h"
 
+#include "Asset/TangentGenerator.h"
+
 #include <QApplication>
 #include <QByteArray>
 #include <QJsonArray>
@@ -512,7 +514,7 @@ void GltfParseRunnable::run() {
             asset.textures.push_back(std::move(entry));
         }
 
-        // 4. 材质：基础色 + 基础色纹理。
+        // 4. 材质：基础色 + 基础色纹理 + Metallic-Roughness PBR（1.5）。
         const QJsonArray jsonMaterials = root.value(QLatin1String("materials")).toArray();
         for (const QJsonValue& value : jsonMaterials) {
             const QJsonObject material = value.toObject();
@@ -532,6 +534,49 @@ void GltfParseRunnable::run() {
             const QJsonObject baseColorTexture =
                 pbr.value(QLatin1String("baseColorTexture")).toObject();
             entry.baseColorTexture = IntField(baseColorTexture, "index", -1);
+
+            // PBR 标量：glTF 规范默认 metallicFactor=1、roughnessFactor=1。
+            entry.metallic = static_cast<float>(
+                DoubleField(pbr, "metallicFactor", 1.0));
+            entry.roughness = static_cast<float>(
+                DoubleField(pbr, "roughnessFactor", 1.0));
+
+            // metallic-roughness 合并图（G=roughness，B=metallic）。
+            const QJsonObject metallicRoughnessTexture =
+                pbr.value(QLatin1String("metallicRoughnessTexture")).toObject();
+            entry.metallicRoughnessTexture = IntField(metallicRoughnessTexture, "index", -1);
+
+            // 切线空间法线贴图 + 强度。
+            const QJsonObject normalTexture =
+                material.value(QLatin1String("normalTexture")).toObject();
+            if (!normalTexture.isEmpty()) {
+                entry.normalTexture = IntField(normalTexture, "index", -1);
+                entry.normalScale = static_cast<float>(
+                    DoubleField(normalTexture, "scale", 1.0));
+            }
+
+            // AO 贴图（R 通道）+ 强度。
+            const QJsonObject occlusionTexture =
+                material.value(QLatin1String("occlusionTexture")).toObject();
+            if (!occlusionTexture.isEmpty()) {
+                entry.occlusionTexture = IntField(occlusionTexture, "index", -1);
+                entry.occlusionStrength = static_cast<float>(
+                    DoubleField(occlusionTexture, "strength", 1.0));
+            }
+
+            // 自发光：emissiveFactor（线性）+ emissiveTexture。
+            const QJsonArray emissiveFactor =
+                material.value(QLatin1String("emissiveFactor")).toArray();
+            if (emissiveFactor.size() == 3) {
+                entry.emissiveFactor = {
+                    static_cast<float>(emissiveFactor.at(0).toDouble()),
+                    static_cast<float>(emissiveFactor.at(1).toDouble()),
+                    static_cast<float>(emissiveFactor.at(2).toDouble())
+                };
+            }
+            const QJsonObject emissiveTexture =
+                material.value(QLatin1String("emissiveTexture")).toObject();
+            entry.emissiveTexture = IntField(emissiveTexture, "index", -1);
 
             // 透明度分类（1.4）：alphaMode 决定 Opaque/Mask/Blend，alphaCutoff 供 Mask 使用。
             const std::string alphaMode = StringField(material, "alphaMode");
@@ -624,6 +669,8 @@ void GltfParseRunnable::run() {
             if (mesh.name.empty()) mesh.name = StringField(jsonMesh, "name");
             mesh.bounds = EmptyBounds();
             bool meshHasGeometry = false;
+            // 1.5：所有图元都提供了 TANGENT 才视为完整；否则整网格生成切线。
+            bool meshTangentComplete = true;
 
             for (const QJsonValue& primitiveValue : primitives) {
                 const QJsonObject primitive = primitiveValue.toObject();
@@ -659,9 +706,15 @@ void GltfParseRunnable::run() {
                 AccessorInfo normalInfo;
                 AccessorInfo texCoordInfo;
                 AccessorInfo colorInfo;
+                AccessorInfo tangentInfo;
                 const bool hasNormal = resolveOptional("NORMAL", normalInfo);
                 const bool hasTexCoord = resolveOptional("TEXCOORD_0", texCoordInfo);
                 const bool hasColor = resolveOptional("COLOR_0", colorInfo);
+                // 1.5：若 glTF 提供了 TANGENT（VEC4），直接使用；否则稍后由几何生成。
+                const bool hasTangent = resolveOptional("TANGENT", tangentInfo);
+                if (!hasTangent) {
+                    meshTangentComplete = false;
+                }
 
                 const size_t vertexCount = positionInfo.count;
                 const uint32_t baseIndex = static_cast<uint32_t>(mesh.vertices.size());
@@ -707,6 +760,27 @@ void GltfParseRunnable::run() {
                         vertex.color[0] = ReadComponentAsFloat(colorElement, colorInfo.componentType, colorInfo.normalized, 0);
                         vertex.color[1] = ReadComponentAsFloat(colorElement, colorInfo.componentType, colorInfo.normalized, 1);
                         vertex.color[2] = ReadComponentAsFloat(colorElement, colorInfo.componentType, colorInfo.normalized, 2);
+                    }
+
+                    // 1.5：读取 glTF TANGENT（VEC4，w = 手性）。缺失时保持默认，稍后生成。
+                    if (hasTangent && tangentInfo.componentCount == 4) {
+                        const char* tangentElement = AccessorElement(tangentInfo, i);
+                        const glm::vec3 localTangent(
+                            ReadComponentAsFloat(tangentElement, tangentInfo.componentType, tangentInfo.normalized, 0),
+                            ReadComponentAsFloat(tangentElement, tangentInfo.componentType, tangentInfo.normalized, 1),
+                            ReadComponentAsFloat(tangentElement, tangentInfo.componentType, tangentInfo.normalized, 2));
+                        // 顶点位置已烘焙世界变换，切线同样用世界旋转部分变换（与法线一致）。
+                        glm::vec3 worldTangent = glm::mat3(world) * localTangent;
+                        const float tangentLength = glm::length(worldTangent);
+                        if (tangentLength > 1.0e-6f) {
+                            worldTangent /= tangentLength;
+                            vertex.tangent[0] = worldTangent.x;
+                            vertex.tangent[1] = worldTangent.y;
+                            vertex.tangent[2] = worldTangent.z;
+                        }
+                        vertex.tangent[3] = ReadComponentAsFloat(
+                            tangentElement, tangentInfo.componentType, tangentInfo.normalized, 3);
+                        if (vertex.tangent[3] == 0.0f) vertex.tangent[3] = 1.0f;
                     }
 
                     mesh.vertices.push_back(vertex);
@@ -756,6 +830,10 @@ void GltfParseRunnable::run() {
             }
 
             if (meshHasGeometry && !mesh.vertices.empty() && !mesh.indices.empty()) {
+                // 1.5：glTF 未提供完整切线时，由几何生成（法线贴图 TBN 基）。
+                if (!meshTangentComplete) {
+                    TangentGenerator::GenerateTangents(mesh);
+                }
                 asset.meshes.push_back(std::move(mesh));
             }
         }

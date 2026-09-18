@@ -3,11 +3,24 @@
 #include "TextureCache.h"
 
 #include <string>
-#include <unordered_set>
+#include <unordered_map>
 
-// 1.3 中 baseColor 一律视为颜色纹理（sRGB）。
-TextureSemantic TextureImport::SemanticForBaseColor() {
-    return TextureSemantic::Color;
+// 1.5：按用途映射颜色空间。颜色/自发光为 sRGB，其余（法线/粗糙度/金属度/AO）为线性。
+TextureSemantic TextureImport::SemanticForUsage(int usage) {
+    switch (static_cast<MaterialTextureUsage>(usage)) {
+    case MaterialTextureUsage::BaseColor:
+        return TextureSemantic::Color;
+    case MaterialTextureUsage::Emissive:
+        return TextureSemantic::Emissive;
+    case MaterialTextureUsage::Normal:
+        return TextureSemantic::Normal;
+    case MaterialTextureUsage::Occlusion:
+        return TextureSemantic::Occlusion;
+    case MaterialTextureUsage::MetallicRoughness:
+        // metallic-roughness 合并图属于数据贴图（线性）；G=roughness、B=metallic。
+        return TextureSemantic::Roughness;
+    }
+    return TextureSemantic::Generic;
 }
 
 // 由资产里的 Sampler 索引生成采样器描述；无则用默认。
@@ -23,27 +36,45 @@ static SamplerDesc SamplerDescForTexture(const SceneAsset& asset, int samplerInd
     return desc;
 }
 
-// 处理一个资产中所有被材质引用的图像。
+// 处理一个资产中所有被材质引用的图像（1.5：覆盖全部 PBR 贴图槽）。
 TextureImportResult TextureImport::Import(const SceneAsset& asset,
                                           TextureCache& cache,
                                           Render& renderer) {
     TextureImportResult result;
 
-    std::unordered_set<int> processedTextures;  // 避免同一纹理被多个材质重复上传
+    // 收集 (纹理索引 -> 用途)。同一索引多次出现时以首次用途决定颜色空间。
+    // glTF 中每个 texture 通常专用于一个槽位，冲突属异常，给出提示并复用首次结果。
+    std::vector<std::pair<int, MaterialTextureUsage>> referenced;
+    std::unordered_map<int, MaterialTextureUsage> usageByTexture;
+    auto addUsage = [&](int textureIndex, MaterialTextureUsage usage) {
+        if (textureIndex < 0 || textureIndex >= static_cast<int>(asset.textures.size())) {
+            return;
+        }
+        const auto found = usageByTexture.find(textureIndex);
+        if (found == usageByTexture.end()) {
+            usageByTexture.emplace(textureIndex, usage);
+            referenced.emplace_back(textureIndex, usage);
+        } else if (found->second != usage) {
+            // 同一纹理被用于不同颜色空间的槽位：保留首次语义，避免重复上传。
+            ++result.stats.failed;
+            result.stats.notes.push_back(
+                "纹理 " + std::to_string(textureIndex) +
+                " 被用于不同颜色空间的槽位，已按首次用途处理");
+        }
+    };
 
     for (const Material& material : asset.materials) {
-        const int textureIndex = material.baseColorTexture;
-        if (textureIndex < 0 || textureIndex >= static_cast<int>(asset.textures.size())) {
-            continue;
-        }
+        addUsage(material.baseColorTexture, MaterialTextureUsage::BaseColor);
+        addUsage(material.metallicRoughnessTexture, MaterialTextureUsage::MetallicRoughness);
+        addUsage(material.normalTexture, MaterialTextureUsage::Normal);
+        addUsage(material.occlusionTexture, MaterialTextureUsage::Occlusion);
+        addUsage(material.emissiveTexture, MaterialTextureUsage::Emissive);
+    }
 
+    for (const auto& entry : referenced) {
+        const int textureIndex = entry.first;
+        const MaterialTextureUsage usage = entry.second;
         ++result.stats.referenced;
-
-        // 同一纹理只上传一次（跨材质复用）。
-        if (processedTextures.count(textureIndex) != 0) {
-            continue;
-        }
-        processedTextures.insert(textureIndex);
 
         const Texture& texture = asset.textures[static_cast<size_t>(textureIndex)];
         const int imageIndex = texture.image;
@@ -76,10 +107,16 @@ TextureImportResult TextureImport::Import(const SceneAsset& asset,
             continue;
         }
         if (cacheHit) ++result.stats.cacheHits;
+        const TextureSemantic semantic = SemanticForUsage(static_cast<int>(usage));
+        // GPU 复用键需区分颜色空间：同一图像作为 sRGB 与线性贴图时应各自上传。
+        if (!cacheKey.empty()) {
+            cacheKey += IsSrgbSemantic(semantic) ? ":srgb" : ":linear";
+        }
+
         TextureDesc desc;
         desc.width = decoded->width;
         desc.height = decoded->height;
-        desc.semantic = SemanticForBaseColor();
+        desc.semantic = semantic;
         desc.generateMipmaps = true;
         desc.sampler = SamplerDescForTexture(asset, texture.sampler);
         desc.pixels = decoded->pixels.data();

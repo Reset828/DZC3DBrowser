@@ -1,5 +1,7 @@
 ﻿#include "ObjParseRunnable.h"
 
+#include "Asset/TangentGenerator.h"
+
 #include <QApplication>
 #include <QMetaObject>
 
@@ -874,6 +876,9 @@ void ObjParseRunnable::run() {
             subMesh.localBounds.min = subMin;
             subMesh.localBounds.max = subMax;
         }
+
+        // 1.5：OBJ 无切线数据，由位置/法线/UV 生成（法线贴图 TBN 基）。
+        TangentGenerator::GenerateTangents(mesh);
 
         auto asset = std::make_shared<SceneAsset>();
         asset->sourcePath = m_filePath;

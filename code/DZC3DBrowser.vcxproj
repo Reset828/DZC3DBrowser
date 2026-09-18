@@ -128,6 +128,7 @@
     <ClInclude Include="..\include\Asset\MeshData.h" />
     <ClInclude Include="..\include\Asset\SceneNode.h" />
     <ClInclude Include="..\include\Asset\SceneAsset.h" />
+    <ClInclude Include="..\include\Asset\TangentGenerator.h" />
     <ClInclude Include="..\include\VertexType\VertexTypes.h" />
     <ClInclude Include="..\include\Math\EngineTypes.h" />
     <ClInclude Include="..\include\Path\AssetPath.h" />
@@ -161,6 +162,7 @@
     <ClCompile Include="VKMesh.cpp" />
     <ClCompile Include="GLMesh.cpp" />
     <ClCompile Include="..\include\VertexType\VertexTypes.cpp" />
+    <ClCompile Include="..\include\Asset\TangentGenerator.cpp" />
     <ClCompile Include="..\include\Path\AssetPath.cpp" />
     <ClCompile Include="..\include\Texture\VKTexture.cpp" />
     <ClCompile Include="..\include\Texture\GLTexture.cpp" />

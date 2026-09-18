@@ -7,31 +7,68 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     vec4 sunDirection;
     mat4 lightViewProj;
     vec4 shadowOptions;
+    vec4 cameraObjectPosition; // xyz: 相机在物体空间的位置（PBR 视线向量），w 未用
 } ubo;
 
 layout(binding = 1) uniform sampler2DShadow shadowMap;
 
-// 材质参数（1.4）。
-//   Vulkan：push constant（VK 独有），纹理在 set 1 binding 0。
-//   OpenGL：普通 uniform + 纹理单元 2。
-// 两分支字段语义一致：baseColor(rgb=基础色, a=材质 alpha)、alphaCutoff、alphaMode。
+// 材质参数（1.4 / 1.5）。
+//   Vulkan：push constant（VK 独有），纹理在 set 1 binding 0..4。
+//   OpenGL：普通 uniform + 纹理单元 2..6。
+// 两分支字段语义一致（布局见 Render.h 的 MaterialParams）。
+// 颜色空间约定：baseColor 纹理与 emissive 纹理为 sRGB（采样时硬件解码为线性），
+// 其余（metallicRoughness / normal / occlusion）为线性数据贴图。所有光照计算在线性空间，
+// 最终写入 sRGB 交换链由硬件编码，切勿在着色器里手动做 gamma。
 #ifdef VULKAN
 layout(push_constant) uniform MaterialPush {
-    vec4 baseColor;
+    vec4 baseColor;          // rgb 基础色(线性) + a 材质 alpha
+    vec4 emissiveFactor;     // xyz 线性自发光色
     float alphaCutoff;
-    int alphaMode;
+    float metallic;          // [0,1]
+    float roughness;         // [0,1]
+    float normalScale;
+    float occlusionStrength; // [0,1]
+    float emissiveStrength;
+    int alphaMode;           // 0 Opaque / 1 Mask / 2 Blend
+    int pad0;
 } mat;
 layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
+layout(set = 1, binding = 1) uniform sampler2D metallicRoughnessTexture;
+layout(set = 1, binding = 2) uniform sampler2D normalTexture;
+layout(set = 1, binding = 3) uniform sampler2D occlusionTexture;
+layout(set = 1, binding = 4) uniform sampler2D emissiveTexture;
 #define MAT_BASECOLOR mat.baseColor
+#define MAT_EMISSIVE mat.emissiveFactor
 #define MAT_ALPHACUTOFF mat.alphaCutoff
+#define MAT_METALLIC mat.metallic
+#define MAT_ROUGHNESS mat.roughness
+#define MAT_NORMALSCALE mat.normalScale
+#define MAT_OCCLUSIONSTRENGTH mat.occlusionStrength
+#define MAT_EMISSIVESTRENGTH mat.emissiveStrength
 #define MAT_ALPHAMODE mat.alphaMode
 #else
 uniform vec4 uMaterialBaseColor;
+uniform vec4 uEmissiveFactor;
 uniform float uAlphaCutoff;
+uniform float uMetallic;
+uniform float uRoughness;
+uniform float uNormalScale;
+uniform float uOcclusionStrength;
+uniform float uEmissiveStrength;
 uniform int uAlphaMode;
 uniform sampler2D baseColorTexture;
+uniform sampler2D metallicRoughnessTexture;
+uniform sampler2D normalTexture;
+uniform sampler2D occlusionTexture;
+uniform sampler2D emissiveTexture;
 #define MAT_BASECOLOR uMaterialBaseColor
+#define MAT_EMISSIVE uEmissiveFactor
 #define MAT_ALPHACUTOFF uAlphaCutoff
+#define MAT_METALLIC uMetallic
+#define MAT_ROUGHNESS uRoughness
+#define MAT_NORMALSCALE uNormalScale
+#define MAT_OCCLUSIONSTRENGTH uOcclusionStrength
+#define MAT_EMISSIVESTRENGTH uEmissiveStrength
 #define MAT_ALPHAMODE uAlphaMode
 #endif
 
@@ -41,9 +78,16 @@ layout(location = 2) in vec3 fragWorldPosition;
 layout(location = 3) in vec3 fragObjectPosition;
 layout(location = 4) in vec3 fragObjectNormal;
 layout(location = 5) in vec3 fragColor;
-layout(location = 6) in vec2 fragTexCoord; // sampled by the base-color texture (1.4)
+layout(location = 6) in vec2 fragTexCoord; // 所有 PBR 贴图共用第一套 UV（1.5）
+layout(location = 7) in vec4 fragObjectTangent; // xyz 切线 + w 手性（1.5）
 
 layout(location = 0) out vec4 outColor;
+
+// 光照常量（简化模型：单方向太阳光 + 常数环境光；完整 IBL 属 1.7）。
+const float kPi = 3.14159265359;
+const vec3 kSunColor = vec3(1.0, 0.98, 0.92);   // 线性太阳色
+const float kSunIntensity = 3.0;                // 太阳辐射强度（线性）
+const vec3 kAmbientColor = vec3(0.030, 0.035, 0.045); // 常数环境光（天空近似）
 
 vec3 DyeColor() {
     float t = clamp(fragWorldPosition.z * 0.5 + 0.5, 0.0, 1.0);
@@ -61,6 +105,39 @@ bool WireframeEnabled() {
     return ubo.shadowOptions.z > 0.5;
 }
 
+// 物体空间着色法线：优先用插值顶点法线，退化时用屏幕导数几何法线。
+vec3 ObjectNormal() {
+    vec3 objNormal = vec3(0.0);
+    float objNormalLengthSquared = dot(fragObjectNormal, fragObjectNormal);
+    if (objNormalLengthSquared > 1.0e-12) {
+        objNormal = fragObjectNormal * inversesqrt(objNormalLengthSquared);
+    }
+
+    if (WireframeEnabled()) {
+        return objNormalLengthSquared > 1.0e-12 ? objNormal : vec3(0.0, 0.0, 1.0);
+    }
+
+    // Vulkan 窗口 Y 向下、OpenGL Y 向上，dFdy 符号相反（见 shadowOptions.w）。
+    float screenYSign = ubo.shadowOptions.w > 0.5 ? -1.0 : 1.0;
+    vec3 dpdx = dFdx(fragObjectPosition);
+    vec3 dpdy = dFdy(fragObjectPosition) * screenYSign;
+    vec3 geometricCross = cross(dpdx, dpdy);
+    float geometricLengthSquared = dot(geometricCross, geometricCross);
+
+    if (geometricLengthSquared <= 1.0e-20) {
+        return objNormalLengthSquared > 1.0e-12 ? objNormal : vec3(0.0, 0.0, 1.0);
+    }
+    vec3 geometricNormal = geometricCross * inversesqrt(geometricLengthSquared);
+    if (objNormalLengthSquared <= 1.0e-12) {
+        return geometricNormal;
+    }
+    if (dot(objNormal, geometricNormal) < 0.0) {
+        objNormal = -objNormal;
+    }
+    return normalize(mix(geometricNormal, objNormal, 0.58));
+}
+
+// 视空间着色法线（灰度/染色模式沿用旧路径）。
 vec3 ShadedViewNormal() {
     vec3 viewDirection = normalize(-fragViewPosition);
 
@@ -73,8 +150,6 @@ vec3 ShadedViewNormal() {
         }
     }
 
-    // GL_LINE / VK_POLYGON_MODE_LINE fragments have degenerate screen
-    // derivatives, so gray would otherwise keep the lighting color.
     if (WireframeEnabled()) {
         if (objNormalLengthSquared > 1.0e-12) {
             return objNormal;
@@ -125,55 +200,6 @@ float ArtisticGray(vec3 normal) {
     return pow(gray, 0.92);
 }
 
-float SunLambert() {
-    float sunLengthSquared = dot(ubo.sunDirection.xyz, ubo.sunDirection.xyz);
-    if (sunLengthSquared <= 1.0e-12) {
-        return 0.0;
-    }
-    vec3 sun = ubo.sunDirection.xyz * inversesqrt(sunLengthSquared);
-
-    vec3 objNormal = vec3(0.0);
-    float objNormalLengthSquared = dot(fragObjectNormal, fragObjectNormal);
-    if (objNormalLengthSquared > 1.0e-12) {
-        objNormal = fragObjectNormal * inversesqrt(objNormalLengthSquared);
-    }
-
-    vec3 normal;
-    if (WireframeEnabled()) {
-        if (objNormalLengthSquared <= 1.0e-12) {
-            return 0.0;
-        }
-        normal = objNormal;
-    } else {
-        // Vulkan 窗口 Y 向下、OpenGL Y 向上，dFdy 符号相反。
-        // shadowOptions.w 由后端写入（Vulkan=1，OpenGL=0），据此统一几何法线朝向。
-        float screenYSign = ubo.shadowOptions.w > 0.5 ? -1.0 : 1.0;
-        vec3 dpdx = dFdx(fragObjectPosition);
-        vec3 dpdy = dFdy(fragObjectPosition) * screenYSign;
-        vec3 geometricCross = cross(dpdx, dpdy);
-        float geometricLengthSquared = dot(geometricCross, geometricCross);
-
-        if (geometricLengthSquared <= 1.0e-20) {
-            if (objNormalLengthSquared > 1.0e-12) {
-                normal = objNormal;
-            } else {
-                return 0.0;
-            }
-        } else {
-            vec3 geometricNormal = geometricCross * inversesqrt(geometricLengthSquared);
-            if (objNormalLengthSquared <= 1.0e-12) {
-                normal = geometricNormal;
-            } else {
-                if (dot(objNormal, geometricNormal) < 0.0) {
-                    objNormal = -objNormal;
-                }
-                normal = normalize(mix(geometricNormal, objNormal, 0.58));
-            }
-        }
-    }
-    return max(dot(normal, sun), 0.0);
-}
-
 float ShadowFactor() {
     if (ubo.shadowOptions.x < 0.5) {
         return 1.0;
@@ -204,28 +230,114 @@ float ShadowFactor() {
     return shadow / 9.0;
 }
 
+// 灰度/染色模式使用的太阳因子（Lambert × 阴影，含夜间环境光）。
 float SunLighting() {
+    vec3 sun = normalize(ubo.sunDirection.xyz);
+    vec3 normal = ObjectNormal();
+    float lambert = max(dot(normal, sun), 0.0);
     if (ubo.displayOptions.w < 0.5) {
         return 0.03;
     }
-    return 0.04 + 0.96 * SunLambert() * ShadowFactor();
+    return 0.04 + 0.96 * lambert * ShadowFactor();
+}
+
+// ---------------- Cook-Torrance BRDF（1.5） ----------------
+
+// GGX / Trowbridge-Reitz 法线分布项。
+float DistributionGGX(float NdotH, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / max(kPi * denom * denom, 1.0e-7);
+}
+
+// Smith 几何遮蔽项（Schlick-GGX，直接光 k = (r+1)^2 / 8）。
+float GeometrySmith(float NdotV, float NdotL, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
+    float ggxV = NdotV / (NdotV * (1.0 - k) + k);
+    float ggxL = NdotL / (NdotL * (1.0 - k) + k);
+    return ggxV * ggxL;
+}
+
+// Schlick Fresnel 近似。
+vec3 FresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// 切线空间法线贴图 -> 物体空间法线（TBN 基由顶点切线构造）。
+vec3 ApplyNormalMap(vec3 N, vec3 T, float tangentHand) {
+    vec3 n = texture(normalTexture, fragTexCoord).xyz * 2.0 - 1.0;
+    n.xy *= MAT_NORMALSCALE;
+    // 切线正交化；退化时退回几何法线（默认平面法线贴图 (0.5,0.5,1) 得到 n=(0,0,1)，无扰动）。
+    vec3 t = T - N * dot(N, T);
+    float tLenSq = dot(t, t);
+    if (tLenSq > 1.0e-12) {
+        t *= inversesqrt(tLenSq);
+        vec3 b = cross(N, t) * tangentHand;
+        return normalize(mat3(t, b, N) * n);
+    }
+    return N;
+}
+
+// 单方向光 PBR 直接光照（含阴影因子）。返回线性 RGB。
+vec3 ComputeDirectLighting(vec3 N, vec3 V, vec3 albedo, float metallic, float roughness) {
+    vec3 L = normalize(ubo.sunDirection.xyz);
+    vec3 H = normalize(V + L);
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 1.0e-4);
+    float NdotH = max(dot(N, H), 0.0);
+    float VdotH = max(dot(V, H), 0.0);
+
+    // 能量守恒：金属无漫反射，F0 = 0.04（电介质）或 albedo（金属）。
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    vec3 F = FresnelSchlick(VdotH, F0);
+    vec3 kd = (1.0 - F) * (1.0 - metallic);
+
+    float D = DistributionGGX(NdotH, roughness);
+    float G = GeometrySmith(NdotV, NdotL, roughness);
+    vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 1.0e-4);
+
+    vec3 radiance = kSunColor * kSunIntensity * ShadowFactor();
+    vec3 diffuse = kd * albedo / kPi;
+    return (diffuse + specular) * radiance * NdotL;
+}
+
+// 简化常数环境光（漫反射 + 廉价镜面环境近似）。
+vec3 ComputeAmbient(vec3 albedo, float metallic, float ao) {
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    vec3 ambientDiffuse = kAmbientColor * albedo * (1.0 - metallic) * ao;
+    vec3 ambientSpecular = kAmbientColor * F0 * ao;
+    return ambientDiffuse + ambientSpecular;
+}
+
+// Metallic-Roughness PBR（默认 3D 着色路径）。返回线性 RGB。
+vec3 ComputePBR(vec3 baseColor, float metallic, float roughness, float ao) {
+    vec3 N = ObjectNormal();
+    vec3 T = fragObjectTangent.xyz;
+    N = ApplyNormalMap(N, T, fragObjectTangent.w);
+    vec3 V = normalize(ubo.cameraObjectPosition.xyz - fragObjectPosition);
+
+    vec3 albedo = baseColor;
+    vec3 color = ComputeDirectLighting(N, V, albedo, metallic, roughness)
+               + ComputeAmbient(albedo, metallic, ao);
+    return color;
 }
 
 void main() {
-    // Color order (fill and wireframe share this path):
-    // 1. Base = material.baseColor.rgb * interpolated Vertex3D.color * baseColorTexture.rgb.
-    //    No texture -> default 1x1 white texture (sampled as white).
-    // 2. Dye on: replace base with DyeColor().
-    // 3. Gray on: if dye, multiply by ArtisticGray; else replace with gray.
-    // 4. Light analysis on: multiply result by SunLighting().
-    // Alpha = material.baseColor.a * texture.a (1.4). Mask: discard below cutoff.
+    // 颜色顺序（fill 与 wireframe 共用）：
+    // 1. 采样基础色：base = material.baseColor.rgb * 顶点色 * baseColorTexture.rgb（无纹理 -> 1x1 白）。
+    // 2. 采样 metallicRoughness（G=roughness，B=metallic，R=AO 兼容 glTF 合并图约定）。
+    // 3. 采样 AO（R 通道）与自发光。
+    // 4. 默认路径走 Cook-Torrance PBR（直接光 + 常数环境光）；
+    //    染色/灰度/线框为覆盖模式，沿用旧显示逻辑。
+    // 5. 光照分析开启时给 PBR 直接光叠加阴影（阴影贴图仅在光照分析模式下渲染）。
     const float grayEnabled = ubo.displayOptions.x;
     const float dyeEnabled = ubo.displayOptions.y;
-    const float lightAnalysisEnabled = ubo.displayOptions.z;
 
-    vec4 texColor = texture(baseColorTexture, fragTexCoord);
-    vec3 baseColor = MAT_BASECOLOR.rgb * fragColor * texColor.rgb;
-    float alpha = MAT_BASECOLOR.a * texColor.a;
+    vec4 baseTexColor = texture(baseColorTexture, fragTexCoord);
+    vec3 baseColor = MAT_BASECOLOR.rgb * fragColor * baseTexColor.rgb;
+    float alpha = MAT_BASECOLOR.a * baseTexColor.a;
 
     if (MAT_ALPHAMODE == 1) {  // Mask
         if (alpha < MAT_ALPHACUTOFF) {
@@ -234,20 +346,30 @@ void main() {
         alpha = 1.0;
     }
 
+    vec4 mrSample = texture(metallicRoughnessTexture, fragTexCoord);
+    float roughness = clamp(MAT_ROUGHNESS * mrSample.g, 0.04, 1.0);
+    float metallic = clamp(MAT_METALLIC * mrSample.b, 0.0, 1.0);
+    float ao = mix(1.0, texture(occlusionTexture, fragTexCoord).r, MAT_OCCLUSIONSTRENGTH);
+    vec3 emissive = MAT_EMISSIVE.rgb * MAT_EMISSIVESTRENGTH *
+                    texture(emissiveTexture, fragTexCoord).rgb;
+
     vec3 color;
     if (dyeEnabled > 0.5) {
         color = DyeColor();
         if (grayEnabled > 0.5) {
             color *= ArtisticGray(ShadedViewNormal());
         }
+        if (ubo.displayOptions.z > 0.5) {
+            color *= SunLighting();
+        }
     } else if (grayEnabled > 0.5) {
         color = vec3(ArtisticGray(ShadedViewNormal()));
+        if (ubo.displayOptions.z > 0.5) {
+            color *= SunLighting();
+        }
     } else {
-        color = baseColor;
-    }
-
-    if (lightAnalysisEnabled > 0.5) {
-        color *= SunLighting();
+        // 默认：Metallic-Roughness PBR。
+        color = ComputePBR(baseColor, metallic, roughness, ao) + emissive;
     }
 
     outColor = vec4(color, alpha);

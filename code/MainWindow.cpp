@@ -49,6 +49,7 @@
 #include <QDateEdit>
 #include <QTimeEdit>
 #include <QDial>
+#include <QSlider>
 #include <QDate>
 #include <QTime>
 #include <QtGlobal>
@@ -232,6 +233,10 @@ void MainWindow::SetupToolBar() {
     m_lightAnalysisButton = new QPushButton(QStringLiteral("光照分析"));
     toolbar->addWidget(m_lightAnalysisButton);
     connect(m_lightAnalysisButton, &QPushButton::clicked, this, &MainWindow::onLightAnalysis);
+
+    m_pbrButton = new QPushButton(QStringLiteral("PBR 参数"));
+    toolbar->addWidget(m_pbrButton);
+    connect(m_pbrButton, &QPushButton::clicked, this, &MainWindow::onPbrPanel);
 
     QWidget* spacer = new QWidget();
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -478,6 +483,48 @@ void MainWindow::SetupVulkan() {
     m_lightAnalysisPanel->setVisible(false);
     ApplyLightAnalysisToRenderer();
 
+    // PBR 调试面板（1.5）：金属度 / 粗糙度 / 自发光覆盖。默认不勾选，跟随材质自带值。
+    m_pbrPanel = new QWidget();
+    m_pbrPanel->setFixedWidth(250);
+    m_pbrPanel->setAutoFillBackground(true);
+    m_pbrPanel->setStyleSheet(QStringLiteral("background-color: #252526; border: 1px solid #3c3c3c;"));
+    QVBoxLayout* pbrLayout = new QVBoxLayout(m_pbrPanel);
+    pbrLayout->setContentsMargins(8, 6, 8, 6);
+    pbrLayout->setSpacing(6);
+    pbrLayout->setAlignment(Qt::AlignTop);
+
+    auto addSliderRow = [&](const QString& title, QCheckBox*& check, QSlider*& slider,
+                            int maxValue) {
+        check = new QCheckBox(title);
+        check->setChecked(false);
+        pbrLayout->addWidget(check);
+        slider = new QSlider(Qt::Horizontal);
+        slider->setRange(0, maxValue);
+        slider->setEnabled(false);
+        pbrLayout->addWidget(slider);
+        connect(check, &QCheckBox::toggled, slider, &QSlider::setEnabled);
+    };
+    // 金属度/粗糙度：0..100 映射 0.0..1.0；自发光倍率：0..500 映射 0.0..5.0。
+    addSliderRow(QStringLiteral("金属度覆盖 (0-1)"), m_metallicOverrideCheck,
+                 m_metallicSlider, 100);
+    m_metallicSlider->setValue(0);
+    addSliderRow(QStringLiteral("粗糙度覆盖 (0-1)"), m_roughnessOverrideCheck,
+                 m_roughnessSlider, 100);
+    m_roughnessSlider->setValue(50);
+    addSliderRow(QStringLiteral("自发光倍率覆盖 (0-5)"), m_emissiveOverrideCheck,
+                 m_emissiveSlider, 500);
+    m_emissiveSlider->setValue(0);
+
+    auto applyPbr = [this]() { ApplyPbrToRenderer(); };
+    connect(m_metallicOverrideCheck, &QCheckBox::toggled, this, [applyPbr](bool) { applyPbr(); });
+    connect(m_metallicSlider, &QSlider::valueChanged, this, [applyPbr](int) { applyPbr(); });
+    connect(m_roughnessOverrideCheck, &QCheckBox::toggled, this, [applyPbr](bool) { applyPbr(); });
+    connect(m_roughnessSlider, &QSlider::valueChanged, this, [applyPbr](int) { applyPbr(); });
+    connect(m_emissiveOverrideCheck, &QCheckBox::toggled, this, [applyPbr](bool) { applyPbr(); });
+    connect(m_emissiveSlider, &QSlider::valueChanged, this, [applyPbr](int) { applyPbr(); });
+
+    m_pbrPanel->setVisible(false);
+
     QWidget* viewportHost = new QWidget();
     QHBoxLayout* viewportLayout = new QHBoxLayout(viewportHost);
     viewportLayout->setContentsMargins(0, 0, 0, 0);
@@ -485,6 +532,7 @@ void MainWindow::SetupVulkan() {
     m_viewportLayout = viewportLayout;
     viewportLayout->addWidget(m_container, 1);
     viewportLayout->addWidget(m_lightAnalysisPanel, 0);
+    viewportLayout->addWidget(m_pbrPanel, 0);
 
     // 右栏：上方视口，下方消息区（projectPanel 右边、渲染视口下方、状态栏上方）。
     m_messageList = new QListWidget();
@@ -831,6 +879,41 @@ void MainWindow::onMaterialPanel() {
     if (open) {
         RebuildMaterialPanel();
     }
+}
+
+// 打开或关闭 PBR 调试面板。
+void MainWindow::onPbrPanel() {
+    if (!m_pbrPanel) return;
+    const bool open = !m_pbrPanel->isVisible();
+    m_pbrPanel->setVisible(open);
+    if (m_pbrButton) {
+        m_pbrButton->setStyleSheet(open
+            ? QStringLiteral("background-color: #0078d4; color: #ffffff;")
+            : QString());
+    }
+    ApplyPbrToRenderer();
+}
+
+// 把 PBR 调试面板参数写进当前三维渲染器。
+void MainWindow::ApplyPbrToRenderer() {
+    const bool metallicOn = m_metallicOverrideCheck && m_metallicOverrideCheck->isChecked();
+    const float metallic = m_metallicSlider
+        ? static_cast<float>(m_metallicSlider->value()) / 100.0f : 0.0f;
+    const bool roughnessOn = m_roughnessOverrideCheck && m_roughnessOverrideCheck->isChecked();
+    const float roughness = m_roughnessSlider
+        ? static_cast<float>(m_roughnessSlider->value()) / 100.0f : 0.5f;
+    const bool emissiveOn = m_emissiveOverrideCheck && m_emissiveOverrideCheck->isChecked();
+    const float emissive = m_emissiveSlider
+        ? static_cast<float>(m_emissiveSlider->value()) / 100.0f : 0.0f;
+
+    auto apply = [&](auto* render3D) {
+        if (!render3D) return;
+        render3D->SetMetallicOverride(metallicOn, metallic);
+        render3D->SetRoughnessOverride(roughnessOn, roughness);
+        render3D->SetEmissiveOverride(emissiveOn, emissive);
+    };
+    apply(dynamic_cast<VKRender3D*>(m_renderer));
+    apply(dynamic_cast<GLRender3D*>(m_openglRenderer));
 }
 
 // 重建材质面板内容（按模型分组 + 每材质复选框 + 组内总开关）。
@@ -1634,6 +1717,7 @@ void MainWindow::SwitchTo3D() {
         render3D->SetGrayEnabled(m_grayCheck && m_grayCheck->isChecked());
         render3D->SetWireframeEnabled(m_borderCheck && m_borderCheck->isChecked());
         ApplyLightAnalysisToRenderer();
+        ApplyPbrToRenderer();
         RebuildSceneMeshes();
         m_renderTimer->start(kRenderTickMs);
     } else {
@@ -1757,6 +1841,7 @@ void MainWindow::EnsureOpenGLInitialized() {
         render3D->SetDyeEnabled(m_dyeCheck && m_dyeCheck->isChecked());
         render3D->SetOrthographicEnabled(m_orthographicCheck && m_orthographicCheck->isChecked());
         ApplyLightAnalysisToRenderer();
+        ApplyPbrToRenderer();
     }
     RebuildSceneMeshes();
 }
@@ -1821,6 +1906,7 @@ void MainWindow::SwitchToVulkan() {
                 render3D->SetDyeEnabled(m_dyeCheck && m_dyeCheck->isChecked());
                 render3D->SetOrthographicEnabled(m_orthographicCheck && m_orthographicCheck->isChecked());
                 ApplyLightAnalysisToRenderer();
+                ApplyPbrToRenderer();
             }
             RebuildSceneMeshes();
         } else {

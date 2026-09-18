@@ -13,16 +13,37 @@
 
 class Object;
 
-// 材质参数块（1.4）。Vulkan 用 push constant，OpenGL 用普通 uniform；
+// 材质参数块（1.4 / 1.5）。Vulkan 用 push constant，OpenGL 用普通 uniform；
 // 两者共用同一字段布局，GLSL 侧 3d.frag 以 #ifdef VULKAN 选择声明方式。
-// 字段偏移须与 GLSL 一致：baseColor@0(16) + alphaCutoff@16(4) + alphaMode@20(4)。
-// 尾部填充到 32 字节，兼容 std430 把块大小向上取整到 16 对齐的情形。
+//
+// 布局（须与 GLSL push constant / uniform 逐字段一致，全部 4 字节对齐）：
+//   baseColor@0(16) + emissiveFactor@16(16, xyz 有效) + alphaCutoff@32(4) +
+//   metallic@36(4) + roughness@40(4) + normalScale@44(4) + occlusionStrength@48(4) +
+//   emissiveStrength@52(4) + alphaMode@56(4) + pad0@60(4)。总计 64 字节，16 对齐。
+// 用 vec4 承载 emissiveFactor 可避开 vec3 在 std430 下的 16 字节对齐陷阱。
 struct MaterialParams {
-    float baseColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };  // 基础色（alpha 用于 Mask/Blend）
-    float alphaCutoff = 0.5f;                          // Mask 阈值
-    int alphaMode = 0;                                 // 0 Opaque / 1 Mask / 2 Blend
+    float baseColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };   // 基础色（alpha 用于 Mask/Blend）
+    float emissiveFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };  // 线性自发光色（xyz 有效）
+    float alphaCutoff = 0.5f;                           // Mask 阈值
+    float metallic = 0.0f;                              // 金属度 [0,1]
+    float roughness = 0.5f;                             // 粗糙度 [0,1]
+    float normalScale = 1.0f;                           // 法线贴图强度
+    float occlusionStrength = 1.0f;                     // AO 强度 [0,1]
+    float emissiveStrength = 1.0f;                      // 自发光倍率
+    int alphaMode = 0;                                  // 0 Opaque / 1 Mask / 2 Blend
     int pad0 = 0;
-    int pad1 = 0;
+};
+
+// 一个 SubMesh 的全部纹理句柄（1.5）。0 表示该槽无纹理，由渲染器替换为默认贴图：
+//   baseColor / metallicRoughness / occlusion -> 1x1 白
+//   normal -> 1x1 平面法线 (0.5,0.5,1)
+//   emissive -> 1x1 白（使 emissiveFactor 能原样生效）
+struct MaterialTextureSet {
+    TextureHandle baseColor = 0;
+    TextureHandle metallicRoughness = 0;
+    TextureHandle normal = 0;
+    TextureHandle occlusion = 0;
+    TextureHandle emissive = 0;
 };
 
 // 一个待排序的透明 SubMesh 绘制请求（帧内有效，flush 后清空）。
@@ -77,11 +98,11 @@ public:
         (void)indexCount; (void)firstIndex; (void)vertexOffset;
     }
 
-    // 以给定材质参数与纹理绘制当前绑定的网格。
-    // Vulkan 用 push constant + set 1；OpenGL 用普通 uniform + 纹理单元。
-    // texture 为 0 时使用默认白纹理（无纹理材质）。
-    virtual void ApplyMaterial(const MaterialParams& params, TextureHandle texture) {
-        (void)params; (void)texture;
+    // 以给定材质参数与纹理集合绘制当前绑定的网格。
+    // Vulkan 用 push constant + set 1（5 个 binding）；OpenGL 用普通 uniform + 纹理单元。
+    // textures 中句柄为 0 的槽由渲染器替换为对应默认贴图（见 MaterialTextureSet）。
+    virtual void ApplyMaterial(const MaterialParams& params, const MaterialTextureSet& textures) {
+        (void)params; (void)textures;
     }
 
     // 提交一个透明 SubMesh 绘制请求（帧内收集，EndFrame 前统一排序 flush）。

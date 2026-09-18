@@ -43,6 +43,9 @@ void GLMesh::SetMeshDataSync(const std::vector<Vertex3D>& vertices,
         gl->glEnableVertexAttribArray(3);
         gl->glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex3D),
             reinterpret_cast<const void*>(offsetof(Vertex3D, normal)));
+        gl->glEnableVertexAttribArray(4);
+        gl->glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex3D),
+            reinterpret_cast<const void*>(offsetof(Vertex3D, tangent)));
         gl->glBindVertexArray(0);
     }
 
@@ -97,7 +100,7 @@ void GLMesh::Render(int mode) {
 
     if (m_subMeshInfos.empty()) {
         // 兼容旧路径：整网格一次绘制（应用默认材质）。
-        m_pRender->ApplyMaterial(MaterialParams{}, 0);
+        m_pRender->ApplyMaterial(MaterialParams{}, MaterialTextureSet{});
         m_pRender->DrawIndexed(m_indexCount);
     } else {
         for (size_t i = 0; i < m_subMeshInfos.size(); ++i) {
@@ -136,6 +139,6 @@ void GLMesh::DrawSubMesh(int subMeshIndex, int iMode) {
 // 绘制单个 SubMesh：应用材质 -> 范围绘制。
 // 透明混合状态由 FlushTransparentDraws 统一开关，这里无需再判断。
 void GLMesh::DrawSubMeshImpl(const SubMeshDrawInfo& info) {
-    m_pRender->ApplyMaterial(info.material, info.texture);
+    m_pRender->ApplyMaterial(info.material, info.textures);
     m_pRender->DrawIndexedRange(info.indexCount, info.indexOffset);
 }

@@ -800,16 +800,39 @@ bool GLRender3D::CreateUniformBuffers() {
         m_functions->glUniform1i(shadowMapLocation, 1);
         m_functions->glUseProgram(0);
     }
-    // 材质 uniform 位置（1.4）：baseColor / alphaCutoff / alphaMode / 基础色纹理。
+    // 材质 uniform 位置（1.4 / 1.5）：baseColor / alphaCutoff / alphaMode + PBR 标量 + 5 张纹理。
     m_uBaseColorLoc = m_functions->glGetUniformLocation(m_program, "uMaterialBaseColor");
     m_uAlphaCutoffLoc = m_functions->glGetUniformLocation(m_program, "uAlphaCutoff");
     m_uAlphaModeLoc = m_functions->glGetUniformLocation(m_program, "uAlphaMode");
+    m_uMetallicLoc = m_functions->glGetUniformLocation(m_program, "uMetallic");
+    m_uRoughnessLoc = m_functions->glGetUniformLocation(m_program, "uRoughness");
+    m_uEmissiveFactorLoc = m_functions->glGetUniformLocation(m_program, "uEmissiveFactor");
+    m_uEmissiveStrengthLoc = m_functions->glGetUniformLocation(m_program, "uEmissiveStrength");
+    m_uNormalScaleLoc = m_functions->glGetUniformLocation(m_program, "uNormalScale");
+    m_uOcclusionStrengthLoc = m_functions->glGetUniformLocation(m_program, "uOcclusionStrength");
     m_uBaseColorTextureLoc = m_functions->glGetUniformLocation(m_program, "baseColorTexture");
+    m_uMetallicRoughnessTextureLoc =
+        m_functions->glGetUniformLocation(m_program, "metallicRoughnessTexture");
+    m_uNormalTextureLoc = m_functions->glGetUniformLocation(m_program, "normalTexture");
+    m_uOcclusionTextureLoc = m_functions->glGetUniformLocation(m_program, "occlusionTexture");
+    m_uEmissiveTextureLoc = m_functions->glGetUniformLocation(m_program, "emissiveTexture");
+    m_functions->glUseProgram(m_program);
     if (m_uBaseColorTextureLoc >= 0) {
-        m_functions->glUseProgram(m_program);
         m_functions->glUniform1i(m_uBaseColorTextureLoc, kMaterialTextureUnit);
-        m_functions->glUseProgram(0);
     }
+    if (m_uMetallicRoughnessTextureLoc >= 0) {
+        m_functions->glUniform1i(m_uMetallicRoughnessTextureLoc, kMetallicRoughnessTextureUnit);
+    }
+    if (m_uNormalTextureLoc >= 0) {
+        m_functions->glUniform1i(m_uNormalTextureLoc, kNormalTextureUnit);
+    }
+    if (m_uOcclusionTextureLoc >= 0) {
+        m_functions->glUniform1i(m_uOcclusionTextureLoc, kOcclusionTextureUnit);
+    }
+    if (m_uEmissiveTextureLoc >= 0) {
+        m_functions->glUniform1i(m_uEmissiveTextureLoc, kEmissiveTextureUnit);
+    }
+    m_functions->glUseProgram(0);
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, 0);
     return true;
 }
@@ -876,6 +899,12 @@ void GLRender3D::UpdateUniformBuffer() {
     ubo.shadowOptions[2] = m_wireframeMode ? 1.0f : 0.0f;
     // OpenGL 窗口 Y 向上：dFdy 无需取反（与着色器默认一致）。
     ubo.shadowOptions[3] = 0.0f;
+    // PBR 视线向量：把相机（世界空间）变换到物体空间，与物体空间法线/太阳方向一致。
+    const glm::vec3 cameraObject = glm::vec3(glm::inverse(model) * glm::vec4(eye, 1.0f));
+    ubo.cameraObjectPosition[0] = cameraObject.x;
+    ubo.cameraObjectPosition[1] = cameraObject.y;
+    ubo.cameraObjectPosition[2] = cameraObject.z;
+    ubo.cameraObjectPosition[3] = 0.0f;
 
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, m_ubo);
     m_functions->glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(ubo), &ubo);
@@ -883,11 +912,17 @@ void GLRender3D::UpdateUniformBuffer() {
 }
 
 // 以材质参数（普通 uniform）+ 纹理单元绑定后绘制当前网格。
-void GLRender3D::ApplyMaterial(const MaterialParams& params, TextureHandle texture) {
+void GLRender3D::ApplyMaterial(const MaterialParams& params, const MaterialTextureSet& textures) {
     if (!m_functions || m_program == 0) return;
     m_functions->glUseProgram(m_program);
     m_currentProgram = m_program;
     m_functions->glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_ubo);
+
+    // PBR 调试覆盖：按 UI 开关替换对应参数后再上传 uniform。
+    const float metallic = m_metallicOverrideEnabled ? m_metallicOverride : params.metallic;
+    const float roughness = m_roughnessOverrideEnabled ? m_roughnessOverride : params.roughness;
+    const float emissiveStrength =
+        m_emissiveOverrideEnabled ? m_emissiveOverride : params.emissiveStrength;
 
     if (m_uBaseColorLoc >= 0) {
         m_functions->glUniform4f(m_uBaseColorLoc, params.baseColor[0], params.baseColor[1],
@@ -899,13 +934,29 @@ void GLRender3D::ApplyMaterial(const MaterialParams& params, TextureHandle textu
     if (m_uAlphaModeLoc >= 0) {
         m_functions->glUniform1i(m_uAlphaModeLoc, params.alphaMode);
     }
-
-    // 绑定基础色纹理；无纹理时用默认白纹理。
-    unsigned int glTexture = 0;
-    if (texture != 0 && IsTextureValid(texture)) {
-        glTexture = GetTextureObject(texture);
+    if (m_uMetallicLoc >= 0) {
+        m_functions->glUniform1f(m_uMetallicLoc, metallic);
     }
-    if (glTexture == 0) {
+    if (m_uRoughnessLoc >= 0) {
+        m_functions->glUniform1f(m_uRoughnessLoc, roughness);
+    }
+    if (m_uEmissiveFactorLoc >= 0) {
+        m_functions->glUniform4f(m_uEmissiveFactorLoc, params.emissiveFactor[0],
+                                 params.emissiveFactor[1], params.emissiveFactor[2],
+                                 params.emissiveFactor[3]);
+    }
+    if (m_uEmissiveStrengthLoc >= 0) {
+        m_functions->glUniform1f(m_uEmissiveStrengthLoc, emissiveStrength);
+    }
+    if (m_uNormalScaleLoc >= 0) {
+        m_functions->glUniform1f(m_uNormalScaleLoc, params.normalScale);
+    }
+    if (m_uOcclusionStrengthLoc >= 0) {
+        m_functions->glUniform1f(m_uOcclusionStrengthLoc, params.occlusionStrength);
+    }
+
+    // 确保默认贴图存在（白 / 平面法线）。
+    auto ensureDefaults = [this]() {
         if (m_defaultWhiteHandle == 0 || !IsTextureValid(m_defaultWhiteHandle)) {
             const uint8_t white[4] = { 255, 255, 255, 255 };
             TextureDesc desc;
@@ -919,13 +970,43 @@ void GLRender3D::ApplyMaterial(const MaterialParams& params, TextureHandle textu
             desc.cacheKey = "builtin:default-white";
             m_defaultWhiteHandle = CreateTexture(desc);
         }
-        if (m_defaultWhiteHandle != 0 && IsTextureValid(m_defaultWhiteHandle)) {
-            glTexture = GetTextureObject(m_defaultWhiteHandle);
+        if (m_defaultFlatNormalHandle == 0 || !IsTextureValid(m_defaultFlatNormalHandle)) {
+            const uint8_t flatNormal[4] = { 128, 128, 255, 255 };
+            TextureDesc desc;
+            desc.width = 1;
+            desc.height = 1;
+            desc.semantic = TextureSemantic::Normal;
+            desc.generateMipmaps = false;
+            desc.pixels = flatNormal;
+            desc.sizeBytes = sizeof(flatNormal);
+            desc.debugName = "default-flat-normal";
+            desc.cacheKey = "builtin:default-flat-normal";
+            m_defaultFlatNormalHandle = CreateTexture(desc);
         }
-    }
-    m_functions->glActiveTexture(GL_TEXTURE0 + kMaterialTextureUnit);
-    m_functions->glBindTexture(GL_TEXTURE_2D, glTexture);
-    m_functions->glActiveTexture(GL_TEXTURE0);
+    };
+    ensureDefaults();
+    const unsigned int whiteTexture = (m_defaultWhiteHandle != 0 && IsTextureValid(m_defaultWhiteHandle))
+        ? GetTextureObject(m_defaultWhiteHandle) : 0;
+    const unsigned int flatNormalTexture = (m_defaultFlatNormalHandle != 0 && IsTextureValid(m_defaultFlatNormalHandle))
+        ? GetTextureObject(m_defaultFlatNormalHandle) : 0;
+
+    auto bindTexture = [this](TextureHandle handle, unsigned int fallback,
+                              int unit) {
+        unsigned int glTexture = fallback;
+        if (handle != 0 && IsTextureValid(handle)) {
+            const unsigned int object = GetTextureObject(handle);
+            if (object != 0) glTexture = object;
+        }
+        m_functions->glActiveTexture(GL_TEXTURE0 + unit);
+        m_functions->glBindTexture(GL_TEXTURE_2D, glTexture);
+        m_functions->glActiveTexture(GL_TEXTURE0);
+    };
+
+    bindTexture(textures.baseColor, whiteTexture, kMaterialTextureUnit);
+    bindTexture(textures.metallicRoughness, whiteTexture, kMetallicRoughnessTextureUnit);
+    bindTexture(textures.normal, flatNormalTexture, kNormalTextureUnit);
+    bindTexture(textures.occlusion, whiteTexture, kOcclusionTextureUnit);
+    bindTexture(textures.emissive, whiteTexture, kEmissiveTextureUnit);
 }
 
 // 计算点（上传坐标空间）到相机的距离，用于透明排序。
@@ -1060,6 +1141,24 @@ void GLRender3D::SetLightAnalysisEnabled(bool enabled) {
         return;
     }
     EnsureShadowMapForAnalysis();
+}
+
+// PBR 调试覆盖（1.5）：覆盖材质的 metallic。
+void GLRender3D::SetMetallicOverride(bool enabled, float value) {
+    m_metallicOverrideEnabled = enabled;
+    m_metallicOverride = value;
+}
+
+// PBR 调试覆盖（1.5）：覆盖材质的 roughness。
+void GLRender3D::SetRoughnessOverride(bool enabled, float value) {
+    m_roughnessOverrideEnabled = enabled;
+    m_roughnessOverride = value;
+}
+
+// PBR 调试覆盖（1.5）：覆盖材质的自发光倍率。
+void GLRender3D::SetEmissiveOverride(bool enabled, float value) {
+    m_emissiveOverrideEnabled = enabled;
+    m_emissiveOverride = value;
 }
 
 // 设置阴影贴图边长。
