@@ -9,6 +9,8 @@
 #include "GLMesh.h"
 #include "ObjParseRunnable.h"
 #include "GltfParseRunnable.h"
+#include "TextureCache.h"
+#include "TextureImport.h"
 #include <QWindow>
 #include <QString>
 #include <QAction>
@@ -71,6 +73,7 @@ MainWindow::MainWindow(QWidget* parent)
     , m_modelsTreeItem(nullptr)
 {
     resize(1280, 720);
+    m_textureCache = std::make_unique<TextureCache>();
     ConfigureMeshFactory(m_renderer);
     SetupToolBar();
     SetupVulkan();
@@ -1000,6 +1003,8 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
         }
         it->meshes.clear();
     }
+    // 释放该模型的 GPU 纹理（延迟销毁）。
+    ReleaseModelTextures(*it);
 
     delete it->treeItem;
     it->treeItem = nullptr;
@@ -1014,6 +1019,9 @@ void MainWindow::ClearLoadedModels() {
     if (m_renderer && m_renderer->IsInitialized()) {
         m_renderer->WaitForIdle();
     }
+
+    // 释放全部 GPU 纹理引用（延迟销毁）。
+    ReleaseAllModelTextures();
 
     for (LoadedModel& model : m_loadedModels) {
         if (!model.meshes.empty() && m_scene) {
@@ -1305,6 +1313,8 @@ void MainWindow::RebuildSceneMeshes() {
             }
         }
     }
+    // 网格就绪后导入纹理（CPU 缓存 + 当前后端 GPU 上传）。
+    ImportModelTextures();
     UpdateShadowSceneBounds();
 }
 
@@ -1312,6 +1322,93 @@ void MainWindow::RebuildSceneMeshes() {
 void MainWindow::ResetLoadedMeshPointers() {
     for (LoadedModel& model : m_loadedModels) {
         model.meshes.clear();
+        // 旧渲染器即将销毁，其 GPU 纹理句柄随之失效。
+        model.textureHandles.clear();
+        model.texturesImported = false;
+    }
+}
+
+// 按当前后端为所有已加载模型导入纹理（CPU 缓存 + GPU 上传）。
+void MainWindow::ImportModelTextures() {
+    if (!m_textureCache) return;
+
+    Render* active = IsOpenGLBackend()
+        ? static_cast<Render*>(m_openglRenderer)
+        : static_cast<Render*>(m_renderer);
+    if (!active || !active->IsInitialized() || active->IsDeviceLost()) return;
+    // 只有三维后端才有材质/纹理语义；二维渲染器跳过。
+    const bool is3D = IsOpenGLBackend()
+        ? dynamic_cast<GLRender3D*>(m_openglRenderer) != nullptr
+        : dynamic_cast<VKRender3D*>(m_renderer) != nullptr;
+    if (!is3D) return;
+
+    int totalReferenced = 0;
+    int totalCreated = 0;
+    int totalHits = 0;
+    int totalFailed = 0;
+    int totalSrgb = 0;
+    int totalMips = 0;
+    std::vector<std::string> notes;
+
+    for (LoadedModel& model : m_loadedModels) {
+        // 已为当前渲染器导入过的模型跳过（切换后端时 ResetLoadedMeshPointers 已清空）。
+        if (model.texturesImported) continue;
+        TextureImportResult imported =
+            TextureImport::Import(model.asset, *m_textureCache, *active);
+        model.textureHandles = std::move(imported.textureHandles);
+        model.texturesImported = true;
+        totalReferenced += imported.stats.referenced;
+        totalCreated += imported.stats.created;
+        totalHits += imported.stats.cacheHits;
+        totalFailed += imported.stats.failed;
+        totalSrgb += imported.stats.srgbCount;
+        totalMips += imported.stats.totalMipLevels;
+        for (const std::string& note : imported.stats.notes) {
+            notes.push_back(note);
+        }
+    }
+
+    TextureImportStats summary;
+    summary.referenced = totalReferenced;
+    summary.created = totalCreated;
+    summary.cacheHits = totalHits;
+    summary.failed = totalFailed;
+    summary.srgbCount = totalSrgb;
+    summary.totalMipLevels = totalMips;
+    // 仅在确实涉及纹理时输出，避免普通导入刷屏。
+    if (totalReferenced > 0) {
+        ShowMessage(QString::fromStdString(TextureImport::BuildSummary(summary)), false);
+    }
+    for (const std::string& note : notes) {
+        ShowMessage(QString::fromStdString(note), false);
+    }
+}
+
+// 释放指定模型的 GPU 纹理引用（进入渲染器延迟销毁队列）。
+void MainWindow::ReleaseModelTextures(LoadedModel& model) {
+    if (model.textureHandles.empty()) return;
+    Render* active = IsOpenGLBackend()
+        ? static_cast<Render*>(m_openglRenderer)
+        : static_cast<Render*>(m_renderer);
+    if (active) {
+        // 去重：不同纹理索引可能共享同一句柄（同一图像），只释放一次。
+        std::vector<TextureHandle> unique;
+        for (const auto& entry : model.textureHandles) {
+            if (std::find(unique.begin(), unique.end(), entry.second) == unique.end()) {
+                unique.push_back(entry.second);
+            }
+        }
+        for (TextureHandle handle : unique) {
+            active->DestroyTexture(handle);
+        }
+    }
+    model.textureHandles.clear();
+}
+
+// 释放全部模型纹理引用。
+void MainWindow::ReleaseAllModelTextures() {
+    for (LoadedModel& model : m_loadedModels) {
+        ReleaseModelTextures(model);
     }
 }
 

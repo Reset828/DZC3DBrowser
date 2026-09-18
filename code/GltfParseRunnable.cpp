@@ -459,6 +459,46 @@ void GltfParseRunnable::run() {
             entry.uri = StringField(image, "uri");
             entry.bufferView = IntField(image, "bufferView", -1);
             entry.mimeType = StringField(image, "mimeType");
+
+            // 1.3：解析编码字节，供上层解码后上传为 GPU 纹理。
+            if (!entry.uri.empty()) {
+                if (entry.uri.rfind("data:", 0) == 0) {
+                    std::vector<char> decoded;
+                    if (DecodeDataUri(entry.uri, decoded)) {
+                        entry.encodedData.assign(decoded.begin(), decoded.end());
+                    } else {
+                        addWarning("不支持非 base64 的图像 data URI");
+                    }
+                } else {
+                    const std::filesystem::path external =
+                        path.parent_path() / std::filesystem::u8path(entry.uri);
+                    std::vector<char> decoded;
+                    if (ReadWholeFileBytes(external, decoded)) {
+                        entry.encodedData.assign(decoded.begin(), decoded.end());
+                        entry.resolvedPath = external.u8string();
+                    } else {
+                        addWarning("无法读取图像文件: " + entry.uri);
+                    }
+                }
+            } else if (entry.bufferView >= 0 && entry.bufferView < bufferViews.size()) {
+                const QJsonObject view = bufferViews.at(entry.bufferView).toObject();
+                const int bufferIndex = IntField(view, "buffer", -1);
+                const size_t viewOffset =
+                    static_cast<size_t>(DoubleField(view, "byteOffset", 0.0));
+                const size_t viewLength =
+                    static_cast<size_t>(DoubleField(view, "byteLength", 0.0));
+                if (bufferIndex >= 0 && bufferIndex < static_cast<int>(buffers.size()) &&
+                    viewOffset + viewLength <= buffers[static_cast<size_t>(bufferIndex)].size()) {
+                    const std::vector<char>& buffer = buffers[static_cast<size_t>(bufferIndex)];
+                    const auto begin = buffer.begin() + static_cast<std::ptrdiff_t>(viewOffset);
+                    entry.encodedData.assign(begin, begin + static_cast<std::ptrdiff_t>(viewLength));
+                } else {
+                    addWarning("图像 bufferView 指向无效数据");
+                }
+            } else {
+                addWarning("图像既无 uri 也无有效 bufferView");
+            }
+
             asset.images.push_back(std::move(entry));
         }
 

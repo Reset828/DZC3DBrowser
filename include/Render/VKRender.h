@@ -9,11 +9,13 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <utility>
 
 #include "Render.h"
 
 class QRunnable;  // Qt 线程池任务（仅指针使用，可前向声明）
 class QThreadPool;
+class VKTexture;  // GPU 纹理资源（include/Texture/VKTexture.h）
 
 
 struct VulkanQueueFamilyIndices {
@@ -52,6 +54,21 @@ public:
     void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1) override;
     // 返回阴影图形管线。
     virtual VkPipeline GetShadowPipeline() const { return VK_NULL_HANDLE; }
+
+    // 创建一张 GPU 纹理。返回句柄；0 表示失败。
+    TextureHandle CreateTexture(const TextureDesc& desc) override;
+    // 标记释放纹理，实际销毁延迟到帧计数队列。
+    void DestroyTexture(TextureHandle handle) override;
+    // 推进延迟销毁队列。
+    void ProcessDeferredTextureDestruction() override;
+    // 立即销毁全部纹理。
+    void ReleaseAllTextures() override;
+    // 查询句柄是否有效。
+    bool IsTextureValid(TextureHandle handle) const override;
+    // 返回纹理的 VkImageView（供未来 descriptor 绑定）；无效返回 VK_NULL_HANDLE。
+    VkImageView GetTextureImageView(TextureHandle handle) const;
+    // 返回纹理的 VkSampler；无效返回 VK_NULL_HANDLE。
+    VkSampler GetTextureSampler(TextureHandle handle) const;
 
     // 返回 Vulkan 逻辑设备。
     VkDevice GetDevice() const;
@@ -227,6 +244,17 @@ protected:
     std::vector<VkCommandBuffer> m_commandBuffers;            // 命令缓冲区数组
 
     std::unordered_map<VkBuffer, VkDeviceMemory> m_bufferMemoryMap;
+
+    // GPU 纹理资源（句柄 -> VKTexture）。句柄从 1 开始递增。
+    std::unordered_map<TextureHandle, std::unique_ptr<VKTexture>> m_textures;
+    TextureHandle m_nextTextureHandle = 1;
+    // 跨模型复用：cacheKey -> 已有句柄；以及每个句柄的引用计数。
+    std::unordered_map<std::string, TextureHandle> m_textureKeyToHandle;
+    std::unordered_map<TextureHandle, int> m_textureRefCount;
+    // 延迟销毁队列：{句柄, 入队时的帧号}。等安全帧数后再真正销毁。
+    std::vector<std::pair<TextureHandle, uint64_t>> m_deferredTextureDestruction;
+    uint64_t m_textureFrameCounter = 0;
+    static constexpr uint64_t kTextureDestroyDelayFrames = 3;
 
     std::vector<VkSemaphore> m_imageAvailableSemaphores;  // 图像可用信号量
     std::vector<VkSemaphore> m_renderFinishedSemaphores;  // 渲染完成信号量

@@ -1,5 +1,6 @@
 ﻿#include "GLRender.h"
 #include "Path/AssetPath.h"
+#include "Texture/GLTexture.h"
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -96,6 +97,8 @@ void GLRender::Shutdown() {
     if (m_context && m_window) {
         m_context->makeCurrent(m_window);
     }
+    // 释放 GPU 纹理（在上下文仍然有效时）。
+    ReleaseAllTextures();
     OnShutdown();
     if (m_context) {
         m_context->doneCurrent();
@@ -129,7 +132,118 @@ void GLRender::EndFrame() {
     if (!m_initialized || m_deviceLost || !m_context || !m_window) return;
     if (m_framebufferWidth == 0 || m_framebufferHeight == 0) return;
     OnEndFrame();
+    // 推进纹理延迟销毁队列（每帧一次）。
+    ProcessDeferredTextureDestruction();
     m_context->swapBuffers(m_window);
+}
+
+// 创建一张 GPU 纹理（上传 + sRGB 内部格式 + mipmap）。
+// 若 desc.cacheKey 非空且已存在，则复用同一纹理并增加引用计数。
+TextureHandle GLRender::CreateTexture(const TextureDesc& desc) {
+    if (!m_functions || !m_context || !m_window) return 0;
+    if (!m_context->makeCurrent(m_window)) return 0;
+
+    if (!desc.cacheKey.empty()) {
+        const auto found = m_textureKeyToHandle.find(desc.cacheKey);
+        if (found != m_textureKeyToHandle.end()) {
+            ++m_textureRefCount[found->second];
+            return found->second;
+        }
+    }
+
+    auto texture = std::make_unique<GLTexture>();
+    if (!texture->Create(m_functions, desc)) {
+        return 0;
+    }
+
+    const TextureHandle handle = m_nextTextureHandle++;
+    m_textures.emplace(handle, std::move(texture));
+    m_textureRefCount[handle] = 1;
+    if (!desc.cacheKey.empty()) {
+        m_textureKeyToHandle.emplace(desc.cacheKey, handle);
+    }
+    return handle;
+}
+
+// 标记释放纹理：递减引用计数，归零才进入延迟销毁队列。
+void GLRender::DestroyTexture(TextureHandle handle) {
+    if (handle == 0) return;
+    if (m_textures.find(handle) == m_textures.end()) return;
+
+    auto ref = m_textureRefCount.find(handle);
+    if (ref != m_textureRefCount.end() && --ref->second > 0) {
+        return;
+    }
+    for (const auto& entry : m_deferredTextureDestruction) {
+        if (entry.first == handle) return;
+    }
+    m_deferredTextureDestruction.emplace_back(handle, m_textureFrameCounter);
+}
+
+// 推进延迟销毁队列。
+void GLRender::ProcessDeferredTextureDestruction() {
+    ++m_textureFrameCounter;
+    if (m_deferredTextureDestruction.empty()) return;
+    if (!m_functions) return;
+
+    const uint64_t safeFrame =
+        m_textureFrameCounter > kTextureDestroyDelayFrames
+            ? m_textureFrameCounter - kTextureDestroyDelayFrames : 0;
+
+    for (auto it = m_deferredTextureDestruction.begin();
+         it != m_deferredTextureDestruction.end();) {
+        if (it->second <= safeFrame) {
+            auto found = m_textures.find(it->first);
+            if (found != m_textures.end()) {
+                for (auto keyIt = m_textureKeyToHandle.begin();
+                     keyIt != m_textureKeyToHandle.end();) {
+                    if (keyIt->second == it->first) {
+                        keyIt = m_textureKeyToHandle.erase(keyIt);
+                    } else {
+                        ++keyIt;
+                    }
+                }
+                m_textureRefCount.erase(it->first);
+                found->second->Destroy();
+                m_textures.erase(found);
+            }
+            it = m_deferredTextureDestruction.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// 立即销毁全部纹理。
+void GLRender::ReleaseAllTextures() {
+    if (m_textures.empty() && m_deferredTextureDestruction.empty()) return;
+    if (m_functions && m_context && m_window) {
+        m_context->makeCurrent(m_window);
+    }
+    for (auto& entry : m_textures) {
+        entry.second->Destroy();
+    }
+    m_textures.clear();
+    m_textureKeyToHandle.clear();
+    m_textureRefCount.clear();
+    m_deferredTextureDestruction.clear();
+}
+
+// 查询句柄是否有效。
+bool GLRender::IsTextureValid(TextureHandle handle) const {
+    return handle != 0 && m_textures.find(handle) != m_textures.end();
+}
+
+// 返回纹理对象名。
+unsigned int GLRender::GetTextureObject(TextureHandle handle) const {
+    const auto found = m_textures.find(handle);
+    return found == m_textures.end() ? 0 : found->second->GetTexture();
+}
+
+// 返回采样器对象名。
+unsigned int GLRender::GetTextureSamplerObject(TextureHandle handle) const {
+    const auto found = m_textures.find(handle);
+    return found == m_textures.end() ? 0 : found->second->GetSampler();
 }
 
 // 提交索引绘制命令。

@@ -54,6 +54,12 @@
     <ClInclude Include="AssetMeshUpload.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="TextureCache.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="TextureImport.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="GltfParseRunnable.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -91,6 +97,15 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Path\AssetPath.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Texture\TextureTypes.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Texture\VKTexture.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\Texture\GLTexture.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Light\SolarPosition.h">
@@ -145,6 +160,12 @@
     <ClCompile Include="AssetMeshUpload.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="TextureCache.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="TextureImport.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="VKMesh.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -155,6 +176,12 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="..\include\Path\AssetPath.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\Texture\VKTexture.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\Texture\GLTexture.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="..\include\Light\SolarPosition.cpp">

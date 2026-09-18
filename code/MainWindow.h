@@ -3,7 +3,11 @@
 
 #include <QMainWindow>
 #include "Asset/SceneAsset.h"
+#include "Render/Render.h"
+#include "TextureImport.h"
+#include <unordered_map>
 #include <vector>
+#include <memory>
 #include <cstdint>
 #include <string>
 #include <QStringList>
@@ -14,6 +18,7 @@ class QWindowOpenGL;
 class Render;
 class Layer;
 class Object;
+class TextureCache;
 class QTimer;
 class QWidget;
 class QTreeWidget;
@@ -32,6 +37,8 @@ class QMenu;
 class QListWidget;
 class QSplitter;
 
+
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -44,6 +51,17 @@ public:
     static constexpr int kShadowPassIntervalMs = 100;
     // FPS / 帧时间文字刷新间隔（毫秒）。数值仍按每拍计算。
     static constexpr int kStatsRefreshMs = 250;
+
+    struct LoadedModel {
+        SceneAsset asset;
+        std::vector<Object*> meshes;           // 每个 MeshData 一个；所有权属于场景
+        QTreeWidgetItem* treeItem = nullptr;    // 所有权属于主面板
+        bool visible = true;
+        // 每个材质引用的 baseColor 纹理对应一张 GPU 纹理句柄（1.3）。
+        std::unordered_map<int, TextureHandle> textureHandles;
+        // 是否为当前后端完成过纹理导入（避免重建时重复解码/上传）。
+        bool texturesImported = false;
+    };
 
 protected:
     // 关闭窗口前停渲染并释放后端。
@@ -139,13 +157,14 @@ private:
     void RebuildSceneMeshes();
     // 把模型上的网格指针置空。
     void ResetLoadedMeshPointers();
+    // 按当前后端为所有已加载模型导入纹理（CPU 缓存 + GPU 上传）。
+    void ImportModelTextures();
+    // 释放指定模型的 GPU 纹理引用（进入渲染器延迟销毁队列）。
+    void ReleaseModelTextures(LoadedModel& model);
+    // 释放全部模型纹理引用（切换后端/清空场景时）。
+    void ReleaseAllModelTextures();
 
-    struct LoadedModel {
-        SceneAsset asset;
-        std::vector<Object*> meshes;           // 每个 MeshData 一个；所有权属于场景
-        QTreeWidgetItem* treeItem = nullptr;    // 所有权属于主面板
-        bool visible = true;
-    };
+
 
     Render* m_renderer;
     Render* m_openglRenderer = nullptr;
@@ -193,6 +212,9 @@ private:
 
     QSplitter* m_messageSplitter = nullptr;
     QListWidget* m_messageList = nullptr;
+
+    // 纹理 CPU 缓存（常驻，跨模型与后端切换存活）。
+    std::unique_ptr<TextureCache> m_textureCache;
 
     QMenu* m_recentMenu = nullptr;
     QStringList m_recentFiles;

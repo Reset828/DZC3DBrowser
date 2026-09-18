@@ -389,6 +389,11 @@ void ObjParseRunnable::run() {
         int openSubMeshIndex = -1;
         int currentMaterialIndex = 0;
 
+        // 1.3：MTL 的 map_Kd 纹理声明（图像字节 + 纹理条目）。
+        std::vector<Texture> textures;
+        std::vector<Image> images;
+        std::unordered_map<std::string, int> imageIndexByPath;  // 按解析后路径去重
+
         std::vector<ImportMessage> messages;
 
         positions.reserve(static_cast<size_t>(fileSize) / 48);
@@ -434,7 +439,43 @@ void ObjParseRunnable::run() {
             beginSubMesh(materialIndex);
         };
 
-        // 解析 MTL：只取 newmtl 与 Kd；map_Kd 等纹理声明在 1.1 忽略。
+        // 1.3：读取 map_Kd 图像并登记为 Image/Texture；返回纹理索引（失败为 -1）。
+        auto registerKdTexture = [&](const std::filesystem::path& imagePath) -> int {
+            std::error_code ec;
+            const std::filesystem::path canonical =
+                std::filesystem::weakly_canonical(imagePath, ec);
+            const std::string key = ec ? imagePath.u8string() : canonical.u8string();
+            const auto existing = imageIndexByPath.find(key);
+            if (existing != imageIndexByPath.end()) {
+                for (size_t t = 0; t < textures.size(); ++t) {
+                    if (textures[t].image == existing->second) {
+                        return static_cast<int>(t);
+                    }
+                }
+            }
+            std::vector<char> bytes;
+            if (!ReadWholeFile(imagePath, bytes)) {
+                return -1;
+            }
+            if (!bytes.empty() && bytes.back() == '\0') bytes.pop_back();
+
+            Image image;
+            image.name = imagePath.filename().u8string();
+            image.resolvedPath = key;
+            image.encodedData.assign(bytes.begin(), bytes.end());
+            images.push_back(std::move(image));
+            const int imageIndex = static_cast<int>(images.size()) - 1;
+            imageIndexByPath.emplace(key, imageIndex);
+
+            Texture texture;
+            texture.name = imagePath.filename().u8string();
+            texture.image = imageIndex;
+            texture.sampler = -1;
+            textures.push_back(std::move(texture));
+            return static_cast<int>(textures.size()) - 1;
+        };
+
+        // 解析 MTL：newmtl、Kd，以及 map_Kd 基础色纹理。
         auto loadMaterialLibrary = [&](const std::string& libraryName,
                                        size_t lineNumber) {
             const std::filesystem::path objPath =
@@ -489,6 +530,39 @@ void ObjParseRunnable::run() {
                             ParseFloat(ptr, lineEnd, rgb.z)) {
                             materials[current].baseColor =
                                 { rgb.x, rgb.y, rgb.z, 1.0f };
+                        }
+                    }
+                } else if (keyword == "map_Kd") {
+                    if (current >= 0) {
+                        // map_Kd 允许带选项（-o/-s/-bm 等）；取最后一个非选项 token 作为文件名。
+                        const char* scan = ptr;
+                        const char* fileBegin = nullptr;
+                        const char* fileEnd = nullptr;
+                        while (scan < lineEnd) {
+                            SkipSpace(scan, lineEnd);
+                            if (scan >= lineEnd || *scan == '#') break;
+                            const char* tokenBegin = scan;
+                            while (scan < lineEnd && !IsSpace(*scan) && *scan != '#') ++scan;
+                            if (*tokenBegin == '-') {
+                                // 跳过该选项的若干参数（简化：跳过一个 token）。
+                                continue;
+                            }
+                            fileBegin = tokenBegin;
+                            fileEnd = scan;
+                        }
+                        if (fileBegin && fileEnd > fileBegin) {
+                            std::string imageName(fileBegin,
+                                static_cast<size_t>(fileEnd - fileBegin));
+                            const std::filesystem::path objPath =
+                                std::filesystem::u8path(m_filePath);
+                            const std::filesystem::path imagePath =
+                                objPath.parent_path() / std::filesystem::u8path(imageName);
+                            const int textureIndex = registerKdTexture(imagePath);
+                            if (textureIndex >= 0) {
+                                materials[current].baseColorTexture = textureIndex;
+                            } else {
+                                addWarning(lineNumber, "无法读取 map_Kd 纹理，已忽略");
+                            }
                         }
                     }
                 }
@@ -797,6 +871,8 @@ void ObjParseRunnable::run() {
         asset->sourcePath = m_filePath;
         asset->meshes.push_back(std::move(mesh));
         asset->materials = std::move(materials);
+        asset->textures = std::move(textures);
+        asset->images = std::move(images);
         asset->messages = std::move(messages);
 
         auto callback = m_callback;

@@ -2,7 +2,10 @@
 #define __GL_RENDER_H__
 
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "Render.h"
@@ -11,6 +14,7 @@ class QRunnable;
 class QOpenGLContext;
 class QOpenGLFunctions_4_2_Core;
 class QWindow;
+class GLTexture;  // GPU 纹理资源（include/Texture/GLTexture.h）
 
 
 // OpenGL 后端：上下文、帧循环与资源操作。
@@ -36,6 +40,21 @@ public:
     void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1) override;
     // 切换填充/线框多边形模式。
     void SetPolygonWireframe(bool enabled);
+
+    // 创建一张 GPU 纹理。返回句柄；0 表示失败。
+    TextureHandle CreateTexture(const TextureDesc& desc) override;
+    // 标记释放纹理，实际销毁延迟到帧计数队列。
+    void DestroyTexture(TextureHandle handle) override;
+    // 推进延迟销毁队列。
+    void ProcessDeferredTextureDestruction() override;
+    // 立即销毁全部纹理。
+    void ReleaseAllTextures() override;
+    // 查询句柄是否有效。
+    bool IsTextureValid(TextureHandle handle) const override;
+    // 返回纹理对象名；无效返回 0。
+    unsigned int GetTextureObject(TextureHandle handle) const;
+    // 返回采样器对象名；无效返回 0。
+    unsigned int GetTextureSamplerObject(TextureHandle handle) const;
 
     // 返回 OpenGL 4.2 函数表。
     QOpenGLFunctions_4_2_Core* GetFunctions() const;
@@ -88,6 +107,17 @@ protected:
     QWindow* m_window = nullptr;
     QOpenGLFunctions_4_2_Core* m_functions = nullptr;
     unsigned int m_currentProgram = 0;
+
+    // GPU 纹理资源（句柄 -> GLTexture）。句柄从 1 开始递增。
+    std::unordered_map<TextureHandle, std::unique_ptr<GLTexture>> m_textures;
+    TextureHandle m_nextTextureHandle = 1;
+    // 跨模型复用：cacheKey -> 已有句柄；以及每个句柄的引用计数。
+    std::unordered_map<std::string, TextureHandle> m_textureKeyToHandle;
+    std::unordered_map<TextureHandle, int> m_textureRefCount;
+    // 延迟销毁队列：{句柄, 入队时的帧号}。
+    std::vector<std::pair<TextureHandle, uint64_t>> m_deferredTextureDestruction;
+    uint64_t m_textureFrameCounter = 0;
+    static constexpr uint64_t kTextureDestroyDelayFrames = 3;
 };
 
 

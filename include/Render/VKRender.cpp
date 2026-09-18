@@ -1,5 +1,6 @@
 ﻿#include "VKRender.h"
 #include "Path/AssetPath.h"
+#include "Texture/VKTexture.h"
 #include <iostream>
 #include <fstream>
 #include <set>
@@ -123,6 +124,9 @@ void VKRender::Shutdown() {
     if (m_initialized || m_device != VK_NULL_HANDLE) {
         Quiesce();
     }
+
+    // 纹理使用单次命令池，须在销毁命令池前释放。
+    ReleaseAllTextures();
 
     CleanupSwapchain();
 
@@ -315,6 +319,9 @@ void VKRender::EndFrame() {
 
     vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
 
+    // 推进纹理延迟销毁队列（每帧一次）。
+    ProcessDeferredTextureDestruction();
+
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -377,6 +384,121 @@ void VKRender::EndFrame() {
 // 提交索引绘制命令。
 void VKRender::DrawIndexed(uint32_t indexCount, uint32_t instanceCount) {
     vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], indexCount, instanceCount, 0, 0, 0);
+}
+
+// 创建一张 GPU 纹理（staging 上传 + 布局转换 + mipmap）。
+// 若 desc.cacheKey 非空且已存在，则复用同一纹理并增加引用计数。
+TextureHandle VKRender::CreateTexture(const TextureDesc& desc) {
+    if (m_device == VK_NULL_HANDLE || m_physicalDevice == VK_NULL_HANDLE) return 0;
+    if (m_singleTimeCommandPool == VK_NULL_HANDLE || m_graphicsQueue == VK_NULL_HANDLE) return 0;
+
+    // 命中已有键：复用并增加引用计数。
+    if (!desc.cacheKey.empty()) {
+        const auto found = m_textureKeyToHandle.find(desc.cacheKey);
+        if (found != m_textureKeyToHandle.end()) {
+            ++m_textureRefCount[found->second];
+            return found->second;
+        }
+    }
+
+    auto texture = std::make_unique<VKTexture>();
+    VKTextureContext context{};
+    context.device = m_device;
+    context.physicalDevice = m_physicalDevice;
+    context.commandPool = m_singleTimeCommandPool;
+    context.queue = m_graphicsQueue;
+    if (!texture->Create(context, desc)) {
+        return 0;
+    }
+
+    const TextureHandle handle = m_nextTextureHandle++;
+    m_textures.emplace(handle, std::move(texture));
+    m_textureRefCount[handle] = 1;
+    if (!desc.cacheKey.empty()) {
+        m_textureKeyToHandle.emplace(desc.cacheKey, handle);
+    }
+    return handle;
+}
+
+// 标记释放纹理：递减引用计数，归零才进入延迟销毁队列。
+void VKRender::DestroyTexture(TextureHandle handle) {
+    if (handle == 0) return;
+    if (m_textures.find(handle) == m_textures.end()) return;
+
+    auto ref = m_textureRefCount.find(handle);
+    if (ref != m_textureRefCount.end() && --ref->second > 0) {
+        return;  // 仍被其他模型/材质引用
+    }
+    for (const auto& entry : m_deferredTextureDestruction) {
+        if (entry.first == handle) return;  // 已在队列中
+    }
+    m_deferredTextureDestruction.emplace_back(handle, m_textureFrameCounter);
+}
+
+// 推进延迟销毁队列：入队超过 kTextureDestroyDelayFrames 帧的纹理才真正销毁。
+void VKRender::ProcessDeferredTextureDestruction() {
+    ++m_textureFrameCounter;
+    if (m_deferredTextureDestruction.empty()) return;
+
+    const uint64_t safeFrame =
+        m_textureFrameCounter > kTextureDestroyDelayFrames
+            ? m_textureFrameCounter - kTextureDestroyDelayFrames : 0;
+
+    for (auto it = m_deferredTextureDestruction.begin();
+         it != m_deferredTextureDestruction.end();) {
+        if (it->second <= safeFrame) {
+            auto found = m_textures.find(it->first);
+            if (found != m_textures.end()) {
+                // 从键表移除指向该句柄的映射。
+                for (auto keyIt = m_textureKeyToHandle.begin();
+                     keyIt != m_textureKeyToHandle.end();) {
+                    if (keyIt->second == it->first) {
+                        keyIt = m_textureKeyToHandle.erase(keyIt);
+                    } else {
+                        ++keyIt;
+                    }
+                }
+                m_textureRefCount.erase(it->first);
+                found->second->Destroy();
+                m_textures.erase(found);
+            }
+            it = m_deferredTextureDestruction.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// 立即销毁全部纹理（先等待 GPU 空闲）。
+void VKRender::ReleaseAllTextures() {
+    if (m_textures.empty() && m_deferredTextureDestruction.empty()) return;
+    if (m_device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(m_device);
+    }
+    for (auto& entry : m_textures) {
+        entry.second->Destroy();
+    }
+    m_textures.clear();
+    m_textureKeyToHandle.clear();
+    m_textureRefCount.clear();
+    m_deferredTextureDestruction.clear();
+}
+
+// 查询句柄是否有效。
+bool VKRender::IsTextureValid(TextureHandle handle) const {
+    return handle != 0 && m_textures.find(handle) != m_textures.end();
+}
+
+// 返回纹理的 VkImageView。
+VkImageView VKRender::GetTextureImageView(TextureHandle handle) const {
+    const auto found = m_textures.find(handle);
+    return found == m_textures.end() ? VK_NULL_HANDLE : found->second->GetImageView();
+}
+
+// 返回纹理的 VkSampler。
+VkSampler VKRender::GetTextureSampler(TextureHandle handle) const {
+    const auto found = m_textures.find(handle);
+    return found == m_textures.end() ? VK_NULL_HANDLE : found->second->GetSampler();
 }
 
 

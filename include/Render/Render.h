@@ -7,6 +7,7 @@
 #include <string>
 
 #include "Math/EngineTypes.h"
+#include "Texture/TextureTypes.h"
 
 
 class Object;
@@ -61,6 +62,17 @@ public:
     void SetMeshFactory(MeshFactory factory);
     // 通过工厂创建当前后端的 Mesh。
     Object* CreateMesh();
+
+    // 创建一张 GPU 纹理（RGBA8 像素，语义决定 sRGB/线性与 mipmap）。返回句柄；0 表示失败。
+    virtual TextureHandle CreateTexture(const TextureDesc& desc) { (void)desc; return 0; }
+    // 标记释放一张纹理；实际销毁延迟到安全时机（帧计数队列）。
+    virtual void DestroyTexture(TextureHandle handle) { (void)handle; }
+    // 推进延迟销毁队列（每帧调用一次）。
+    virtual void ProcessDeferredTextureDestruction() {}
+    // 立即销毁全部纹理（Shutdown/Quiesce 用）。
+    virtual void ReleaseAllTextures() {}
+    // 查询某句柄是否仍然有效。
+    virtual bool IsTextureValid(TextureHandle handle) const { (void)handle; return false; }
 
     // 查询渲染器是否已初始化。
     bool IsInitialized() const;
