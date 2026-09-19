@@ -158,6 +158,8 @@ private:
     void RemoveLoadedModel(QTreeWidgetItem* treeItem);
     // 清空全部已加载模型。
     void ClearLoadedModels();
+    // 复位场景取景：相机、归一化与坐标显示（无模型或需要回到默认状态时使用）。
+    void ResetSceneView();
     // 把相机对准场景或指定模型。
     void FocusSceneOrModel(QTreeWidgetItem* treeItem);
     // 按渲染器类型安装 Mesh 工厂。

@@ -1233,7 +1233,16 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
     delete it->treeItem;
     it->treeItem = nullptr;
     m_loadedModels.erase(it);
-    UpdateShadowSceneBounds();
+
+    if (m_loadedModels.empty()) {
+        // 已无剩余模型：复位到默认取景与坐标显示。
+        ResetSceneView();
+        UpdateShadowSceneBounds();
+    } else {
+        // 剩余模型重新归一化并取景（与“添加模型”对称）。
+        // 否则归一化尺度会残留“被移除的大模型”主导的旧值，导致剩余小模型过小、双击聚焦过远。
+        RebuildSceneMeshes();
+    }
     if (m_materialPanel && m_materialPanel->isVisible()) {
         RebuildMaterialPanel();
     }
@@ -1262,6 +1271,15 @@ void MainWindow::ClearLoadedModels() {
     }
     m_loadedModels.clear();
 
+    ResetSceneView();
+    UpdateShadowSceneBounds();
+    if (m_materialPanel && m_materialPanel->isVisible()) {
+        RebuildMaterialPanel();
+    }
+}
+
+// 复位场景取景：相机、归一化与坐标显示（无模型或需要回到默认状态时使用）。
+void MainWindow::ResetSceneView() {
     m_sceneViewDistance = 3.0f;
     m_sceneSourceCenter[0] = 0.0f;
     m_sceneSourceCenter[1] = 0.0f;
@@ -1286,10 +1304,6 @@ void MainWindow::ClearLoadedModels() {
     m_coordX->setText(QStringLiteral("X: 0.000"));
     m_coordY->setText(QStringLiteral("Y: 0.000"));
     m_coordZ->setText(QStringLiteral("Z: 0.000"));
-    UpdateShadowSceneBounds();
-    if (m_materialPanel && m_materialPanel->isVisible()) {
-        RebuildMaterialPanel();
-    }
 }
 
 // 把相机对准场景或指定模型。
