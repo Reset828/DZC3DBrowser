@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include "Asset/SceneAsset.h"
+#include "Math/Transform.h"
 #include "Render/Render.h"
 #include "TextureImport.h"
 #include <unordered_map>
@@ -38,6 +39,7 @@ class QMenu;
 class QListWidget;
 class QSplitter;
 class QSlider;
+class QDoubleSpinBox;
 
 
 
@@ -54,10 +56,34 @@ public:
     // FPS / 帧时间文字刷新间隔（毫秒）。数值仍按每拍计算。
     static constexpr int kStatsRefreshMs = 250;
 
+    // 运行时网格对象：一个网格 GPU 对象及其来源资产网格索引（任务 2.1）。
+    struct RuntimeMesh {
+        Object* object = nullptr;   // 所有权属于场景图
+        int assetMeshIndex = -1;    // 指向 SceneAsset::meshes
+    };
+
+    // 运行时节点：一个可变换的场景节点（Layer），可挂网格对象与子节点（任务 2.1）。
+    // nodes[0] 恒为模型根节点。局部变换在“原始模型坐标”空间，按父链相乘得到世界矩阵。
+    // 逻辑结构（name/parent/children/meshes/local）在后端切换重建后保留；
+    // object 指针在每次重建时重新创建。
+    struct RuntimeNode {
+        Layer* object = nullptr;              // 场景节点（Layer），所有权属于场景图
+        std::string name;
+        int parent = -1;                       // 运行时节点索引；-1 表示无父
+        std::vector<int> children;             // 子节点运行时索引
+        std::vector<RuntimeMesh> meshes;       // 挂在本节点上的网格对象
+        Transform local;                       // 可编辑局部变换（模型坐标空间）
+        Transform defaultLocal;                // 默认局部变换（“重置变换”恢复到此值）
+        bool isClone = false;                  // 是否为“复制”产生的节点
+        int sourceAssetNode = -1;              // 对应/来源的 SceneAsset::nodes 索引；-1 表示无
+    };
+
     struct LoadedModel {
         SceneAsset asset;
-        std::vector<Object*> meshes;           // 每个 MeshData 一个；所有权属于场景
-        QTreeWidgetItem* treeItem = nullptr;    // 所有权属于主面板
+        std::vector<Object*> meshes;           // 所有网格对象（扁平列表，便于可见性/纹理处理）
+        std::vector<RuntimeNode> nodes;        // 运行时节点层级；nodes[0] = 模型根
+        std::vector<char> nodeDeleted;         // 与 nodes 平行：节点是否被删除（含子树）
+        QTreeWidgetItem* treeItem = nullptr;    // 模型项，所有权属于主面板
         bool visible = true;
         // 每个材质引用的 baseColor 纹理对应一张 GPU 纹理句柄（1.3）。
         std::unordered_map<int, TextureHandle> textureHandles;
@@ -90,6 +116,8 @@ private slots:
     void onHdrPanel();
     // 打开或关闭调试视图面板。
     void onDebugPanel();
+    // 打开或关闭变换编辑面板（任务 2.1）。
+    void onTransformPanel();
     // 打开最近文件菜单项对应路径。
     void onRecentFileTriggered();
     // 在 Vulkan / OpenGL 后端间切换。
@@ -173,8 +201,10 @@ private:
     void FocusSceneOrModel(QTreeWidgetItem* treeItem);
     // 按渲染器类型安装 Mesh 工厂。
     void ConfigureMeshFactory(Render* renderer);
-    // 按当前后端重建场景网格。
+    // 按当前后端重建场景网格（默认重算归一化）。
     void RebuildSceneMeshes();
+    // 按当前后端重建场景网格；recomputeNormalization 为 true 时重算场景归一化。
+    void RebuildSceneMeshes(bool recomputeNormalization);
     // 把模型上的网格指针置空。
     void ResetLoadedMeshPointers();
     // 按当前后端为所有已加载模型导入纹理（CPU 缓存 + GPU 上传）。
@@ -190,6 +220,47 @@ private:
     // 为所有已加载模型的网格构建逐 SubMesh 绘制信息。
     void RebuildSubMeshDrawInfos();
 
+    // ---------------- 任务 2.1：运行时节点层级 / 变换编辑 ----------------
+    // 为一个模型构建运行时节点层级（模型根 + 各资产节点 + 网格挂载）。
+    void BuildModelHierarchy(LoadedModel& model);
+    // 为一个网格资产创建网格对象（按当前后端）。
+    Object* CreateMeshObject(LoadedModel& model, int assetMeshIndex);
+    // 计算某运行时节点在“模型空间”（含模型根变换，不含场景归一化）的世界矩阵。
+    Mat4 ModelSpaceNodeMatrix(const LoadedModel& model, int runtimeNode) const;
+    // 计算场景归一化：更新 m_sceneSourceCenter / m_sceneNormalizationScale。
+    void ComputeSceneNormalization();
+    // 场景归一化矩阵 M_norm（原始模型坐标 -> 归一化场景空间）。
+    Mat4 SceneNormalizationMatrix() const;
+    // 累计某模型所有网格在“归一化场景空间”的包围盒（含场景归一化）。
+    void AccumulateModelBounds(const LoadedModel& model, Vec3& boundsMin, Vec3& boundsMax,
+                               bool& any) const;
+    // 重建项目树的节点层级（在每个模型项下填充节点）。
+    void RebuildProjectTree();
+    // 把某模型节点层级写入项目树。
+    void PopulateNodeTreeItems(size_t modelIndex, int runtimeNode, QTreeWidgetItem* parentItem);
+    // 项目树选择变化：刷新变换面板。
+    void OnProjectSelectionChanged();
+    // 把变换面板数值写入当前选中节点。
+    void ApplyTransformPanelToSelection();
+    // 用选中节点的变换刷新变换面板。
+    void SyncTransformPanelFromSelection();
+    // 选中节点：重置变换。
+    void ResetSelectedNodeTransform();
+    // 选中节点：删除（含子树）。
+    void DeleteSelectedNode();
+    // 选中节点：复制（含子树）。
+    void CopySelectedNode();
+    // 解析项目树项对应的 (模型索引, 运行时节点索引)；无效返回 false。
+    bool ResolveTreeItem(QTreeWidgetItem* item, size_t& modelIndex, int& runtimeNode) const;
+    // 找到项目树项对应的模型索引；无效返回 -1。
+    int FindModelIndexByTreeItem(QTreeWidgetItem* item) const;
+    // 变换变更后：刷新阴影范围（含归一化场景空间包围盒）。
+    void RefreshAfterTransformChange();
+    // 深拷贝某运行时节点子树；返回新根运行时索引（model.nodes 扩容后重新索引）。
+    int CloneRuntimeSubtree(LoadedModel& model, int srcRuntimeNode, int newParent,
+                            const Vec3& translationOffset);
+    // 标记某运行时节点及其整棵子树为“已删除”。
+    void MarkSubtreeDeleted(LoadedModel& model, int runtimeNode);
 
 
     Render* m_renderer;
@@ -255,6 +326,24 @@ private:
     QDateEdit* m_pDateEdit = nullptr;
     QTimeEdit* m_pTimeEdit = nullptr;
     QDial* m_pTimeDial = nullptr;
+
+    // 变换编辑面板（任务 2.1）：平移 / 旋转（度）/ 缩放 数值输入。
+    QPushButton* m_transformButton = nullptr;
+    QWidget* m_transformPanel = nullptr;
+    QLabel* m_transformSelectionLabel = nullptr;
+    QDoubleSpinBox* m_spinTransX = nullptr;
+    QDoubleSpinBox* m_spinTransY = nullptr;
+    QDoubleSpinBox* m_spinTransZ = nullptr;
+    QDoubleSpinBox* m_spinRotX = nullptr;
+    QDoubleSpinBox* m_spinRotY = nullptr;
+    QDoubleSpinBox* m_spinRotZ = nullptr;
+    QDoubleSpinBox* m_spinScaleX = nullptr;
+    QDoubleSpinBox* m_spinScaleY = nullptr;
+    QDoubleSpinBox* m_spinScaleZ = nullptr;
+    // 当前选中节点：模型索引 + 运行时节点索引（-1 = 未选中）。
+    int m_selectedModel = -1;
+    int m_selectedRuntimeNode = -1;
+    bool m_syncingTransformPanel = false;
 
     QLabel* m_backendLabel = nullptr;
     QLabel* m_coordX = nullptr;

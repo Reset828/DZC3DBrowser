@@ -278,6 +278,8 @@ public:
 
     // 以材质参数（普通 uniform）+ 纹理单元绑定后绘制当前网格。
     void ApplyMaterial(const MaterialParams& params, const MaterialTextureSet& textures) override;
+    // 设置当前对象的逐对象世界矩阵（任务 2.1）：普通 uniform（主/阴影程序各自位置）。
+    void SetObjectModelMatrix(const float model[16]) override;
     // 按距离从远到近排序并绘制已收集的透明请求。
     void FlushTransparentDraws() override;
     // 计算点（上传坐标空间）到相机的距离。
@@ -468,6 +470,9 @@ protected:
     int m_uNormalTextureLoc = -1;
     int m_uOcclusionTextureLoc = -1;
     int m_uEmissiveTextureLoc = -1;
+    // 逐对象世界矩阵 uniform（任务 2.1）：主程序与阴影程序各自的位置。
+    int m_uObjectModelLoc = -1;
+    int m_uShadowObjectModelLoc = -1;
     // 纹理单元分配：2=baseColor, 3=metallicRoughness, 4=normal, 5=occlusion, 6=emissive。
     static constexpr int kMaterialTextureUnit = 2;
     static constexpr int kMetallicRoughnessTextureUnit = 3;

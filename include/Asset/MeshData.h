@@ -14,7 +14,10 @@ struct MeshData {
     std::vector<AssetVertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<SubMesh> subMeshes;
-    Aabb bounds;  // 整个网格的包围盒
+    Aabb bounds;  // 整个网格的包围盒（节点局部空间）
+    // 任务 2.1：产生该网格的节点索引（指向 SceneAsset::nodes）；-1 表示无（如 OBJ）。
+    // 顶点保留在节点局部空间，节点变换由运行时场景图施加。
+    int nodeIndex = -1;
 };
 
 #endif //__ASSET_MESH_H__

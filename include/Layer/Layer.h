@@ -33,6 +33,11 @@ public:
     // 按索引或指针删除子对象。
     virtual void RemoveChild(Object* pObject);
 
+    // 标记自身及所有后代的世界矩阵需要重算。
+    void MarkWorldTransformDirty() override;
+    // 自顶向下刷新自身与所有子对象的世界矩阵；返回自身是否变化。
+    bool UpdateWorldTransforms(const Mat4* parentWorld, bool parentChanged) override;
+
     // 遍历可见子对象并绘制。
     void Render(int iMode = 0) override;
 

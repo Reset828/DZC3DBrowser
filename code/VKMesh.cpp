@@ -2,6 +2,7 @@
 #include "AssetMeshUpload.h"
 #include "BufferUploadRunnable.h"
 #include "Render/VKRender.h"
+#include "Math/Transform.h"
 
 VKMesh::VKMesh()
     : m_alive(std::make_shared<std::atomic<bool>>(true))
@@ -124,6 +125,8 @@ void VKMesh::Render(int mode) {
         VkDeviceSize offsets[] = { 0 };
         vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
         vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        // 逐对象世界矩阵（任务 2.1）：主/阴影通道都需要。
+        m_pRender->SetObjectModelMatrix(GetWorldMatrix().m[0]);
         if (mode != Object::RM_SHADOW) {
             m_pRender->ApplyMaterial(MaterialParams{}, MaterialTextureSet{});
         }
@@ -143,7 +146,11 @@ void VKMesh::Render(int mode) {
             (info.material.alphaMode == static_cast<int>(MaterialAlphaMode::Blend));
         if (blend) {
             // 透明 SubMesh 交给渲染器收集，主通道结束前统一排序绘制。
-            float distance = m_pRender->ComputeDrawDistance(info.center);
+            // 排序中心需先经逐对象世界矩阵变换到归一化场景空间。
+            const Vec3 center = TransformPoint(
+                GetWorldMatrix(), Vec3{ info.center[0], info.center[1], info.center[2] });
+            const float centerArray[3] = { center.x, center.y, center.z };
+            float distance = m_pRender->ComputeDrawDistance(centerArray);
             m_pRender->QueueTransparentDraw(this, static_cast<int>(i), distance);
             continue;
         }
@@ -182,6 +189,9 @@ void VKMesh::DrawSubMeshImpl(const SubMeshDrawInfo& info, bool blend, bool shado
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
     vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    // 逐对象世界矩阵（任务 2.1）：主/透明/阴影通道都需要。
+    m_pRender->SetObjectModelMatrix(GetWorldMatrix().m[0]);
 
     // 阴影通道不需要材质参数；主/透明通道应用材质。
     if (!shadow) {

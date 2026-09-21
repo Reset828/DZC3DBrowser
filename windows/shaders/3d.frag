@@ -7,7 +7,7 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     vec4 sunDirection;
     mat4 lightViewProj;
     vec4 shadowOptions;
-    vec4 cameraObjectPosition; // xyz: 相机在物体空间的位置（PBR 视线向量），w 未用
+    vec4 cameraWorldPosition;  // xyz: 相机在归一化场景空间的位置（PBR 视线向量），w 未用
     vec4 ambientSkyColor;      // 1.7: xyz 天空色(线性), w 环境光强度
     vec4 ambientGroundColor;   // 1.7: xyz 地面色(线性), w 未用
     vec4 shadowParams;         // 1.7: x 基础深度偏移, y PCF 档位, z 世界纹素尺寸, w 未用
@@ -18,14 +18,14 @@ layout(std140, binding = 0) uniform UniformBufferObject {
 layout(binding = 1) uniform sampler2DShadow shadowMap;
 
 // 材质参数（1.4 / 1.5）。
-//   Vulkan：push constant（VK 独有），纹理在 set 1 binding 0..4。
+//   Vulkan：与 3d.vert 共用同一个 push constant 块（前 64 字节为材质；后 64 字节为
+//           逐对象世界矩阵，本阶段不用但必须声明一致）。
 //   OpenGL：普通 uniform + 纹理单元 2..6。
-// 两分支字段语义一致（布局见 Render.h 的 MaterialParams）。
 // 颜色空间约定：baseColor 纹理与 emissive 纹理为 sRGB（采样时硬件解码为线性），
 // 其余（metallicRoughness / normal / occlusion）为线性数据贴图。所有光照计算在线性空间，
 // 最终写入 sRGB 交换链由硬件编码，切勿在着色器里手动做 gamma。
 #ifdef VULKAN
-layout(push_constant) uniform MaterialPush {
+layout(push_constant) uniform PushConstants {
     vec4 baseColor;          // rgb 基础色(线性) + a 材质 alpha
     vec4 emissiveFactor;     // xyz 线性自发光色
     float alphaCutoff;
@@ -36,6 +36,7 @@ layout(push_constant) uniform MaterialPush {
     float emissiveStrength;
     int alphaMode;           // 0 Opaque / 1 Mask / 2 Blend
     int pad0;
+    mat4 objectModel;        // 逐对象世界矩阵（vertex 阶段使用）
 } mat;
 layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
 layout(set = 1, binding = 1) uniform sampler2D metallicRoughnessTexture;
@@ -94,7 +95,8 @@ const vec3 kSunColor = vec3(1.0, 0.98, 0.92);   // 线性太阳色
 const float kSunIntensity = 3.0;                // 太阳辐射强度（线性）
 
 vec3 DyeColor() {
-    float t = clamp(fragWorldPosition.z * 0.5 + 0.5, 0.0, 1.0);
+    // 高度取归一化场景空间（Z-up）的 z 分量，与显示朝向/轨道相机无关。
+    float t = clamp(fragObjectPosition.z * 0.5 + 0.5, 0.0, 1.0);
     t = pow(t, 0.5);
     vec3 darkGreen = vec3(0.05, 0.35, 0.05);
     vec3 grassGreen = vec3(0.15, 0.65, 0.10);
@@ -109,7 +111,7 @@ bool WireframeEnabled() {
     return ubo.shadowOptions.z > 0.5;
 }
 
-// 物体空间着色法线：优先用插值顶点法线，退化时用屏幕导数几何法线。
+// 着色法线（归一化场景空间）：优先用插值顶点法线，退化时用屏幕导数几何法线。
 vec3 ObjectNormal() {
     vec3 objNormal = vec3(0.0);
     float objNormalLengthSquared = dot(fragObjectNormal, fragObjectNormal);
@@ -209,7 +211,7 @@ float ShadowFactor() {
         return 1.0;
     }
 
-    // 法线偏移（1.7）：沿物体空间法线偏移若干世界纹素，缓解斜面上的阴影失真。
+    // 法线偏移（1.7）：沿归一化场景空间法线偏移若干世界纹素，缓解斜面上的阴影失真。
     vec3 shadingNormal = ObjectNormal();
     vec4 lightClip = ubo.lightViewProj *
         vec4(fragObjectPosition + shadingNormal * ubo.shadowParams.z, 1.0);
@@ -293,7 +295,7 @@ vec3 FresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// 切线空间法线贴图 -> 物体空间法线（TBN 基由顶点切线构造）。
+// 切线空间法线贴图 -> 归一化场景空间法线（TBN 基由顶点切线构造）。
 vec3 ApplyNormalMap(vec3 N, vec3 T, float tangentHand) {
     vec3 n = texture(normalTexture, fragTexCoord).xyz * 2.0 - 1.0;
     n.xy *= MAT_NORMALSCALE;
@@ -331,8 +333,8 @@ vec3 ComputeDirectLighting(vec3 N, vec3 V, vec3 albedo, float metallic, float ro
     return (diffuse + specular) * radiance * NdotL;
 }
 
-// 半球环境光（1.7）：按物体空间法线的上下方向在地面色与天空色之间插值。
-// 物体空间 +Z 为上方（与 sunDirection 约定一致）。强度由 ambientSkyColor.w 统一缩放。
+// 半球环境光（1.7）：按归一化场景空间法线的上下方向在地面色与天空色之间插值。
+// 归一化场景空间 +Z 为上方（与 sunDirection 约定一致）。强度由 ambientSkyColor.w 统一缩放。
 vec3 ComputeAmbient(vec3 N, vec3 albedo, float metallic, float ao) {
     float up = clamp(N.z * 0.5 + 0.5, 0.0, 1.0);
     float intensity = ubo.ambientSkyColor.w;
@@ -351,7 +353,8 @@ vec3 ComputePBR(vec3 baseColor, float metallic, float roughness, float ao) {
     vec3 N = ObjectNormal();
     vec3 T = fragObjectTangent.xyz;
     N = ApplyNormalMap(N, T, fragObjectTangent.w);
-    vec3 V = normalize(ubo.cameraObjectPosition.xyz - fragObjectPosition);
+    // 视线向量：相机（归一化场景空间）到片元（归一化场景空间）。
+    vec3 V = normalize(ubo.cameraWorldPosition.xyz - fragObjectPosition);
 
     vec3 albedo = baseColor;
     vec3 color = ComputeDirectLighting(N, V, albedo, metallic, roughness)
@@ -371,9 +374,8 @@ vec3 DebugViewColor() {
         return vec3(linearDepth);
     }
     if (mode == 2) {
-        // 世界空间法线：物体空间法线经 model 变换 -> 映射到 [0,1] 颜色。
-        vec3 objectNormal = ObjectNormal();
-        vec3 worldNormal = normalize(mat3(ubo.model) * objectNormal);
+        // 世界空间法线：法线已在归一化场景空间（着色世界），映射到 [0,1] 颜色。
+        vec3 worldNormal = normalize(fragObjectNormal);
         return worldNormal * 0.5 + 0.5;
     }
     if (mode == 3) {

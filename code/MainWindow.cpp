@@ -37,6 +37,7 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QListWidget>
+#include <QList>
 #include <QStyleFactory>
 #include <QStyle>
 #include <QColor>
@@ -50,6 +51,7 @@
 #include <QTimeEdit>
 #include <QDial>
 #include <QSlider>
+#include <QDoubleSpinBox>
 #include <QColorDialog>
 #include <QDate>
 #include <QTime>
@@ -60,6 +62,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <functional>
 #include <string>
 
 MainWindow::MainWindow(QWidget* parent)
@@ -247,6 +250,10 @@ void MainWindow::SetupToolBar() {
     toolbar->addWidget(m_debugButton);
     connect(m_debugButton, &QPushButton::clicked, this, &MainWindow::onDebugPanel);
 
+    m_transformButton = new QPushButton(QStringLiteral("变换"));
+    toolbar->addWidget(m_transformButton);
+    connect(m_transformButton, &QPushButton::clicked, this, &MainWindow::onTransformPanel);
+
     QWidget* spacer = new QWidget();
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolbar->addWidget(spacer);
@@ -390,19 +397,36 @@ void MainWindow::SetupVulkan() {
             return;
         }
 
-        if (item->parent() != m_modelsTreeItem) return;
+        // 模型项（“模型”根的直接子项）：显示 / 隐藏 / 移除。
+        if (item->parent() == m_modelsTreeItem) {
+            QAction* showAction = menu.addAction(QStringLiteral("显示"));
+            QAction* hideAction = menu.addAction(QStringLiteral("隐藏"));
+            QAction* removeAction = menu.addAction(QStringLiteral("移除"));
+            QAction* selectedAction = menu.exec(m_projectPanel->viewport()->mapToGlobal(pos));
+            if (selectedAction == showAction) {
+                SetLoadedModelVisible(item, true);
+            } else if (selectedAction == hideAction) {
+                SetLoadedModelVisible(item, false);
+            } else if (selectedAction == removeAction) {
+                RemoveLoadedModel(item);
+            }
+            return;
+        }
 
-        QAction* showAction = menu.addAction(QStringLiteral("显示"));
-        QAction* hideAction = menu.addAction(QStringLiteral("隐藏"));
-        QAction* removeAction = menu.addAction(QStringLiteral("移除"));
+        // 节点项（任务 2.1）：重置变换 / 复制 / 删除。
+        QAction* resetAction = menu.addAction(QStringLiteral("重置变换"));
+        QAction* copyAction = menu.addAction(QStringLiteral("复制"));
+        QAction* deleteAction = menu.addAction(QStringLiteral("删除"));
         QAction* selectedAction = menu.exec(m_projectPanel->viewport()->mapToGlobal(pos));
-
-        if (selectedAction == showAction) {
-            SetLoadedModelVisible(item, true);
-        } else if (selectedAction == hideAction) {
-            SetLoadedModelVisible(item, false);
-        } else if (selectedAction == removeAction) {
-            RemoveLoadedModel(item);
+        if (selectedAction == resetAction) {
+            m_projectPanel->setCurrentItem(item);
+            ResetSelectedNodeTransform();
+        } else if (selectedAction == copyAction) {
+            m_projectPanel->setCurrentItem(item);
+            CopySelectedNode();
+        } else if (selectedAction == deleteAction) {
+            m_projectPanel->setCurrentItem(item);
+            DeleteSelectedNode();
         }
     });
 
@@ -415,10 +439,14 @@ void MainWindow::SetupVulkan() {
             return;
         }
 
+        // 模型项：取景整个模型。
         if (item->parent() == m_modelsTreeItem) {
             FocusSceneOrModel(item);
         }
     });
+
+    connect(m_projectPanel, &QTreeWidget::itemSelectionChanged,
+            this, &MainWindow::OnProjectSelectionChanged);
 
     m_lightAnalysisPanel = new QWidget();
     m_lightAnalysisPanel->setFixedWidth(250);
@@ -669,6 +697,70 @@ void MainWindow::SetupVulkan() {
 
     m_debugPanel->setVisible(false);
 
+    // 变换编辑面板（任务 2.1）：平移 / 旋转（度）/ 缩放 数值输入。
+    m_transformPanel = new QWidget();
+    m_transformPanel->setFixedWidth(250);
+    m_transformPanel->setAutoFillBackground(true);
+    m_transformPanel->setStyleSheet(QStringLiteral("background-color: #252526; border: 1px solid #3c3c3c;"));
+    QVBoxLayout* transformLayout = new QVBoxLayout(m_transformPanel);
+    transformLayout->setContentsMargins(8, 6, 8, 6);
+    transformLayout->setSpacing(6);
+    transformLayout->setAlignment(Qt::AlignTop);
+
+    m_transformSelectionLabel = new QLabel(QStringLiteral("未选中节点"));
+    m_transformSelectionLabel->setWordWrap(true);
+    m_transformSelectionLabel->setStyleSheet(QStringLiteral("color: #d4d4d4; border: none;"));
+    transformLayout->addWidget(m_transformSelectionLabel);
+
+    // 三行三列数值：平移 / 旋转 / 缩放 的 X/Y/Z。
+    auto makeSpinRow = [&](const QString& title, QDoubleSpinBox*& x,
+                           QDoubleSpinBox*& y, QDoubleSpinBox*& z,
+                           double minValue, double maxValue, double step, int decimals) {
+        QLabel* rowLabel = new QLabel(title);
+        rowLabel->setStyleSheet(QStringLiteral("color: #d4d4d4; border: none;"));
+        transformLayout->addWidget(rowLabel);
+        QHBoxLayout* row = new QHBoxLayout();
+        row->setSpacing(4);
+        auto makeSpin = [&](QDoubleSpinBox*& spin) {
+            spin = new QDoubleSpinBox();
+            spin->setRange(minValue, maxValue);
+            spin->setSingleStep(step);
+            spin->setDecimals(decimals);
+            spin->setValue(0.0);
+            row->addWidget(spin);
+        };
+        makeSpin(x);
+        makeSpin(y);
+        makeSpin(z);
+        transformLayout->addLayout(row);
+    };
+    makeSpinRow(QStringLiteral("平移 (X/Y/Z)"), m_spinTransX, m_spinTransY, m_spinTransZ,
+                -1.0e6, 1.0e6, 0.1, 4);
+    makeSpinRow(QStringLiteral("旋转 (度 X/Y/Z)"), m_spinRotX, m_spinRotY, m_spinRotZ,
+                -360.0, 360.0, 5.0, 2);
+    makeSpinRow(QStringLiteral("缩放 (X/Y/Z)"), m_spinScaleX, m_spinScaleY, m_spinScaleZ,
+                0.0001, 1.0e6, 0.1, 4);
+    if (m_spinScaleX) m_spinScaleX->setValue(1.0);
+    if (m_spinScaleY) m_spinScaleY->setValue(1.0);
+    if (m_spinScaleZ) m_spinScaleZ->setValue(1.0);
+
+    QPushButton* transformResetButton = new QPushButton(QStringLiteral("重置变换"));
+    transformLayout->addWidget(transformResetButton);
+    connect(transformResetButton, &QPushButton::clicked, this,
+            &MainWindow::ResetSelectedNodeTransform);
+
+    auto onTransformSpinChanged = [this](double) { ApplyTransformPanelToSelection(); };
+    for (QDoubleSpinBox* spin : { m_spinTransX, m_spinTransY, m_spinTransZ,
+                                  m_spinRotX, m_spinRotY, m_spinRotZ,
+                                  m_spinScaleX, m_spinScaleY, m_spinScaleZ }) {
+        if (spin) {
+            connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                    this, onTransformSpinChanged);
+        }
+    }
+
+    m_transformPanel->setVisible(false);
+
     QWidget* viewportHost = new QWidget();
     QHBoxLayout* viewportLayout = new QHBoxLayout(viewportHost);
     viewportLayout->setContentsMargins(0, 0, 0, 0);
@@ -679,6 +771,7 @@ void MainWindow::SetupVulkan() {
     viewportLayout->addWidget(m_pbrPanel, 0);
     viewportLayout->addWidget(m_hdrPanel, 0);
     viewportLayout->addWidget(m_debugPanel, 0);
+    viewportLayout->addWidget(m_transformPanel, 0);
 
     // 右栏：上方视口，下方消息区（projectPanel 右边、渲染视口下方、状态栏上方）。
     m_messageList = new QListWidget();
@@ -931,6 +1024,12 @@ void MainWindow::StartRenderLoop() {
         const bool shadowDue = !m_lastShadowPassTimer.isValid()
             || m_lastShadowPassTimer.elapsed() >= kShadowPassIntervalMs;
 
+        // 任务 2.1：按脏标记刷新场景图世界矩阵（变换编辑后每帧传播一次）。
+        if (!paused && m_scene) {
+            m_scene->UpdateWorldTransforms(nullptr, false);
+        }
+
+
         if (openGL) {
             if (!paused) {
                 if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
@@ -1086,6 +1185,21 @@ void MainWindow::onDebugPanel() {
             : QString());
     }
     ApplyDebugToRenderer();
+}
+
+// 打开或关闭变换编辑面板（任务 2.1）。
+void MainWindow::onTransformPanel() {
+    if (!m_transformPanel) return;
+    const bool open = !m_transformPanel->isVisible();
+    m_transformPanel->setVisible(open);
+    if (m_transformButton) {
+        m_transformButton->setStyleSheet(open
+            ? QStringLiteral("background-color: #0078d4; color: #ffffff;")
+            : QString());
+    }
+    if (open) {
+        SyncTransformPanelFromSelection();
+    }
 }
 
 // 把调试视图面板参数写进当前三维渲染器。
@@ -1268,7 +1382,7 @@ void MainWindow::ApplyLightAnalysisToRenderer() {    auto applySun = [this](auto
     m_lastShadowPassTimer.invalidate();
 }
 
-// 用已加载模型包围盒更新阴影范围。
+// 用已加载模型包围盒更新阴影范围（含节点变换，归一化场景空间）。
 void MainWindow::UpdateShadowSceneBounds() {
     Vec3 bboxMin = { std::numeric_limits<float>::max(),
                      std::numeric_limits<float>::max(),
@@ -1280,20 +1394,7 @@ void MainWindow::UpdateShadowSceneBounds() {
 
     for (const LoadedModel& model : m_loadedModels) {
         if (!model.visible) continue;
-        for (const MeshData& mesh : model.asset.meshes) {
-            for (const AssetVertex& vertex : mesh.vertices) {
-                const float x = (vertex.position[0] - m_sceneSourceCenter[0]) * m_sceneNormalizationScale;
-                const float y = (vertex.position[1] - m_sceneSourceCenter[1]) * m_sceneNormalizationScale;
-                const float z = (vertex.position[2] - m_sceneSourceCenter[2]) * m_sceneNormalizationScale;
-                bboxMin.x = std::min(bboxMin.x, x);
-                bboxMin.y = std::min(bboxMin.y, y);
-                bboxMin.z = std::min(bboxMin.z, z);
-                bboxMax.x = std::max(bboxMax.x, x);
-                bboxMax.y = std::max(bboxMax.y, y);
-                bboxMax.z = std::max(bboxMax.z, z);
-                anyVisible = true;
-            }
-        }
+        AccumulateModelBounds(model, bboxMin, bboxMax, anyVisible);
     }
 
     if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
@@ -1433,7 +1534,10 @@ void MainWindow::AddLoadedModel(const QString& filePath, SceneAsset&& asset) {
     m_modelsTreeItem->setExpanded(true);
 
     m_loadedModels.push_back(std::move(model));
-    RebuildSceneMeshes();
+    // 为新模型构建运行时节点层级（保留 glTF 的节点结构）。
+    BuildModelHierarchy(m_loadedModels.back());
+    RebuildSceneMeshes(true);
+    RebuildProjectTree();
     AddRecentFile(filePath);
 }
 
@@ -1460,15 +1564,15 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
         });
     if (it == m_loadedModels.end()) return;
 
-    if (!it->meshes.empty() && m_scene) {
-        if (m_renderer && m_renderer->IsInitialized()) {
-            m_renderer->WaitForIdle();
-        }
-        for (Object* mesh : it->meshes) {
-            if (mesh) m_scene->RemoveChild(mesh);
-        }
-        it->meshes.clear();
+    if (m_renderer && m_renderer->IsInitialized()) {
+        m_renderer->WaitForIdle();
     }
+    // 场景中该模型的根节点为 nodes[0].object；移除它会连带删除整棵子树。
+    if (!it->nodes.empty() && it->nodes[0].object && m_scene) {
+        m_scene->RemoveChild(it->nodes[0].object);
+    }
+    it->nodes.clear();
+    it->meshes.clear();
     // 释放该模型的 GPU 纹理（延迟销毁）。
     ReleaseModelTextures(*it);
 
@@ -1480,10 +1584,12 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
         // 已无剩余模型：复位到默认取景与坐标显示。
         ResetSceneView();
         UpdateShadowSceneBounds();
+        RebuildProjectTree();
     } else {
-        // 剩余模型重新归一化并取景（与“添加模型”对称）。
-        // 否则归一化尺度会残留“被移除的大模型”主导的旧值，导致剩余小模型过小、双击聚焦过远。
-        RebuildSceneMeshes();
+        // 剩余模型重新归一化并重建（与“添加模型”对称）。
+        RebuildSceneMeshes(true);
+        // 模型索引已因 erase 前移，必须重建项目树刷新 UserRole 索引。
+        RebuildProjectTree();
     }
     if (m_materialPanel && m_materialPanel->isVisible()) {
         RebuildMaterialPanel();
@@ -1502,19 +1608,21 @@ void MainWindow::ClearLoadedModels() {
     ReleaseAllModelTextures();
 
     for (LoadedModel& model : m_loadedModels) {
-        if (!model.meshes.empty() && m_scene) {
-            for (Object* mesh : model.meshes) {
-                if (mesh) m_scene->RemoveChild(mesh);
-            }
-            model.meshes.clear();
+        if (!model.nodes.empty() && model.nodes[0].object && m_scene) {
+            m_scene->RemoveChild(model.nodes[0].object);
         }
+        model.nodes.clear();
+        model.meshes.clear();
         delete model.treeItem;
         model.treeItem = nullptr;
     }
     m_loadedModels.clear();
+    m_selectedModel = -1;
+    m_selectedRuntimeNode = -1;
 
     ResetSceneView();
     UpdateShadowSceneBounds();
+    RebuildProjectTree();
     if (m_materialPanel && m_materialPanel->isVisible()) {
         RebuildMaterialPanel();
     }
@@ -1527,6 +1635,11 @@ void MainWindow::ResetSceneView() {
     m_sceneSourceCenter[1] = 0.0f;
     m_sceneSourceCenter[2] = 0.0f;
     m_sceneNormalizationScale = 1.0f;
+    // 场景根承载“归一化矩阵”，复位为单位变换。
+    if (m_scene) {
+        m_scene->SetLocalTransform(Transform{});
+        m_scene->UpdateWorldTransforms(nullptr, false);
+    }
 
     if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
         render3D->SetOrbitCenter(Vec3{});
@@ -1568,42 +1681,27 @@ void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
     Vec3 bboxMax = { std::numeric_limits<float>::lowest(),
                      std::numeric_limits<float>::lowest(),
                      std::numeric_limits<float>::lowest() };
-
-    auto includeModelBounds = [&](const LoadedModel& model) {
-        for (const MeshData& mesh : model.asset.meshes) {
-            for (const AssetVertex& vertex : mesh.vertices) {
-                bboxMin.x = std::min(bboxMin.x, vertex.position[0]);
-                bboxMin.y = std::min(bboxMin.y, vertex.position[1]);
-                bboxMin.z = std::min(bboxMin.z, vertex.position[2]);
-                bboxMax.x = std::max(bboxMax.x, vertex.position[0]);
-                bboxMax.y = std::max(bboxMax.y, vertex.position[1]);
-                bboxMax.z = std::max(bboxMax.z, vertex.position[2]);
-            }
-        }
-    };
+    bool any = false;
 
     if (selectedModel) {
-        includeModelBounds(*selectedModel);
+        // 已含场景归一化，得到归一化场景空间包围盒。
+        AccumulateModelBounds(*selectedModel, bboxMin, bboxMax, any);
     } else {
         for (const LoadedModel& model : m_loadedModels) {
-            includeModelBounds(model);
+            AccumulateModelBounds(model, bboxMin, bboxMax, any);
         }
     }
+    if (!any) return;
 
-    const Vec3 sourceCenter = {
+    const Vec3 normalizedCenter = {
         (bboxMin.x + bboxMax.x) * 0.5f,
         (bboxMin.y + bboxMax.y) * 0.5f,
         (bboxMin.z + bboxMax.z) * 0.5f
     };
-    const Vec3 normalizedCenter = {
-        (sourceCenter.x - m_sceneSourceCenter[0]) * m_sceneNormalizationScale,
-        (sourceCenter.y - m_sceneSourceCenter[1]) * m_sceneNormalizationScale,
-        (sourceCenter.z - m_sceneSourceCenter[2]) * m_sceneNormalizationScale
-    };
 
-    const float sizeX = (bboxMax.x - bboxMin.x) * m_sceneNormalizationScale;
-    const float sizeY = (bboxMax.y - bboxMin.y) * m_sceneNormalizationScale;
-    const float sizeZ = (bboxMax.z - bboxMin.z) * m_sceneNormalizationScale;
+    const float sizeX = bboxMax.x - bboxMin.x;
+    const float sizeY = bboxMax.y - bboxMin.y;
+    const float sizeZ = bboxMax.z - bboxMin.z;
     QWindow* focusWindow = IsOpenGLBackend()
         ? static_cast<QWindow*>(m_openglWindow)
         : static_cast<QWindow*>(m_vulkanWindow);
@@ -1614,8 +1712,9 @@ void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
     constexpr float verticalHalfFov = 0.3926990817f; // 45度 / 2
     const float tanVertical = std::tan(verticalHalfFov);
     const float tanHorizontal = tanVertical * aspect;
-    const float fitDistance = sizeZ * 0.5f +
-        std::max(sizeY * 0.5f / tanVertical,
+    // 归一化场景空间 Z-up：显示深度 = sizeY，屏幕竖直 = sizeZ，水平 = sizeX。
+    const float fitDistance = sizeY * 0.5f +
+        std::max(sizeZ * 0.5f / tanVertical,
                  sizeX * 0.5f / tanHorizontal) + 0.1f;
 
     const float viewDistance = std::max(0.1f, fitDistance);
@@ -1665,8 +1764,14 @@ void MainWindow::ConfigureMeshFactory(Render* renderer) {
     }
 }
 
-// 按当前后端重建场景网格。
+// 按当前后端重建场景网格（默认重算场景归一化）。
 void MainWindow::RebuildSceneMeshes() {
+    RebuildSceneMeshes(true);
+}
+
+// 按当前后端重建场景网格；recomputeNormalization 为 true 时重算场景归一化。
+// 运行时节点层级（model.nodes）在后端切换后保留其逻辑结构，这里只重建场景对象。
+void MainWindow::RebuildSceneMeshes(bool recomputeNormalization) {
     const bool useOpenGL = IsOpenGLBackend()
         && dynamic_cast<GLRender3D*>(m_openglRenderer) != nullptr;
     if (useOpenGL) {
@@ -1677,128 +1782,141 @@ void MainWindow::RebuildSceneMeshes() {
         if (!m_renderer || !m_renderer->IsInitialized() || m_loadedModels.empty()) return;
     }
 
-    Vec3 bboxMin = { std::numeric_limits<float>::max(),
-                     std::numeric_limits<float>::max(),
-                     std::numeric_limits<float>::max() };
-    Vec3 bboxMax = { std::numeric_limits<float>::lowest(),
-                     std::numeric_limits<float>::lowest(),
-                     std::numeric_limits<float>::lowest() };
-
-    for (const LoadedModel& model : m_loadedModels) {
-        for (const MeshData& mesh : model.asset.meshes) {
-            for (const AssetVertex& vertex : mesh.vertices) {
-                bboxMin.x = std::min(bboxMin.x, vertex.position[0]);
-                bboxMin.y = std::min(bboxMin.y, vertex.position[1]);
-                bboxMin.z = std::min(bboxMin.z, vertex.position[2]);
-                bboxMax.x = std::max(bboxMax.x, vertex.position[0]);
-                bboxMax.y = std::max(bboxMax.y, vertex.position[1]);
-                bboxMax.z = std::max(bboxMax.z, vertex.position[2]);
-            }
-        }
+    // 归一化只与“模型空间”的当前变换有关，与后端无关。
+    if (recomputeNormalization) {
+        ComputeSceneNormalization();
     }
-
-    const Vec3 center = {
-        (bboxMin.x + bboxMax.x) * 0.5f,
-        (bboxMin.y + bboxMax.y) * 0.5f,
-        (bboxMin.z + bboxMax.z) * 0.5f
-    };
-    const float sizeX = bboxMax.x - bboxMin.x;
-    const float sizeY = bboxMax.y - bboxMin.y;
-    const float sizeZ = bboxMax.z - bboxMin.z;
-    const float maxSize = std::max({ sizeX, sizeY, sizeZ });
-    const float scale = maxSize > std::numeric_limits<float>::epsilon()
-        ? 2.0f / maxSize
-        : 1.0f;
-    m_sceneSourceCenter[0] = center.x;
-    m_sceneSourceCenter[1] = center.y;
-    m_sceneSourceCenter[2] = center.z;
-    m_sceneNormalizationScale = scale;
-
-    QWindow* viewWindow = useOpenGL
-        ? static_cast<QWindow*>(m_openglWindow)
-        : static_cast<QWindow*>(m_vulkanWindow);
-    const int viewWidth = viewWindow ? viewWindow->width() : 1;
-    const int viewHeight = viewWindow ? viewWindow->height() : 1;
-    const float aspect = static_cast<float>(std::max(1, viewWidth)) /
-                         static_cast<float>(std::max(1, viewHeight));
-    constexpr float verticalHalfFov = 0.3926990817f; // 45° / 2
-    const float tanVertical = std::tan(verticalHalfFov);
-    const float tanHorizontal = tanVertical * aspect;
-    const float halfX = sizeX * scale * 0.5f;
-    const float halfY = sizeY * scale * 0.5f;
-    const float halfZ = sizeZ * scale * 0.5f;
-    const float fitDistance = halfZ +
-        std::max(halfY / tanVertical, halfX / tanHorizontal) + 0.1f;
-    m_sceneViewDistance = std::max(3.0f, fitDistance);
-
-    const bool orthographicEnabled =
-        m_orthographicCheck && m_orthographicCheck->isChecked();
+    // 场景根承载“归一化矩阵”（原始模型坐标 -> 归一化场景空间）。
+    m_scene->SetLocalTransform(TransformFromMatrix(SceneNormalizationMatrix()));
+    // 世界坐标回读需要“归一化场景空间 -> 原始坐标”的反变换（与场景根一致）。
+    const Vec3 normCenter = { m_sceneSourceCenter[0], m_sceneSourceCenter[1],
+                              m_sceneSourceCenter[2] };
     if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
-        render3D->SetOrbitCenter(Vec3{});
-        render3D->ResetView(m_sceneViewDistance);
-        render3D->SetOrthographicEnabled(orthographicEnabled);
-        render3D->SetCoordinateNormalization(center, scale);
+        render3D->SetCoordinateNormalization(normCenter, m_sceneNormalizationScale);
     }
     if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
-        render3D->SetOrbitCenter(Vec3{});
-        render3D->ResetView(m_sceneViewDistance);
-        render3D->SetOrthographicEnabled(orthographicEnabled);
-        render3D->SetCoordinateNormalization(center, scale);
+        render3D->SetCoordinateNormalization(normCenter, m_sceneNormalizationScale);
     }
 
-    if (!useOpenGL && m_renderer) {
+    // 删除旧场景对象前等待 GPU 空闲（避免销毁仍在使用的缓冲/VAO）。
+    if (useOpenGL) {
+        if (m_openglRenderer) m_openglRenderer->WaitForIdle();
+    } else if (m_renderer) {
         m_renderer->WaitForIdle();
     }
-
-    GLRender* glRenderer = useOpenGL ? dynamic_cast<GLRender*>(m_openglRenderer) : nullptr;
-    VKRender* vkRenderer = useOpenGL ? nullptr : dynamic_cast<VKRender*>(m_renderer);
-    if ((useOpenGL && !glRenderer) || (!useOpenGL && !vkRenderer)) return;
-
+    m_scene->Clear();
     for (LoadedModel& model : m_loadedModels) {
-        // 归一化资产顶点坐标（不改原始资产，复制一份用于上传）。
-        // 每个 MeshData 一个 Mesh 对象；节点变换已在解析时烘焙。
-        const size_t meshCount = model.asset.meshes.size();
-        model.meshes.resize(meshCount, nullptr);
-
-        for (size_t meshIndex = 0; meshIndex < meshCount; ++meshIndex) {
-            MeshData normalized = model.asset.meshes[meshIndex];
-            for (AssetVertex& vertex : normalized.vertices) {
-                vertex.position[0] = (vertex.position[0] - center.x) * scale;
-                vertex.position[1] = (vertex.position[1] - center.y) * scale;
-                vertex.position[2] = (vertex.position[2] - center.z) * scale;
-            }
-
-            if (useOpenGL) {
-                auto* glMesh = dynamic_cast<GLMesh*>(model.meshes[meshIndex]);
-                if (!glMesh) {
-                    Object* mesh = m_openglRenderer->CreateMesh();
-                    glMesh = dynamic_cast<GLMesh*>(mesh);
-                    if (!glMesh) {
-                        delete mesh;
-                        continue;
-                    }
-                    glMesh->SetVisible(model.visible);
-                    model.meshes[meshIndex] = glMesh;
-                    m_scene->AddChild(glMesh);
-                }
-                glMesh->SetMeshDataSync(normalized);
-            } else {
-                auto* vkMesh = dynamic_cast<VKMesh*>(model.meshes[meshIndex]);
-                if (!vkMesh) {
-                    Object* mesh = m_renderer->CreateMesh();
-                    vkMesh = dynamic_cast<VKMesh*>(mesh);
-                    if (!vkMesh) {
-                        delete mesh;
-                        continue;
-                    }
-                    vkMesh->SetVisible(model.visible);
-                    model.meshes[meshIndex] = vkMesh;
-                    m_scene->AddChild(vkMesh);
-                }
-                vkMesh->SetMeshData(normalized);
+        model.meshes.clear();
+        for (RuntimeNode& node : model.nodes) {
+            node.object = nullptr;
+            for (RuntimeMesh& mesh : node.meshes) {
+                mesh.object = nullptr;
             }
         }
     }
+
+    for (LoadedModel& model : m_loadedModels) {
+        auto isDeleted = [&model](size_t index) {
+            return index < model.nodeDeleted.size() && model.nodeDeleted[index] != 0;
+        };
+        // 1. 为每个“未删除”的运行时节点创建一个 Layer 场景对象（承载变换）。
+        for (size_t i = 0; i < model.nodes.size(); ++i) {
+            if (isDeleted(i)) continue;
+            auto* layer = new Layer();
+            layer->SetLocalTransform(model.nodes[i].local);
+            layer->SetVisible(true);
+            model.nodes[i].object = layer;
+        }
+        // 2. 为每个网格条目创建网格对象，挂到所属节点。
+        for (size_t i = 0; i < model.nodes.size(); ++i) {
+            if (isDeleted(i)) continue;
+            RuntimeNode& node = model.nodes[i];
+            for (RuntimeMesh& mesh : node.meshes) {
+                if (mesh.assetMeshIndex < 0 ||
+                    mesh.assetMeshIndex >= static_cast<int>(model.asset.meshes.size())) {
+                    continue;
+                }
+                Object* meshObject = CreateMeshObject(model, mesh.assetMeshIndex);
+                mesh.object = meshObject;
+                if (meshObject && node.object) {
+                    node.object->AddChild(meshObject);
+                    model.meshes.push_back(meshObject);
+                }
+            }
+        }
+        // 3. 连接节点父子关系，并把模型根挂到场景根。
+        for (size_t i = 0; i < model.nodes.size(); ++i) {
+            if (isDeleted(i)) continue;
+            RuntimeNode& node = model.nodes[i];
+            if (!node.object) continue;
+            for (int child : node.children) {
+                if (child < 0 || child >= static_cast<int>(model.nodes.size())) continue;
+                if (isDeleted(static_cast<size_t>(child))) continue;
+                if (model.nodes[child].object) {
+                    node.object->AddChild(model.nodes[child].object);
+                }
+            }
+        }
+        if (!model.nodes.empty() && model.nodes[0].object) {
+            m_scene->AddChild(model.nodes[0].object);
+        }
+    }
+
+    // 场景图刷新一次世界矩阵。
+    m_scene->UpdateWorldTransforms(nullptr, false);
+
+    // 场景取景：仅在新模型加入 / 移除 / 后端切换（重算归一化）时复位相机，
+    // 变换编辑（删除/复制节点）不重置相机，避免“改一个节点把视角弹回”。
+    if (recomputeNormalization) {
+        Vec3 bboxMin = { std::numeric_limits<float>::max(),
+                         std::numeric_limits<float>::max(),
+                         std::numeric_limits<float>::max() };
+        Vec3 bboxMax = { std::numeric_limits<float>::lowest(),
+                         std::numeric_limits<float>::lowest(),
+                         std::numeric_limits<float>::lowest() };
+        bool any = false;
+        for (const LoadedModel& model : m_loadedModels) {
+            AccumulateModelBounds(model, bboxMin, bboxMax, any);
+        }
+        const Vec3 center = any
+            ? Vec3{ (bboxMin.x + bboxMax.x) * 0.5f,
+                    (bboxMin.y + bboxMax.y) * 0.5f,
+                    (bboxMin.z + bboxMax.z) * 0.5f }
+            : Vec3{ 0.0f, 0.0f, 0.0f };
+        const float sizeX = any ? (bboxMax.x - bboxMin.x) : 0.0f;
+        const float sizeY = any ? (bboxMax.y - bboxMin.y) : 0.0f;
+        const float sizeZ = any ? (bboxMax.z - bboxMin.z) : 0.0f;
+
+        QWindow* viewWindow = useOpenGL
+            ? static_cast<QWindow*>(m_openglWindow)
+            : static_cast<QWindow*>(m_vulkanWindow);
+        const int viewWidth = viewWindow ? viewWindow->width() : 1;
+        const int viewHeight = viewWindow ? viewWindow->height() : 1;
+        const float aspect = static_cast<float>(std::max(1, viewWidth)) /
+                             static_cast<float>(std::max(1, viewHeight));
+        constexpr float verticalHalfFov = 0.3926990817f; // 45° / 2
+        const float tanVertical = std::tan(verticalHalfFov);
+        const float tanHorizontal = tanVertical * aspect;
+        // 归一化场景空间为 Z-up，显示基础朝向把场景 Z 映射到屏幕上方、场景 Y 映射到
+        // 深度方向。故取景距离：深度 = sizeY，屏幕竖直 = sizeZ，水平 = sizeX。
+        const float fitDistance = sizeY * 0.5f +
+            std::max(sizeZ * 0.5f / tanVertical, sizeX * 0.5f / tanHorizontal) + 0.1f;
+        m_sceneViewDistance = std::max(3.0f, fitDistance);
+
+        const bool orthographicEnabled =
+            m_orthographicCheck && m_orthographicCheck->isChecked();
+        if (auto* render3D = dynamic_cast<VKRender3D*>(m_renderer)) {
+            render3D->SetOrbitCenter(center);
+            render3D->ResetView(m_sceneViewDistance);
+            render3D->SetOrthographicEnabled(orthographicEnabled);
+        }
+        if (auto* render3D = dynamic_cast<GLRender3D*>(m_openglRenderer)) {
+            render3D->SetOrbitCenter(center);
+            render3D->ResetView(m_sceneViewDistance);
+            render3D->SetOrthographicEnabled(orthographicEnabled);
+        }
+    }
+
     // 网格就绪后导入纹理（CPU 缓存 + 当前后端 GPU 上传）。
     ImportModelTextures();
     // 纹理句柄就绪后，构建逐 SubMesh 绘制信息（材质 + 纹理 + 可见性）。
@@ -1806,35 +1924,57 @@ void MainWindow::RebuildSceneMeshes() {
     UpdateShadowSceneBounds();
 }
 
+// 为一个网格资产创建网格对象（按当前后端）并上传其“节点局部空间”顶点。
+Object* MainWindow::CreateMeshObject(LoadedModel& model, int assetMeshIndex) {
+    if (assetMeshIndex < 0 || assetMeshIndex >= static_cast<int>(model.asset.meshes.size())) {
+        return nullptr;
+    }
+    const bool useOpenGL = IsOpenGLBackend();
+    Render* active = useOpenGL
+        ? static_cast<Render*>(m_openglRenderer)
+        : static_cast<Render*>(m_renderer);
+    if (!active) return nullptr;
+
+    Object* object = active->CreateMesh();
+    if (!object) return nullptr;
+    object->SetVisible(model.visible);
+
+    // 任务 2.1：顶点按“节点局部空间”上传，不再做 CPU 归一化；变换由场景图施加。
+    const MeshData& mesh = model.asset.meshes[static_cast<size_t>(assetMeshIndex)];
+    if (auto* vkMesh = dynamic_cast<VKMesh*>(object)) {
+        vkMesh->SetMeshData(mesh);
+    } else if (auto* glMesh = dynamic_cast<GLMesh*>(object)) {
+        glMesh->SetMeshDataSync(mesh);
+    }
+    return object;
+}
+
 // 为所有已加载模型的网格构建逐 SubMesh 绘制信息。
 void MainWindow::RebuildSubMeshDrawInfos() {
-    const Vec3 center = {
-        m_sceneSourceCenter[0], m_sceneSourceCenter[1], m_sceneSourceCenter[2] };
-    const float scale = m_sceneNormalizationScale;
-
     for (LoadedModel& model : m_loadedModels) {
-        for (size_t meshIndex = 0; meshIndex < model.asset.meshes.size(); ++meshIndex) {
-            if (meshIndex >= model.meshes.size() || !model.meshes[meshIndex]) continue;
-            // 与上传一致：归一化顶点坐标后再计算 SubMesh 中心/半径。
-            MeshData normalized = model.asset.meshes[meshIndex];
-            for (AssetVertex& vertex : normalized.vertices) {
-                vertex.position[0] = (vertex.position[0] - center.x) * scale;
-                vertex.position[1] = (vertex.position[1] - center.y) * scale;
-                vertex.position[2] = (vertex.position[2] - center.z) * scale;
-            }
-            std::vector<SubMeshDrawInfo> infos = BuildSubMeshDrawInfos(
-                normalized, model.asset.materials, model.textureHandles);
-            // 应用已保存的材质可见性。
-            for (SubMeshDrawInfo& info : infos) {
-                const auto found = model.materialVisible.find(info.materialIndex);
-                if (found != model.materialVisible.end()) {
-                    info.visible = found->second;
+        for (RuntimeNode& node : model.nodes) {
+            for (RuntimeMesh& mesh : node.meshes) {
+                if (!mesh.object) continue;
+                if (mesh.assetMeshIndex < 0 ||
+                    mesh.assetMeshIndex >= static_cast<int>(model.asset.meshes.size())) {
+                    continue;
                 }
-            }
-            if (auto* vkMesh = dynamic_cast<VKMesh*>(model.meshes[meshIndex])) {
-                vkMesh->SetSubMeshDrawInfos(std::move(infos));
-            } else if (auto* glMesh = dynamic_cast<GLMesh*>(model.meshes[meshIndex])) {
-                glMesh->SetSubMeshDrawInfos(std::move(infos));
+                const MeshData& source =
+                    model.asset.meshes[static_cast<size_t>(mesh.assetMeshIndex)];
+                std::vector<SubMeshDrawInfo> infos = BuildSubMeshDrawInfos(
+                    source, model.asset.materials, model.textureHandles);
+                // 应用已保存的材质可见性。
+                for (SubMeshDrawInfo& info : infos) {
+                    const auto found = model.materialVisible.find(info.materialIndex);
+                    if (found != model.materialVisible.end()) {
+                        info.visible = found->second;
+                    }
+                }
+                if (auto* vkMesh = dynamic_cast<VKMesh*>(mesh.object)) {
+                    vkMesh->SetSubMeshDrawInfos(std::move(infos));
+                } else if (auto* glMesh = dynamic_cast<GLMesh*>(mesh.object)) {
+                    glMesh->SetSubMeshDrawInfos(std::move(infos));
+                }
             }
         }
     }
@@ -1844,10 +1984,519 @@ void MainWindow::RebuildSubMeshDrawInfos() {
     }
 }
 
+// ---------------- 任务 2.1：运行时节点层级 / 变换编辑 ----------------
+
+// 为一个模型构建运行时节点层级（模型根 + 各资产节点 + 网格挂载）。
+void MainWindow::BuildModelHierarchy(LoadedModel& model) {
+    model.nodes.clear();
+    model.nodeDeleted.clear();
+
+    const bool hasNodes = !model.asset.nodes.empty();
+
+    // 模型根节点：统一做 Y-up -> Z-up 旋转（+90° 绕 X），把资产数据的上轴对齐到
+    // Z-up 世界。glTF 规范为 Y-up；OBJ 无上轴元数据，这里按通用 Y-up 约定处理。
+    // 渲染器显示变换含一个 -90° 绕 X 的基础朝向，两者相消，故初始画面与旧版一致。
+    RuntimeNode root;
+    root.name = model.treeItem ? model.treeItem->text(0).toStdString() : std::string("模型");
+    root.parent = -1;
+    root.sourceAssetNode = -1;
+    root.local.rotationDegrees = { 90.0f, 0.0f, 0.0f };
+    root.defaultLocal = root.local;
+    model.nodes.push_back(root);
+    model.nodeDeleted.push_back(0);
+
+    if (hasNodes) {
+        // 资产节点 -> 运行时节点索引。
+        std::vector<int> assetToRuntime(model.asset.nodes.size(), -1);
+        for (size_t i = 0; i < model.asset.nodes.size(); ++i) {
+            RuntimeNode node;
+            node.name = model.asset.nodes[i].name;
+            node.sourceAssetNode = static_cast<int>(i);
+            node.parent = -1;
+            node.local = TransformFromMatrix(model.asset.nodes[i].localTransform);
+            node.defaultLocal = node.local;
+            assetToRuntime[i] = static_cast<int>(model.nodes.size());
+            model.nodes.push_back(node);
+            model.nodeDeleted.push_back(0);
+        }
+        // 连接父子（根节点默认挂到模型根）。
+        for (size_t i = 0; i < model.asset.nodes.size(); ++i) {
+            const int runtime = assetToRuntime[i];
+            const int parentAsset = model.asset.nodes[i].parent;
+            int parentRuntime = 0;
+            if (parentAsset >= 0 && parentAsset < static_cast<int>(assetToRuntime.size()) &&
+                assetToRuntime[static_cast<size_t>(parentAsset)] >= 0) {
+                parentRuntime = assetToRuntime[static_cast<size_t>(parentAsset)];
+            }
+            model.nodes[runtime].parent = parentRuntime;
+            model.nodes[parentRuntime].children.push_back(runtime);
+        }
+    }
+
+    // 挂载网格：glTF 按 MeshData::nodeIndex 挂到对应运行时节点；OBJ 挂到模型根。
+    for (size_t mi = 0; mi < model.asset.meshes.size(); ++mi) {
+        const int nodeIndex = model.asset.meshes[mi].nodeIndex;
+        int target = 0;
+        if (nodeIndex >= 0 && hasNodes) {
+            for (size_t r = 0; r < model.nodes.size(); ++r) {
+                if (model.nodes[r].sourceAssetNode == nodeIndex) {
+                    target = static_cast<int>(r);
+                    break;
+                }
+            }
+        }
+        RuntimeMesh mesh;
+        mesh.assetMeshIndex = static_cast<int>(mi);
+        mesh.object = nullptr;
+        model.nodes[target].meshes.push_back(mesh);
+    }
+}
+
+// 计算某运行时节点在“模型空间”（含模型根变换，不含场景归一化）的世界矩阵。
+Mat4 MainWindow::ModelSpaceNodeMatrix(const LoadedModel& model, int runtimeNode) const {
+    std::vector<int> chain;
+    int cur = runtimeNode;
+    while (cur >= 0 && cur < static_cast<int>(model.nodes.size())) {
+        chain.push_back(cur);
+        cur = model.nodes[cur].parent;
+    }
+    Mat4 result = TransformIdentityMatrix();
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        result = TransformMultiply(result, model.nodes[*it].local.ToMatrix());
+    }
+    return result;
+}
+
+// 场景归一化矩阵 M_norm（原始模型坐标 -> 归一化场景空间）= S * T(-center)。
+Mat4 MainWindow::SceneNormalizationMatrix() const {
+    const float s = m_sceneNormalizationScale;
+    const Mat4 scale = TransformMatrixFromTrs(
+        Vec3{ 0.0f, 0.0f, 0.0f }, Vec3{ 0.0f, 0.0f, 0.0f }, Vec3{ s, s, s });
+    const Mat4 translate = TransformMatrixFromTrs(
+        Vec3{ -m_sceneSourceCenter[0], -m_sceneSourceCenter[1], -m_sceneSourceCenter[2] },
+        Vec3{ 0.0f, 0.0f, 0.0f }, Vec3{ 1.0f, 1.0f, 1.0f });
+    return TransformMultiply(scale, translate);
+}
+
+// 累计某模型所有网格在“归一化场景空间”的包围盒（含场景归一化）。
+void MainWindow::AccumulateModelBounds(const LoadedModel& model, Vec3& boundsMin,
+                                       Vec3& boundsMax, bool& any) const {
+    const Mat4 norm = SceneNormalizationMatrix();
+    for (size_t r = 0; r < model.nodes.size(); ++r) {
+        if (r < model.nodeDeleted.size() && model.nodeDeleted[r]) continue;
+        const Mat4 world = TransformMultiply(norm, ModelSpaceNodeMatrix(model, static_cast<int>(r)));
+        for (const RuntimeMesh& mesh : model.nodes[r].meshes) {
+            if (mesh.assetMeshIndex < 0 ||
+                mesh.assetMeshIndex >= static_cast<int>(model.asset.meshes.size())) {
+                continue;
+            }
+            const Aabb& box = model.asset.meshes[static_cast<size_t>(mesh.assetMeshIndex)].bounds;
+            const Vec3 corners[8] = {
+                { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
+                { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
+                { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
+                { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z }
+            };
+            for (const Vec3& c : corners) {
+                const Vec3 p = TransformPoint(world, c);
+                boundsMin.x = std::min(boundsMin.x, p.x);
+                boundsMin.y = std::min(boundsMin.y, p.y);
+                boundsMin.z = std::min(boundsMin.z, p.z);
+                boundsMax.x = std::max(boundsMax.x, p.x);
+                boundsMax.y = std::max(boundsMax.y, p.y);
+                boundsMax.z = std::max(boundsMax.z, p.z);
+                any = true;
+            }
+        }
+    }
+}
+
+// 计算场景归一化：更新 m_sceneSourceCenter / m_sceneNormalizationScale。
+void MainWindow::ComputeSceneNormalization() {
+    Vec3 boundsMin = { std::numeric_limits<float>::max(),
+                       std::numeric_limits<float>::max(),
+                       std::numeric_limits<float>::max() };
+    Vec3 boundsMax = { std::numeric_limits<float>::lowest(),
+                       std::numeric_limits<float>::lowest(),
+                       std::numeric_limits<float>::lowest() };
+    bool any = false;
+    // 在“模型空间”累计（不含归一化，否则会自引用）。
+    for (const LoadedModel& model : m_loadedModels) {
+        for (size_t r = 0; r < model.nodes.size(); ++r) {
+            if (r < model.nodeDeleted.size() && model.nodeDeleted[r]) continue;
+            const Mat4 world = ModelSpaceNodeMatrix(model, static_cast<int>(r));
+            for (const RuntimeMesh& mesh : model.nodes[r].meshes) {
+                if (mesh.assetMeshIndex < 0 ||
+                    mesh.assetMeshIndex >= static_cast<int>(model.asset.meshes.size())) {
+                    continue;
+                }
+                const Aabb& box =
+                    model.asset.meshes[static_cast<size_t>(mesh.assetMeshIndex)].bounds;
+                const Vec3 corners[8] = {
+                    { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
+                    { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
+                    { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
+                    { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z }
+                };
+                for (const Vec3& c : corners) {
+                    const Vec3 p = TransformPoint(world, c);
+                    boundsMin.x = std::min(boundsMin.x, p.x);
+                    boundsMin.y = std::min(boundsMin.y, p.y);
+                    boundsMin.z = std::min(boundsMin.z, p.z);
+                    boundsMax.x = std::max(boundsMax.x, p.x);
+                    boundsMax.y = std::max(boundsMax.y, p.y);
+                    boundsMax.z = std::max(boundsMax.z, p.z);
+                    any = true;
+                }
+            }
+        }
+    }
+
+    if (!any) {
+        m_sceneSourceCenter[0] = 0.0f;
+        m_sceneSourceCenter[1] = 0.0f;
+        m_sceneSourceCenter[2] = 0.0f;
+        m_sceneNormalizationScale = 1.0f;
+        return;
+    }
+    const Vec3 center = {
+        (boundsMin.x + boundsMax.x) * 0.5f,
+        (boundsMin.y + boundsMax.y) * 0.5f,
+        (boundsMin.z + boundsMax.z) * 0.5f
+    };
+    const float maxSize = std::max({ boundsMax.x - boundsMin.x,
+                                     boundsMax.y - boundsMin.y,
+                                     boundsMax.z - boundsMin.z });
+    const float scale = maxSize > std::numeric_limits<float>::epsilon()
+        ? 2.0f / maxSize : 1.0f;
+    m_sceneSourceCenter[0] = center.x;
+    m_sceneSourceCenter[1] = center.y;
+    m_sceneSourceCenter[2] = center.z;
+    m_sceneNormalizationScale = scale;
+}
+
+// 变换变更后：刷新阴影范围（世界矩阵在渲染循环中按脏标记刷新）。
+void MainWindow::RefreshAfterTransformChange() {
+    UpdateShadowSceneBounds();
+    m_lastShadowPassTimer.invalidate();
+}
+
+// 重建项目树的节点层级。
+void MainWindow::RebuildProjectTree() {
+    if (!m_projectPanel || !m_modelsTreeItem) return;
+    const QSignalBlocker blocker(m_projectPanel);
+    // 清除旧节点项（保留模型项本身）。
+    for (size_t i = 0; i < m_loadedModels.size(); ++i) {
+        LoadedModel& model = m_loadedModels[i];
+        if (!model.treeItem) {
+            model.treeItem = new QTreeWidgetItem(m_modelsTreeItem);
+            model.treeItem->setText(0,
+                QFileInfo(QString::fromStdString(model.asset.sourcePath)).fileName());
+        } else if (model.treeItem->parent() != m_modelsTreeItem) {
+            model.treeItem->parent()->removeChild(model.treeItem);
+            m_modelsTreeItem->addChild(model.treeItem);
+        }
+        model.treeItem->setData(0, Qt::UserRole, static_cast<int>(i));
+        // 模型项自身映射到模型根节点（nodes[0]）：OBJ 等无子节点的模型也可直接编辑其根变换。
+        model.treeItem->setData(0, Qt::UserRole + 1, 0);
+        // 清掉旧节点项（takeChildren 转移所有权，需手动释放）。
+        const QList<QTreeWidgetItem*> oldChildren = model.treeItem->takeChildren();
+        for (QTreeWidgetItem* child : oldChildren) {
+            delete child;
+        }
+        PopulateNodeTreeItems(i, 0, model.treeItem);
+        model.treeItem->setExpanded(true);
+    }
+    m_modelsTreeItem->setExpanded(true);
+}
+
+// 把某模型节点层级写入项目树。
+void MainWindow::PopulateNodeTreeItems(size_t modelIndex, int runtimeNode,
+                                       QTreeWidgetItem* parentItem) {
+    LoadedModel& model = m_loadedModels[modelIndex];
+    if (runtimeNode < 0 || runtimeNode >= static_cast<int>(model.nodes.size())) return;
+    if (runtimeNode < static_cast<int>(model.nodeDeleted.size()) && model.nodeDeleted[runtimeNode]) {
+        return;
+    }
+    const RuntimeNode& node = model.nodes[runtimeNode];
+    // 模型根（0）不再单列一项，其子节点直接挂在模型项下。
+    QTreeWidgetItem* item = parentItem;
+    if (runtimeNode != 0) {
+        item = new QTreeWidgetItem(parentItem);
+        QString label = node.name.empty()
+            ? QStringLiteral("节点 %1").arg(runtimeNode)
+            : QString::fromStdString(node.name);
+        if (node.isClone) label += QStringLiteral("（副本）");
+        item->setText(0, label);
+        item->setData(0, Qt::UserRole, static_cast<int>(modelIndex));
+        item->setData(0, Qt::UserRole + 1, runtimeNode);
+        item->setExpanded(true);
+    }
+    for (int child : node.children) {
+        PopulateNodeTreeItems(modelIndex, child, item);
+    }
+}
+
+// 找到项目树项对应的模型索引；无效返回 -1。
+int MainWindow::FindModelIndexByTreeItem(QTreeWidgetItem* item) const {
+    if (!item) return -1;
+    // 节点项直接带有模型索引。
+    const QVariant modelData = item->data(0, Qt::UserRole);
+    const QVariant nodeData = item->data(0, Qt::UserRole + 1);
+    if (modelData.isValid() && nodeData.isValid() && nodeData.toInt() >= 0) {
+        return modelData.toInt();
+    }
+    // 模型项：与 model.treeItem 比对。
+    for (size_t i = 0; i < m_loadedModels.size(); ++i) {
+        if (m_loadedModels[i].treeItem == item) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+// 解析项目树项对应的 (模型索引, 运行时节点索引)；无效返回 false。
+bool MainWindow::ResolveTreeItem(QTreeWidgetItem* item, size_t& modelIndex,
+                                 int& runtimeNode) const {
+    if (!item) return false;
+    const QVariant modelData = item->data(0, Qt::UserRole);
+    const QVariant nodeData = item->data(0, Qt::UserRole + 1);
+    if (!modelData.isValid() || !nodeData.isValid()) return false;
+    const int mi = modelData.toInt();
+    const int rn = nodeData.toInt();
+    if (mi < 0 || mi >= static_cast<int>(m_loadedModels.size())) return false;
+    if (rn < 0 || rn >= static_cast<int>(m_loadedModels[static_cast<size_t>(mi)].nodes.size())) {
+        return false;
+    }
+    modelIndex = static_cast<size_t>(mi);
+    runtimeNode = rn;
+    return true;
+}
+
+// 项目树选择变化：刷新变换面板。
+void MainWindow::OnProjectSelectionChanged() {
+    if (!m_projectPanel) return;
+    QTreeWidgetItem* item = m_projectPanel->currentItem();
+    size_t modelIndex = 0;
+    int runtimeNode = -1;
+    if (item && ResolveTreeItem(item, modelIndex, runtimeNode)) {
+        m_selectedModel = static_cast<int>(modelIndex);
+        m_selectedRuntimeNode = runtimeNode;
+    } else {
+        m_selectedModel = -1;
+        m_selectedRuntimeNode = -1;
+    }
+    SyncTransformPanelFromSelection();
+}
+
+// 用选中节点的变换刷新变换面板。
+void MainWindow::SyncTransformPanelFromSelection() {
+    m_syncingTransformPanel = true;
+    auto setSpins = [this](QDoubleSpinBox* sx, QDoubleSpinBox* sy, QDoubleSpinBox* sz,
+                           const Vec3& v) {
+        if (sx) sx->setValue(v.x);
+        if (sy) sy->setValue(v.y);
+        if (sz) sz->setValue(v.z);
+    };
+    const bool valid = m_selectedModel >= 0 &&
+        m_selectedModel < static_cast<int>(m_loadedModels.size()) &&
+        m_selectedRuntimeNode >= 0 &&
+        m_selectedRuntimeNode <
+            static_cast<int>(m_loadedModels[static_cast<size_t>(m_selectedModel)].nodes.size());
+    if (valid) {
+        const LoadedModel& model = m_loadedModels[static_cast<size_t>(m_selectedModel)];
+        const RuntimeNode& node = model.nodes[static_cast<size_t>(m_selectedRuntimeNode)];
+        setSpins(m_spinTransX, m_spinTransY, m_spinTransZ, node.local.translation);
+        setSpins(m_spinRotX, m_spinRotY, m_spinRotZ, node.local.rotationDegrees);
+        setSpins(m_spinScaleX, m_spinScaleY, m_spinScaleZ, node.local.scale);
+        if (m_transformSelectionLabel) {
+            QString label = node.name.empty()
+                ? QStringLiteral("节点 %1").arg(m_selectedRuntimeNode)
+                : QString::fromStdString(node.name);
+            if (m_selectedRuntimeNode == 0) label = QStringLiteral("模型根（%1）").arg(label);
+            m_transformSelectionLabel->setText(QStringLiteral("选中：%1").arg(label));
+        }
+    } else {
+        setSpins(m_spinTransX, m_spinTransY, m_spinTransZ, Vec3{ 0, 0, 0 });
+        setSpins(m_spinRotX, m_spinRotY, m_spinRotZ, Vec3{ 0, 0, 0 });
+        setSpins(m_spinScaleX, m_spinScaleY, m_spinScaleZ, Vec3{ 1, 1, 1 });
+        if (m_transformSelectionLabel) {
+            m_transformSelectionLabel->setText(QStringLiteral("未选中节点"));
+        }
+    }
+    m_syncingTransformPanel = false;
+}
+
+// 把变换面板数值写入当前选中节点。
+void MainWindow::ApplyTransformPanelToSelection() {
+    if (m_syncingTransformPanel) return;
+    if (m_selectedModel < 0 || m_selectedModel >= static_cast<int>(m_loadedModels.size())) return;
+    LoadedModel& model = m_loadedModels[static_cast<size_t>(m_selectedModel)];
+    if (m_selectedRuntimeNode < 0 ||
+        m_selectedRuntimeNode >= static_cast<int>(model.nodes.size())) return;
+
+    RuntimeNode& node = model.nodes[static_cast<size_t>(m_selectedRuntimeNode)];
+    node.local.translation = Vec3{
+        static_cast<float>(m_spinTransX ? m_spinTransX->value() : 0.0),
+        static_cast<float>(m_spinTransY ? m_spinTransY->value() : 0.0),
+        static_cast<float>(m_spinTransZ ? m_spinTransZ->value() : 0.0) };
+    node.local.rotationDegrees = Vec3{
+        static_cast<float>(m_spinRotX ? m_spinRotX->value() : 0.0),
+        static_cast<float>(m_spinRotY ? m_spinRotY->value() : 0.0),
+        static_cast<float>(m_spinRotZ ? m_spinRotZ->value() : 0.0) };
+    node.local.scale = Vec3{
+        static_cast<float>(m_spinScaleX ? m_spinScaleX->value() : 1.0),
+        static_cast<float>(m_spinScaleY ? m_spinScaleY->value() : 1.0),
+        static_cast<float>(m_spinScaleZ ? m_spinScaleZ->value() : 1.0) };
+    if (node.object) {
+        node.object->SetLocalTransform(node.local);
+    }
+    RefreshAfterTransformChange();
+}
+
+// 选中节点：重置变换。
+void MainWindow::ResetSelectedNodeTransform() {
+    if (m_selectedModel < 0 || m_selectedModel >= static_cast<int>(m_loadedModels.size())) return;
+    LoadedModel& model = m_loadedModels[static_cast<size_t>(m_selectedModel)];
+    if (m_selectedRuntimeNode < 0 ||
+        m_selectedRuntimeNode >= static_cast<int>(model.nodes.size())) return;
+    RuntimeNode& node = model.nodes[static_cast<size_t>(m_selectedRuntimeNode)];
+    node.local = node.defaultLocal;
+    if (node.object) node.object->SetLocalTransform(node.local);
+    SyncTransformPanelFromSelection();
+    RefreshAfterTransformChange();
+}
+
+// 标记某运行时节点及其整棵子树为“已删除”。
+void MainWindow::MarkSubtreeDeleted(LoadedModel& model, int runtimeNode) {
+    if (runtimeNode < 0 || runtimeNode >= static_cast<int>(model.nodes.size())) return;
+    if (runtimeNode == 0) return;  // 模型根不可删除
+    model.nodeDeleted[static_cast<size_t>(runtimeNode)] = 1;
+    for (int child : model.nodes[static_cast<size_t>(runtimeNode)].children) {
+        MarkSubtreeDeleted(model, child);
+    }
+}
+
+// 选中节点：删除（含子树）。
+void MainWindow::DeleteSelectedNode() {
+    if (m_selectedModel < 0 || m_selectedModel >= static_cast<int>(m_loadedModels.size())) return;
+    LoadedModel& model = m_loadedModels[static_cast<size_t>(m_selectedModel)];
+    if (m_selectedRuntimeNode <= 0 ||
+        m_selectedRuntimeNode >= static_cast<int>(model.nodes.size())) {
+        ShowMessage(QStringLiteral("请选择一个子节点后再删除（模型根不可删除）。"), true);
+        return;
+    }
+    MarkSubtreeDeleted(model, m_selectedRuntimeNode);
+    m_selectedRuntimeNode = -1;
+    SyncTransformPanelFromSelection();
+    RebuildSceneMeshes(false);
+    RebuildProjectTree();
+    RefreshAfterTransformChange();
+}
+
+// 深拷贝某运行时节点子树；返回新根运行时索引。
+int MainWindow::CloneRuntimeSubtree(LoadedModel& model, int srcRuntimeNode, int newParent,
+                                    const Vec3& translationOffset) {
+    if (srcRuntimeNode < 0 || srcRuntimeNode >= static_cast<int>(model.nodes.size())) return -1;
+
+    // 先收集子树节点（DFS 顺序，父先于子）。
+    std::vector<int> order;
+    std::vector<int> stack;
+    stack.push_back(srcRuntimeNode);
+    while (!stack.empty()) {
+        const int cur = stack.back();
+        stack.pop_back();
+        order.push_back(cur);
+        const std::vector<int>& children = model.nodes[static_cast<size_t>(cur)].children;
+        for (auto it = children.rbegin(); it != children.rend(); ++it) {
+            stack.push_back(*it);
+        }
+    }
+
+    // 复制节点，建立 旧索引 -> 新索引 映射。
+    std::unordered_map<int, int> remap;
+    for (int oldIndex : order) {
+        RuntimeNode copy = model.nodes[static_cast<size_t>(oldIndex)];
+        copy.object = nullptr;
+        copy.children.clear();
+        copy.isClone = true;
+        if (oldIndex == srcRuntimeNode) {
+            copy.local.translation.x += translationOffset.x;
+            copy.local.translation.y += translationOffset.y;
+            copy.local.translation.z += translationOffset.z;
+        }
+        const int newIndex = static_cast<int>(model.nodes.size());
+        remap[oldIndex] = newIndex;
+        model.nodes.push_back(copy);
+        model.nodeDeleted.push_back(0);
+    }
+    // 重连父子。
+    for (int oldIndex : order) {
+        const int newIndex = remap[oldIndex];
+        for (int child : model.nodes[static_cast<size_t>(oldIndex)].children) {
+            const auto found = remap.find(child);
+            if (found != remap.end()) {
+                model.nodes[static_cast<size_t>(newIndex)].children.push_back(found->second);
+                model.nodes[static_cast<size_t>(found->second)].parent = newIndex;
+            }
+        }
+    }
+    // 挂到新父（或模型根）。
+    const int newRoot = remap[srcRuntimeNode];
+    const int parentRuntime =
+        (newParent >= 0 && newParent < static_cast<int>(model.nodes.size())) ? newParent : 0;
+    model.nodes[static_cast<size_t>(newRoot)].parent = parentRuntime;
+    model.nodes[static_cast<size_t>(parentRuntime)].children.push_back(newRoot);
+    return newRoot;
+}
+
+// 选中节点：复制（含子树）。
+void MainWindow::CopySelectedNode() {
+    if (m_selectedModel < 0 || m_selectedModel >= static_cast<int>(m_loadedModels.size())) return;
+    LoadedModel& model = m_loadedModels[static_cast<size_t>(m_selectedModel)];
+    if (m_selectedRuntimeNode < 0 ||
+        m_selectedRuntimeNode >= static_cast<int>(model.nodes.size())) return;
+
+    // 复制为同级节点（父不变）。
+    const int parent = model.nodes[static_cast<size_t>(m_selectedRuntimeNode)].parent;
+    const Vec3 offset{ 0.0f, 0.0f, 0.0f };
+    const int newRoot = CloneRuntimeSubtree(model, m_selectedRuntimeNode, parent, offset);
+    if (newRoot < 0) return;
+
+    // 重建场景与项目树；选中新副本。
+    RebuildSceneMeshes(false);
+    RebuildProjectTree();
+    m_selectedRuntimeNode = newRoot;
+    // 在项目树中定位新副本项并选中。
+    if (m_projectPanel) {
+        std::function<QTreeWidgetItem*(QTreeWidgetItem*)> find = [&](QTreeWidgetItem* item)
+            -> QTreeWidgetItem* {
+            if (!item) return nullptr;
+            const QVariant nd = item->data(0, Qt::UserRole + 1);
+            if (nd.isValid() && nd.toInt() == newRoot) return item;
+            for (int i = 0; i < item->childCount(); ++i) {
+                if (QTreeWidgetItem* found = find(item->child(i))) return found;
+            }
+            return nullptr;
+        };
+        for (int i = 0; i < m_modelsTreeItem->childCount(); ++i) {
+            if (QTreeWidgetItem* found = find(m_modelsTreeItem->child(i))) {
+                m_projectPanel->setCurrentItem(found);
+                break;
+            }
+        }
+    }
+    RefreshAfterTransformChange();
+}
+
 // 把模型上的网格指针置空。
 void MainWindow::ResetLoadedMeshPointers() {
     for (LoadedModel& model : m_loadedModels) {
         model.meshes.clear();
+        for (RuntimeNode& node : model.nodes) {
+            node.object = nullptr;
+            for (RuntimeMesh& mesh : node.meshes) {
+                mesh.object = nullptr;
+            }
+        }
         // 旧渲染器即将销毁，其 GPU 纹理句柄随之失效。
         model.textureHandles.clear();
         model.texturesImported = false;

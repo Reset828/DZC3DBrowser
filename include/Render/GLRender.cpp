@@ -851,6 +851,9 @@ bool GLRender3D::CreateUniformBuffers() {
     m_uNormalTextureLoc = m_functions->glGetUniformLocation(m_program, "normalTexture");
     m_uOcclusionTextureLoc = m_functions->glGetUniformLocation(m_program, "occlusionTexture");
     m_uEmissiveTextureLoc = m_functions->glGetUniformLocation(m_program, "emissiveTexture");
+    // 逐对象世界矩阵 uniform（任务 2.1）：主程序与阴影程序各自的位置。
+    m_uObjectModelLoc = m_functions->glGetUniformLocation(m_program, "uObjectModel");
+    m_uShadowObjectModelLoc = m_functions->glGetUniformLocation(m_shadowProgram, "uObjectModel");
     m_functions->glUseProgram(m_program);
     if (m_uBaseColorTextureLoc >= 0) {
         m_functions->glUniform1i(m_uBaseColorTextureLoc, kMaterialTextureUnit);
@@ -887,8 +890,14 @@ void GLRender3D::UpdateUniformBuffer() {
     float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
 
     const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
+    // 场景基础朝向（任务 2.1）：归一化场景空间为 Z-up（+Z 上），而相机基向量仍为
+    // view up=+Y。用固定旋转 R（绕 X 轴 -90°）把场景 +Z 映射到显示 +Y，使模型竖直显示。
+    // R 紧贴平移中心之后（轨道旋转之内侧），故轨道旋转/平移/约束/回读数学与旧版完全一致。
+    const glm::mat4 sceneBase = glm::rotate(
+        glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
     const glm::mat4 model = glm::translate(glm::mat4(1.0f), m_panOffset)
         * glm::mat4_cast(m_modelRotation)
+        * sceneBase
         * glm::translate(glm::mat4(1.0f), -m_orbitCenter);
     const glm::mat4 view = glm::lookAt(
         eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -934,12 +943,13 @@ void GLRender3D::UpdateUniformBuffer() {
     ubo.shadowOptions[2] = m_wireframeMode ? 1.0f : 0.0f;
     // OpenGL 窗口 Y 向上：dFdy 无需取反（与着色器默认一致）。
     ubo.shadowOptions[3] = 0.0f;
-    // PBR 视线向量：把相机（世界空间）变换到物体空间，与物体空间法线/太阳方向一致。
+    // PBR 视线向量：把相机（显示世界空间）变换到“归一化场景空间”（着色空间，
+    // 即 ubo.model 之前），与片元的 fragObjectPosition、物体空间太阳方向一致。
     const glm::vec3 cameraObject = glm::vec3(glm::inverse(model) * glm::vec4(eye, 1.0f));
-    ubo.cameraObjectPosition[0] = cameraObject.x;
-    ubo.cameraObjectPosition[1] = cameraObject.y;
-    ubo.cameraObjectPosition[2] = cameraObject.z;
-    ubo.cameraObjectPosition[3] = 0.0f;
+    ubo.cameraWorldPosition[0] = cameraObject.x;
+    ubo.cameraWorldPosition[1] = cameraObject.y;
+    ubo.cameraWorldPosition[2] = cameraObject.z;
+    ubo.cameraWorldPosition[3] = 0.0f;
     // 1.7：半球环境光（线性）。
     ubo.ambientSkyColor[0] = m_ambientSkyColor.x;
     ubo.ambientSkyColor[1] = m_ambientSkyColor.y;
@@ -1070,10 +1080,30 @@ void GLRender3D::ApplyMaterial(const MaterialParams& params, const MaterialTextu
     bindTexture(textures.emissive, whiteTexture, kEmissiveTextureUnit);
 }
 
+// 设置当前对象的逐对象世界矩阵（任务 2.1）：按当前激活的程序选择 uniform 位置。
+void GLRender3D::SetObjectModelMatrix(const float model[16]) {
+    if (!m_functions || !model) return;
+    // 以“当前绑定的程序”为准选择 uniform 位置，避免依赖成员状态。
+    GLint boundProgram = 0;
+    m_functions->glGetIntegerv(GL_CURRENT_PROGRAM, &boundProgram);
+    const int location = (static_cast<unsigned int>(boundProgram) == m_shadowProgram &&
+                          m_shadowProgram != 0)
+        ? m_uShadowObjectModelLoc
+        : m_uObjectModelLoc;
+    if (location >= 0) {
+        // 矩阵为列主序，与 GLSL 一致，transpose = GL_FALSE。
+        m_functions->glUniformMatrix4fv(location, 1, GL_FALSE, model);
+    }
+}
+
 // 计算点（上传坐标空间）到相机的距离，用于透明排序。
 float GLRender3D::ComputeDrawDistance(const float center[3]) const {
     const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
+    // 与 UpdateUniformBuffer 的显示变换保持一致（含场景基础朝向）。
+    const glm::mat4 sceneBase = glm::rotate(
+        glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
     const glm::mat4 model = glm::translate(glm::mat4(1.0f), m_panOffset)
+        * sceneBase
         * glm::mat4_cast(m_modelRotation)
         * glm::translate(glm::mat4(1.0f), -m_orbitCenter);
     const glm::vec3 world = glm::vec3(model * glm::vec4(center[0], center[1], center[2], 1.0f));

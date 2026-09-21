@@ -118,6 +118,11 @@ public:
         (void)center; return 0.0f;
     }
 
+    // 设置当前绘制对象的逐对象世界矩阵（任务 2.1，列主序 16 float）。
+    // 对象矩阵把网格局部坐标变换到“归一化场景空间”（着色/阴影/测量公共空间）。
+    // Vulkan：vertex 阶段 push constant；OpenGL：普通 uniform。默认空实现。
+    virtual void SetObjectModelMatrix(const float model[16]) { (void)model; }
+
     // 等待 GPU 与异步任务完成。
     virtual void WaitForIdle() = 0;
     using AsyncTask = std::function<void()>;

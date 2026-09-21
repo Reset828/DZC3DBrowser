@@ -71,6 +71,8 @@ void Layer::AddChild(Object* pObject) {
     std::lock_guard<std::shared_mutex> lock(m_mutex);
 
     pObject->SetParent(this);
+    // 新加入的子对象世界矩阵需要重算。
+    pObject->MarkWorldTransformDirty();
     m_arrChild.push_back(pObject);
 }
 
@@ -96,6 +98,30 @@ void Layer::RemoveChild(Object* pObject) {
         delete *it;
         m_arrChild.erase(it);
     }
+}
+
+// 标记自身及所有后代的世界矩阵需要重算。
+void Layer::MarkWorldTransformDirty() {
+    SetDirty(true);
+    std::shared_lock lock(m_mutex);
+    for (auto* child : m_arrChild) {
+        if (child) {
+            child->MarkWorldTransformDirty();
+        }
+    }
+}
+
+// 自顶向下刷新自身与所有子对象的世界矩阵。
+bool Layer::UpdateWorldTransforms(const Mat4* parentWorld, bool parentChanged) {
+    const bool changed = Object::UpdateWorldTransforms(parentWorld, parentChanged);
+    // 始终访问子节点：即使本层未变，子节点也可能自身为脏。
+    std::shared_lock lock(m_mutex);
+    for (auto* child : m_arrChild) {
+        if (child) {
+            child->UpdateWorldTransforms(&m_worldMatrix, changed);
+        }
+    }
+    return changed;
 }
 
 // 遍历可见子对象并绘制。

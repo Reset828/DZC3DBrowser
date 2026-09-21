@@ -634,17 +634,12 @@ void GltfParseRunnable::run() {
             }
         }
 
-        std::vector<glm::mat4> worldMatrices(jsonNodes.size(), glm::mat4(1.0f));
         std::vector<int> traversalOrder;
         {
             std::vector<int> stack(roots.rbegin(), roots.rend());
             while (!stack.empty()) {
                 const int index = stack.back();
                 stack.pop_back();
-                const int parent = asset.nodes[index].parent;
-                worldMatrices[index] = (parent >= 0 && parent < jsonNodes.size())
-                    ? worldMatrices[parent] * localMatrices[index]
-                    : localMatrices[index];
                 traversalOrder.push_back(index);
                 const std::vector<int>& children = asset.nodes[index].children;
                 for (auto it = children.rbegin(); it != children.rend(); ++it) {
@@ -653,7 +648,9 @@ void GltfParseRunnable::run() {
             }
         }
 
-        // 6. 网格：每个带 mesh 的节点产出一个 MeshData，世界变换烘焙进顶点。
+        // 6. 网格：每个带 mesh 的节点产出一个 MeshData。
+        //    任务 2.1：不再把节点变换烘焙进顶点；节点自身的 TRS 作为运行时局部变换保留，
+        //    运行时按节点层级相乘得到世界矩阵。顶点保留在“节点局部空间”。
         const QJsonArray jsonMeshes = root.value(QLatin1String("meshes")).toArray();
         for (int nodeIndex : traversalOrder) {
             const int meshIndex = asset.nodes[nodeIndex].mesh;
@@ -661,12 +658,11 @@ void GltfParseRunnable::run() {
 
             const QJsonObject jsonMesh = jsonMeshes.at(meshIndex).toObject();
             const QJsonArray primitives = jsonMesh.value(QLatin1String("primitives")).toArray();
-            const glm::mat4 world = worldMatrices[nodeIndex];
-            const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(world));
 
             MeshData mesh;
             mesh.name = asset.nodes[nodeIndex].name;
             if (mesh.name.empty()) mesh.name = StringField(jsonMesh, "name");
+            mesh.nodeIndex = nodeIndex;
             mesh.bounds = EmptyBounds();
             bool meshHasGeometry = false;
             // 1.5：所有图元都提供了 TANGENT 才视为完整；否则整网格生成切线。
@@ -721,30 +717,28 @@ void GltfParseRunnable::run() {
 
                 for (size_t i = 0; i < vertexCount; ++i) {
                     const char* positionElement = AccessorElement(positionInfo, i);
-                    const glm::vec4 localPosition(
+                    // 任务 2.1：顶点保留在“节点局部空间”，节点变换由运行时场景图施加。
+                    const glm::vec3 localPosition(
                         ReadComponentAsFloat(positionElement, positionInfo.componentType, positionInfo.normalized, 0),
                         ReadComponentAsFloat(positionElement, positionInfo.componentType, positionInfo.normalized, 1),
-                        ReadComponentAsFloat(positionElement, positionInfo.componentType, positionInfo.normalized, 2),
-                        1.0f);
-                    const glm::vec4 worldPosition = world * localPosition;
+                        ReadComponentAsFloat(positionElement, positionInfo.componentType, positionInfo.normalized, 2));
 
                     AssetVertex vertex{};
-                    vertex.position[0] = worldPosition.x;
-                    vertex.position[1] = worldPosition.y;
-                    vertex.position[2] = worldPosition.z;
+                    vertex.position[0] = localPosition.x;
+                    vertex.position[1] = localPosition.y;
+                    vertex.position[2] = localPosition.z;
 
                     if (hasNormal) {
                         const char* normalElement = AccessorElement(normalInfo, i);
-                        const glm::vec3 localNormal(
+                        glm::vec3 localNormal(
                             ReadComponentAsFloat(normalElement, normalInfo.componentType, normalInfo.normalized, 0),
                             ReadComponentAsFloat(normalElement, normalInfo.componentType, normalInfo.normalized, 1),
                             ReadComponentAsFloat(normalElement, normalInfo.componentType, normalInfo.normalized, 2));
-                        glm::vec3 worldNormal = normalMatrix * localNormal;
-                        const float length = glm::length(worldNormal);
-                        worldNormal = length > 1.0e-6f ? worldNormal / length : glm::vec3(0.0f, 0.0f, 1.0f);
-                        vertex.normal[0] = worldNormal.x;
-                        vertex.normal[1] = worldNormal.y;
-                        vertex.normal[2] = worldNormal.z;
+                        const float length = glm::length(localNormal);
+                        localNormal = length > 1.0e-6f ? localNormal / length : glm::vec3(0.0f, 0.0f, 1.0f);
+                        vertex.normal[0] = localNormal.x;
+                        vertex.normal[1] = localNormal.y;
+                        vertex.normal[2] = localNormal.z;
                     }
 
                     if (hasTexCoord) {
@@ -769,14 +763,12 @@ void GltfParseRunnable::run() {
                             ReadComponentAsFloat(tangentElement, tangentInfo.componentType, tangentInfo.normalized, 0),
                             ReadComponentAsFloat(tangentElement, tangentInfo.componentType, tangentInfo.normalized, 1),
                             ReadComponentAsFloat(tangentElement, tangentInfo.componentType, tangentInfo.normalized, 2));
-                        // 顶点位置已烘焙世界变换，切线同样用世界旋转部分变换（与法线一致）。
-                        glm::vec3 worldTangent = glm::mat3(world) * localTangent;
-                        const float tangentLength = glm::length(worldTangent);
+                        // 任务 2.1：切线保留在节点局部空间（与法线一致）。
+                        const float tangentLength = glm::length(localTangent);
                         if (tangentLength > 1.0e-6f) {
-                            worldTangent /= tangentLength;
-                            vertex.tangent[0] = worldTangent.x;
-                            vertex.tangent[1] = worldTangent.y;
-                            vertex.tangent[2] = worldTangent.z;
+                            vertex.tangent[0] = localTangent.x / tangentLength;
+                            vertex.tangent[1] = localTangent.y / tangentLength;
+                            vertex.tangent[2] = localTangent.z / tangentLength;
                         }
                         vertex.tangent[3] = ReadComponentAsFloat(
                             tangentElement, tangentInfo.componentType, tangentInfo.normalized, 3);

@@ -3727,10 +3727,13 @@ bool VKRender3D::CreatePipelines() {
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
     {
+        // 单个 push constant 块（GLSL 侧统一声明）：前 64B 材质（fragment 用），
+        // 后 64B 逐对象世界矩阵（vertex 用）。合计 128B，恰为 Vulkan 保证的最小
+        // maxPushConstantsSize；两阶段声明必须一致，故用单一 range（0..128）。
         VkPushConstantRange pushRange{};
-        pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pushRange.offset = 0;
-        pushRange.size = sizeof(MaterialParams);
+        pushRange.size = sizeof(MaterialParams) + sizeof(float) * 16;
 
         VkDescriptorSetLayout setLayouts[2] = { m_descriptorSetLayout, m_materialSetLayout };
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
@@ -4368,8 +4371,14 @@ void VKRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     float aspect = (float)m_framebufferWidth / (float)m_framebufferHeight;
 
     const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
+    // 场景基础朝向（任务 2.1）：归一化场景空间为 Z-up（+Z 上），而相机基向量仍为
+    // view up=+Y。用固定旋转 R（绕 X 轴 -90°）把场景 +Z 映射到显示 +Y，使模型竖直显示。
+    // R 紧贴平移中心之后（轨道旋转之内侧），故轨道旋转/平移/约束/回读数学与旧版完全一致。
+    const glm::mat4 sceneBase = glm::rotate(
+        glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
     const glm::mat4 model = glm::translate(glm::mat4(1.0f), m_panOffset)
         * glm::mat4_cast(m_modelRotation)
+        * sceneBase
         * glm::translate(glm::mat4(1.0f), -m_orbitCenter);
     const glm::mat4 view = glm::lookAt(
         eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -4416,12 +4425,13 @@ void VKRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     ubo.shadowOptions[2] = m_wireframeMode ? 1.0f : 0.0f;
     // Vulkan 窗口 Y 向下：告知着色器把 dFdy 取反，使几何法线与 OpenGL 一致。
     ubo.shadowOptions[3] = 1.0f;
-    // PBR 视线向量：把相机（世界空间）变换到物体空间，与物体空间法线/太阳方向一致。
+    // PBR 视线向量：把相机（显示世界空间）变换到“归一化场景空间”（着色空间，
+    // 即 ubo.model 之前），与片元的 fragObjectPosition、物体空间太阳方向一致。
     const glm::vec3 cameraObject = glm::vec3(glm::inverse(model) * glm::vec4(eye, 1.0f));
-    ubo.cameraObjectPosition[0] = cameraObject.x;
-    ubo.cameraObjectPosition[1] = cameraObject.y;
-    ubo.cameraObjectPosition[2] = cameraObject.z;
-    ubo.cameraObjectPosition[3] = 0.0f;
+    ubo.cameraWorldPosition[0] = cameraObject.x;
+    ubo.cameraWorldPosition[1] = cameraObject.y;
+    ubo.cameraWorldPosition[2] = cameraObject.z;
+    ubo.cameraWorldPosition[3] = 0.0f;
     // 1.7：半球环境光（线性）。
     ubo.ambientSkyColor[0] = m_ambientSkyColor.x;
     ubo.ambientSkyColor[1] = m_ambientSkyColor.y;
@@ -5339,10 +5349,22 @@ void VKRender3D::ApplyMaterial(const MaterialParams& params, const MaterialTextu
     }
 }
 
+// 设置当前对象的逐对象世界矩阵（任务 2.1）：vertex 阶段 push constant（offset 64）。
+void VKRender3D::SetObjectModelMatrix(const float model[16]) {
+    if (m_pipelineLayout == VK_NULL_HANDLE || !model) return;
+    VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                       sizeof(MaterialParams), sizeof(float) * 16, model);
+}
+
 // 计算点（上传坐标空间）到相机的距离，用于透明排序。
 float VKRender3D::ComputeDrawDistance(const float center[3]) const {
     const glm::vec3 eye(0.0f, 0.0f, m_orbitDistance);
+    // 与 UpdateUniformBuffer 的显示变换保持一致（含场景基础朝向）。
+    const glm::mat4 sceneBase = glm::rotate(
+        glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
     const glm::mat4 model = glm::translate(glm::mat4(1.0f), m_panOffset)
+        * sceneBase
         * glm::mat4_cast(m_modelRotation)
         * glm::translate(glm::mat4(1.0f), -m_orbitCenter);
     const glm::vec3 world = glm::vec3(model * glm::vec4(center[0], center[1], center[2], 1.0f));

@@ -1,6 +1,7 @@
 ﻿#include "GLMesh.h"
 #include "AssetMeshUpload.h"
 #include "Render/GLRender.h"
+#include "Math/Transform.h"
 #include <QOpenGLFunctions_4_2_Core>
 #include <cstddef>
 
@@ -82,6 +83,8 @@ void GLMesh::Render(int mode) {
         gl->glUseProgram(shadowProgram);
         m_pRender->SetPolygonWireframe(false);
         gl->glBindVertexArray(m_vao);
+        // 逐对象世界矩阵（任务 2.1）：阴影通道也需要。
+        m_pRender->SetObjectModelMatrix(GetWorldMatrix().m[0]);
         // 阴影通道逐 SubMesh 绘制，但材质可见性仍生效。
         if (m_subMeshInfos.empty()) {
             m_pRender->DrawIndexed(m_indexCount);
@@ -100,7 +103,9 @@ void GLMesh::Render(int mode) {
 
     if (m_subMeshInfos.empty()) {
         // 兼容旧路径：整网格一次绘制（应用默认材质）。
+        // ApplyMaterial 会绑定主程序，之后才能写入 uObjectModel（uniform 属于程序）。
         m_pRender->ApplyMaterial(MaterialParams{}, MaterialTextureSet{});
+        m_pRender->SetObjectModelMatrix(GetWorldMatrix().m[0]);
         m_pRender->DrawIndexed(m_indexCount);
     } else {
         for (size_t i = 0; i < m_subMeshInfos.size(); ++i) {
@@ -110,7 +115,11 @@ void GLMesh::Render(int mode) {
                 info.material.alphaMode == static_cast<int>(MaterialAlphaMode::Blend);
             if (blend) {
                 // 透明 SubMesh 交给渲染器收集，主通道结束前统一排序绘制。
-                float distance = m_pRender->ComputeDrawDistance(info.center);
+                // 排序中心需先经逐对象世界矩阵变换到归一化场景空间。
+                const Vec3 center = TransformPoint(
+                    GetWorldMatrix(), Vec3{ info.center[0], info.center[1], info.center[2] });
+                const float centerArray[3] = { center.x, center.y, center.z };
+                float distance = m_pRender->ComputeDrawDistance(centerArray);
                 m_pRender->QueueTransparentDraw(this, static_cast<int>(i), distance);
                 continue;
             }
@@ -136,9 +145,11 @@ void GLMesh::DrawSubMesh(int subMeshIndex, int iMode) {
     gl->glBindVertexArray(0);
 }
 
-// 绘制单个 SubMesh：应用材质 -> 范围绘制。
+// 绘制单个 SubMesh：应用材质 -> 逐对象矩阵 -> 范围绘制。
 // 透明混合状态由 FlushTransparentDraws 统一开关，这里无需再判断。
 void GLMesh::DrawSubMeshImpl(const SubMeshDrawInfo& info) {
     m_pRender->ApplyMaterial(info.material, info.textures);
+    // ApplyMaterial 绑定主程序后再写入 uObjectModel（uniform 属于程序）。
+    m_pRender->SetObjectModelMatrix(GetWorldMatrix().m[0]);
     m_pRender->DrawIndexedRange(info.indexCount, info.indexOffset);
 }

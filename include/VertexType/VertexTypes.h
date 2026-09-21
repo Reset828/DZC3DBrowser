@@ -39,7 +39,7 @@ struct UniformBufferObject3D {
     alignas(16) float sunDirection[4];   // xyz: 物体空间指向太阳（+X 东 +Y 北 +Z 上）
     alignas(16) float lightViewProj[4][4];
     alignas(16) float shadowOptions[4];  // x: 阴影贴图可用  y: NDC深度从[-1,1]转到[0,1]  z: 线框模式  w: Vulkan 窗口Y向下标志（取反 dFdy）
-    alignas(16) float cameraObjectPosition[4]; // xyz: 相机在物体空间的位置（PBR 视线向量），w 未用
+    alignas(16) float cameraWorldPosition[4];  // xyz: 相机在归一化场景空间的位置（PBR 视线向量），w 未用
     // 1.7：半球环境光 + 阴影偏移/PCF + 调试视图。
     alignas(16) float ambientSkyColor[4];      // xyz: 天空色(线性)  w: 环境光强度
     alignas(16) float ambientGroundColor[4];   // xyz: 地面色(线性)  w 未用

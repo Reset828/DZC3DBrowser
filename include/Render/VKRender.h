@@ -551,6 +551,8 @@ protected:
 
     // 以材质参数（push constant）+ set 1（5 个纹理槽）绑定后绘制当前网格。
     void ApplyMaterial(const MaterialParams& params, const MaterialTextureSet& textures) override;
+    // 设置当前对象的逐对象世界矩阵（任务 2.1）：vertex 阶段 push constant（offset 64）。
+    void SetObjectModelMatrix(const float model[16]) override;
     // 按距离从远到近排序并绘制已收集的透明请求。
     void FlushTransparentDraws() override;
     // 计算点（上传坐标空间）到相机的距离。
