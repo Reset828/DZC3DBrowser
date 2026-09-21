@@ -184,7 +184,7 @@ private:
     void ShowShadowMapStatus(const std::string& message);
     // 在消息区追加一条提示（isError 用红色）。
     void ShowMessage(const QString& text, bool isError);
-    // 清空消息区并逐条显示导入诊断。
+    // 逐条追加显示导入诊断（不清空，消息区为只追加日志）。
     void ShowImportMessages(const std::vector<ImportMessage>& messages);
     // 按扩展名选择解析器并异步加载。
     void LoadSceneAssetFile(const QString& filePath);
@@ -269,6 +269,13 @@ private:
     // 标记某运行时节点及其整棵子树为“已删除”。
     void MarkSubtreeDeleted(LoadedModel& model, int runtimeNode);
 
+    // ---------------- 任务 2.3：选中高亮（由项目树驱动） ----------------
+    // 把高亮状态应用到场景对象（选中节点整棵子树高亮，其余清除）。
+    void ApplySelectionHighlight();
+    // 点击项目树空白处：清除选择并（确有选中时）提示“已取消选择”。
+    void ClearSelectionByEmptyClick();
+    // 返回某运行时节点的显示名（模型根或无名时用模型文件名）。
+    QString NodeDisplayName(int modelIndex, int runtimeNode) const;
 
     Render* m_renderer;
     Render* m_openglRenderer = nullptr;

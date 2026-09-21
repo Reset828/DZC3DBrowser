@@ -35,7 +35,7 @@ layout(push_constant) uniform PushConstants {
     float occlusionStrength; // [0,1]
     float emissiveStrength;
     int alphaMode;           // 0 Opaque / 1 Mask / 2 Blend
-    int pad0;
+    int highlight;           // 选中高亮标志（0 否 / 1 是，任务 2.3）
     mat4 objectModel;        // 逐对象世界矩阵（vertex 阶段使用）
 } mat;
 layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
@@ -52,6 +52,7 @@ layout(set = 1, binding = 4) uniform sampler2D emissiveTexture;
 #define MAT_OCCLUSIONSTRENGTH mat.occlusionStrength
 #define MAT_EMISSIVESTRENGTH mat.emissiveStrength
 #define MAT_ALPHAMODE mat.alphaMode
+#define MAT_HIGHLIGHT mat.highlight
 #else
 uniform vec4 uMaterialBaseColor;
 uniform vec4 uEmissiveFactor;
@@ -62,6 +63,7 @@ uniform float uNormalScale;
 uniform float uOcclusionStrength;
 uniform float uEmissiveStrength;
 uniform int uAlphaMode;
+uniform int uHighlight;    // 选中高亮标志（任务 2.3）
 uniform sampler2D baseColorTexture;
 uniform sampler2D metallicRoughnessTexture;
 uniform sampler2D normalTexture;
@@ -76,6 +78,7 @@ uniform sampler2D emissiveTexture;
 #define MAT_OCCLUSIONSTRENGTH uOcclusionStrength
 #define MAT_EMISSIVESTRENGTH uEmissiveStrength
 #define MAT_ALPHAMODE uAlphaMode
+#define MAT_HIGHLIGHT uHighlight
 #endif
 
 layout(location = 0) in vec3 fragViewPosition;
@@ -438,6 +441,13 @@ void main() {
     if (ubo.debugOptions.x > 0.5) {
         color = DebugViewColor();
         alpha = 1.0;
+    }
+
+    // 选中高亮（任务 2.3）：对所有模式（默认 PBR / 灰度 / 染色 / 线框 / 调试视图）
+    // 统一把最终颜色向橙色混合，便于定位选中对象。
+    if (MAT_HIGHLIGHT != 0) {
+        const vec3 kHighlightColor = vec3(1.0, 0.6, 0.1);
+        color = mix(color, kHighlightColor, 0.45);
     }
 
     outColor = vec4(color, alpha);

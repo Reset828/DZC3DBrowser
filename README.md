@@ -82,7 +82,7 @@ The status bar shows the active backend. Switching backends clears the last worl
   - Accessors: float or normalized integer `VEC2/3/4`, compact or `byteStride` interleaved. `sparse` accessors are reported unsupported.
   - `materials` (Metallic-Roughness PBR: `baseColorFactor` / `baseColorTexture`, `metallicFactor`, `roughnessFactor`, `metallicRoughnessTexture`, `normalTexture` + `scale`, `occlusionTexture` + `strength`, `emissiveFactor` / `emissiveTexture`, `alphaMode` / `alphaCutoff`), `textures`, `images`, `samplers` are parsed; image bytes (embedded `bufferView` / `data:` URI / external file) are resolved and fed to the texture system (tasks 1.3–1.5).
   - Not yet: animation, skinning, morph targets, `KHR_*` extensions, non-triangle primitive modes.
-- Import warnings/errors, shadow-map status, renderer errors, and a one-line texture summary appear in the message panel below the viewport (one message per line, errors in red); there are no modal dialogs.
+- Import warnings/errors, shadow-map status, renderer errors, and a one-line texture summary appear in the message panel below the viewport (one message per line, errors in red); there are no modal dialogs. The panel is **append-only**: messages accumulate across imports and are not auto-cleared.
 
 ## Texture system (tasks 1.3 / 1.5)
 
@@ -167,5 +167,16 @@ Reusable, backend-independent AABB math plus a unified bounds query on the scene
 - **Space**: "world bounds" in this task means **normalized scene space** (the shared shading / shadow / measurement space, i.e. after the scene-root normalization matrix). The same API can target raw model space by passing a different matrix.
 - **Display**: on each successful import, the model's bounds are printed to the message panel as one line: `包围盒 [name]：min(x, y, z)  max(x, y, z)` (3 decimals, normalized scene space). Bounds are not shown in the project tree, and are not recomputed when a node transform is edited.
 - **Edge cases**: an **empty box** is `min = +inf`, `max = -inf`; it is ignored by unions / accumulation and shown as `（无几何）`. A **degenerate box** (`min == max`, e.g. a single-point mesh) is valid. **Invalid** boxes (NaN / `min > max`) are rejected by `AabbIsValid`. **Huge coordinates** rely on `float` precision — extreme magnitudes lose precision and are not special-cased; the normalization step keeps the working range near `[-1, 1]` regardless of source units.
+
+## Selection and highlight (task 2.3)
+
+Select a node in the project tree; the corresponding object is highlighted in the viewport. Works on both the Vulkan and OpenGL 3D backends.
+
+- **Selection**: driven by the **project tree** — selecting a node highlights it and prints `选中 [name]` to the message panel; deselecting prints `已取消选择` (only when something was selected). The name is the node name, or the model file name for the root / unnamed nodes. Clicking a **blank area of the project tree** clears the selection; the render viewport does not change the selection (it only drives the camera).
+- **Highlight**: the selected node's **whole subtree** is highlighted (orange, mixed into the final color in the fragment shader) in **all display modes** (default PBR / gray / dye / wireframe / debug views). Per-draw flag: Vulkan reuses the material push constant's last slot (`highlight`, formerly `pad0`), OpenGL uses a `uHighlight` uniform.
+- **Viewport picking was removed**: the earlier click-to-pick in the viewport (CPU ray picking: `PickAtScreenPoint` / `PickMeshTriangles` / `Render::ComputePickRay` / left short-press detection) has been deleted. The reusable math helpers it used — `RayIntersectsAabb` / `RayIntersectsTriangle` (`include/Math/Ray.*`) and `TransformInvert` (`include/Math/Transform.*`) — are kept for future work.
+- **Edge cases**: removing a model clears a now-stale selection. Selection state is not yet persisted in a project file (task 2.7).
+
+
 
 

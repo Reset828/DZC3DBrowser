@@ -19,8 +19,10 @@ class Object;
 // 布局（须与 GLSL push constant / uniform 逐字段一致，全部 4 字节对齐）：
 //   baseColor@0(16) + emissiveFactor@16(16, xyz 有效) + alphaCutoff@32(4) +
 //   metallic@36(4) + roughness@40(4) + normalScale@44(4) + occlusionStrength@48(4) +
-//   emissiveStrength@52(4) + alphaMode@56(4) + pad0@60(4)。总计 64 字节，16 对齐。
+//   emissiveStrength@52(4) + alphaMode@56(4) + highlight@60(4)。总计 64 字节，16 对齐。
 // 用 vec4 承载 emissiveFactor 可避开 vec3 在 std430 下的 16 字节对齐陷阱。
+// highlight（任务 2.3）：逐对象选中高亮标志（0 否 / 1 是），由渲染器在 ApplyMaterial 时
+// 按当前对象的 IsHighlighted() 覆写；片元着色器据此混入高亮色。
 struct MaterialParams {
     float baseColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };   // 基础色（alpha 用于 Mask/Blend）
     float emissiveFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };  // 线性自发光色（xyz 有效）
@@ -31,7 +33,7 @@ struct MaterialParams {
     float occlusionStrength = 1.0f;                     // AO 强度 [0,1]
     float emissiveStrength = 1.0f;                      // 自发光倍率
     int alphaMode = 0;                                  // 0 Opaque / 1 Mask / 2 Blend
-    int pad0 = 0;
+    int highlight = 0;                                  // 选中高亮标志（0 否 / 1 是，任务 2.3）
 };
 
 // 一个 SubMesh 的全部纹理句柄（1.5）。0 表示该槽无纹理，由渲染器替换为默认贴图：
@@ -122,6 +124,10 @@ public:
     // 对象矩阵把网格局部坐标变换到“归一化场景空间”（着色/阴影/测量公共空间）。
     // Vulkan：vertex 阶段 push constant；OpenGL：普通 uniform。默认空实现。
     virtual void SetObjectModelMatrix(const float model[16]) { (void)model; }
+
+    // 设置当前绘制对象的选中高亮标志（任务 2.3）。默认空实现。
+    // Vulkan：随材质 push constant 的 highlight 字段上传；OpenGL：普通 uniform uHighlight。
+    virtual void SetObjectHighlight(bool highlighted) { (void)highlighted; }
 
     // 等待 GPU 与异步任务完成。
     virtual void WaitForIdle() = 0;

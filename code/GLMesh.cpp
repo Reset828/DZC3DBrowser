@@ -104,6 +104,8 @@ void GLMesh::Render(int mode) {
     if (m_subMeshInfos.empty()) {
         // 兼容旧路径：整网格一次绘制（应用默认材质）。
         // ApplyMaterial 会绑定主程序，之后才能写入 uObjectModel（uniform 属于程序）。
+        // 选中高亮（任务 2.3）：必须在 ApplyMaterial 之前设置。
+        m_pRender->SetObjectHighlight(IsHighlighted());
         m_pRender->ApplyMaterial(MaterialParams{}, MaterialTextureSet{});
         m_pRender->SetObjectModelMatrix(GetWorldMatrix().m[0]);
         m_pRender->DrawIndexed(m_indexCount);
@@ -148,6 +150,8 @@ void GLMesh::DrawSubMesh(int subMeshIndex, int iMode) {
 // 绘制单个 SubMesh：应用材质 -> 逐对象矩阵 -> 范围绘制。
 // 透明混合状态由 FlushTransparentDraws 统一开关，这里无需再判断。
 void GLMesh::DrawSubMeshImpl(const SubMeshDrawInfo& info) {
+    // 选中高亮（任务 2.3）：必须在 ApplyMaterial 之前设置。
+    m_pRender->SetObjectHighlight(IsHighlighted());
     m_pRender->ApplyMaterial(info.material, info.textures);
     // ApplyMaterial 绑定主程序后再写入 uObjectModel（uniform 属于程序）。
     m_pRender->SetObjectModelMatrix(GetWorldMatrix().m[0]);

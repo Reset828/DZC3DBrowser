@@ -56,6 +56,18 @@ bool Object::IsVisible() const {
     return IsFlagEnabled(FT_VISIBLE);
 }
 
+// ---------------- 选中高亮（任务 2.3） ----------------
+
+// 设置选中高亮。
+void Object::SetHighlighted(bool bHighlighted) {
+    EnableFlag(FT_HIGHLIGHT, bHighlighted);
+}
+
+// 查询是否处于选中高亮状态。
+bool Object::IsHighlighted() const {
+    return IsFlagEnabled(FT_HIGHLIGHT);
+}
+
 // 设置对象颜色。
 void Object::SetColor(const Vec4& clr) {
     uint8_t r = static_cast<uint8_t>(clr.x * 255.0f);

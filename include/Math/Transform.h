@@ -33,6 +33,9 @@ Mat4 TransformMultiply(const Mat4& a, const Mat4& b);
 Vec3 TransformPoint(const Mat4& matrix, const Vec3& point);
 // 用列主序矩阵变换方向向量（忽略平移）。
 Vec3 TransformVector(const Mat4& matrix, const Vec3& vector);
+// 求列主序矩阵的逆（任务 2.3）。成功返回 true 并写入 out；矩阵奇异时返回 false。
+// 用于把世界射线变换到对象局部空间（射线拾取）。
+bool TransformInvert(const Mat4& matrix, Mat4& out);
 // 从矩阵分解出 T / R / S（旋转用欧拉角度，顺序 X -> Y -> Z）。
 Transform TransformFromMatrix(const Mat4& matrix);
 

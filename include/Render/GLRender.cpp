@@ -854,6 +854,8 @@ bool GLRender3D::CreateUniformBuffers() {
     // 逐对象世界矩阵 uniform（任务 2.1）：主程序与阴影程序各自的位置。
     m_uObjectModelLoc = m_functions->glGetUniformLocation(m_program, "uObjectModel");
     m_uShadowObjectModelLoc = m_functions->glGetUniformLocation(m_shadowProgram, "uObjectModel");
+    // 选中高亮 uniform（任务 2.3）。
+    m_uHighlightLoc = m_functions->glGetUniformLocation(m_program, "uHighlight");
     m_functions->glUseProgram(m_program);
     if (m_uBaseColorTextureLoc >= 0) {
         m_functions->glUniform1i(m_uBaseColorTextureLoc, kMaterialTextureUnit);
@@ -1024,6 +1026,9 @@ void GLRender3D::ApplyMaterial(const MaterialParams& params, const MaterialTextu
     }
     if (m_uOcclusionStrengthLoc >= 0) {
         m_functions->glUniform1f(m_uOcclusionStrengthLoc, params.occlusionStrength);
+    }
+    if (m_uHighlightLoc >= 0) {
+        m_functions->glUniform1i(m_uHighlightLoc, m_currentHighlight ? 1 : 0);
     }
 
     // 确保默认贴图存在（白 / 平面法线）。
@@ -2109,3 +2114,9 @@ float GLRender3D::GetLastWorldX() const { return m_lastWorldCoord[0]; }
 float GLRender3D::GetLastWorldY() const { return m_lastWorldCoord[1]; }
 // 获取最近一次世界坐标的 Z 分量。
 float GLRender3D::GetLastWorldZ() const { return m_lastWorldCoord[2]; }
+
+// 设置当前绘制对象的选中高亮标志（任务 2.3）。实际写入发生在 ApplyMaterial
+// （随 uHighlight 一起上传）。
+void GLRender3D::SetObjectHighlight(bool highlighted) {
+    m_currentHighlight = highlighted;
+}

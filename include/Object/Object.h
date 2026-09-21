@@ -39,6 +39,7 @@ public:
     enum FlagType {
         FT_VISIBLE = 1,
         FT_DIRTY = 16,      // 世界矩阵需要重算
+        FT_HIGHLIGHT = 32,  // 选中高亮（任务 2.3）
     };
 
     // 设置父对象。
@@ -58,6 +59,12 @@ public:
     void SetVisible(bool bVisible);
     // 查询对象是否可见。
     bool IsVisible() const;
+
+    // ---------------- 选中高亮（任务 2.3） ----------------
+    // 设置选中高亮（渲染器据此在着色时混入高亮色）。
+    void SetHighlighted(bool bHighlighted);
+    // 查询是否处于选中高亮状态。
+    bool IsHighlighted() const;
 
     // 设置对象颜色。
     void SetColor(const Vec4& clr);

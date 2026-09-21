@@ -296,6 +296,9 @@ public:
     // 返回最近一次世界坐标 Z。
     float GetLastWorldZ() const;
 
+    // 设置当前绘制对象的选中高亮标志（任务 2.3）：普通 uniform uHighlight。
+    void SetObjectHighlight(bool highlighted) override;
+
 protected:
     // 后端初始化完成后的钩子。
     bool OnInitialize() override;
@@ -473,6 +476,8 @@ protected:
     // 逐对象世界矩阵 uniform（任务 2.1）：主程序与阴影程序各自的位置。
     int m_uObjectModelLoc = -1;
     int m_uShadowObjectModelLoc = -1;
+    // 选中高亮 uniform（任务 2.3）。
+    int m_uHighlightLoc = -1;
     // 纹理单元分配：2=baseColor, 3=metallicRoughness, 4=normal, 5=occlusion, 6=emissive。
     static constexpr int kMaterialTextureUnit = 2;
     static constexpr int kMetallicRoughnessTextureUnit = 3;
@@ -501,6 +506,10 @@ protected:
     glm::vec3 m_ambientGroundColor = glm::vec3(0.015f, 0.013f, 0.011f);
     float m_ambientIntensity = 1.0f;
     int m_debugView = 0;
+
+    // 当前绘制对象的选中高亮标志（任务 2.3），由 SetObjectHighlight 写入、
+    // 由 ApplyMaterial 随 uHighlight 上传。
+    bool m_currentHighlight = false;
 
     bool m_msaaEnabled = false;
     bool m_msaaPassActive = false;

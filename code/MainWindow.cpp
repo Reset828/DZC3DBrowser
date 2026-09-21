@@ -377,6 +377,8 @@ void MainWindow::SetupVulkan() {
     m_projectPanel->setItemsExpandable(true);
     m_projectPanel->setExpandsOnDoubleClick(false);
     m_projectPanel->setIndentation(18);
+    // 任务 2.3：拦截项目树 viewport 的鼠标事件，用于“点击空白处取消选择”。
+    m_projectPanel->viewport()->installEventFilter(this);
 
     m_modelsTreeItem = new QTreeWidgetItem(m_projectPanel);
     m_modelsTreeItem->setText(0, QStringLiteral("模型"));
@@ -902,10 +904,9 @@ void MainWindow::ShowMessage(const QString& text, bool isError) {
     m_messageList->scrollToBottom();
 }
 
-// 清空消息区并逐条显示导入诊断。
+// 逐条追加显示导入诊断（不清空，消息区为只追加日志，跨多次导入累积）。
 void MainWindow::ShowImportMessages(const std::vector<ImportMessage>& messages) {
     if (!m_messageList) return;
-    m_messageList->clear();
     for (const ImportMessage& message : messages) {
         ShowMessage(QString::fromStdString(message.message), message.isError);
     }
@@ -921,6 +922,18 @@ void MainWindow::HandleDeviceLost(Render* renderer) {
 
 // 把鼠标/滚轮事件转给当前渲染器。
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
+    // 任务 2.3：项目树 viewport 的空白处点击 -> 取消选择。
+    if (m_projectPanel && obj == m_projectPanel->viewport()) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton &&
+                !m_projectPanel->itemAt(me->pos())) {
+                ClearSelectionByEmptyClick();
+            }
+        }
+        return QMainWindow::eventFilter(obj, event);
+    }
+
     QWindow* window = nullptr;
     if (obj == m_vulkanWindow) window = m_vulkanWindow;
     else if (obj == m_openglWindow) window = m_openglWindow;
@@ -1580,6 +1593,12 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
 
     delete it->treeItem;
     it->treeItem = nullptr;
+    // 任务 2.3：若被移除的模型是当前选中模型（或索引在其之前），选择会失效/错位，清除之。
+    const int removedIndex = static_cast<int>(it - m_loadedModels.begin());
+    if (m_selectedModel >= removedIndex) {
+        m_selectedModel = -1;
+        m_selectedRuntimeNode = -1;
+    }
     m_loadedModels.erase(it);
 
     if (m_loadedModels.empty()) {
@@ -1895,6 +1914,8 @@ void MainWindow::RebuildSceneMeshes(bool recomputeNormalization) {
     ImportModelTextures();
     // 纹理句柄就绪后，构建逐 SubMesh 绘制信息（材质 + 纹理 + 可见性）。
     RebuildSubMeshDrawInfos();
+    // 任务 2.3：场景对象重建后重新应用选中高亮（高亮标志随对象重建而丢失）。
+    ApplySelectionHighlight();
     UpdateShadowSceneBounds();
 }
 
@@ -2281,12 +2302,15 @@ bool MainWindow::ResolveTreeItem(QTreeWidgetItem* item, size_t& modelIndex,
     return true;
 }
 
-// 项目树选择变化：刷新变换面板。
+// 项目树选择变化：刷新变换面板 + 同步视口高亮 + 输出选中提示（任务 2.3）。
 void MainWindow::OnProjectSelectionChanged() {
     if (!m_projectPanel) return;
     QTreeWidgetItem* item = m_projectPanel->currentItem();
+    // 仅当该项确实处于选中状态时才算有效选择（clearSelection 后 currentItem 可能残留）。
+    if (item && !item->isSelected()) item = nullptr;
     size_t modelIndex = 0;
     int runtimeNode = -1;
+    const bool hadSelection = m_selectedModel >= 0 && m_selectedRuntimeNode >= 0;
     if (item && ResolveTreeItem(item, modelIndex, runtimeNode)) {
         m_selectedModel = static_cast<int>(modelIndex);
         m_selectedRuntimeNode = runtimeNode;
@@ -2295,6 +2319,33 @@ void MainWindow::OnProjectSelectionChanged() {
         m_selectedRuntimeNode = -1;
     }
     SyncTransformPanelFromSelection();
+    // 任务 2.3：项目树选中 -> 视口高亮同步。
+    ApplySelectionHighlight();
+    // 任务 2.3：在消息栏输出选中/取消提示（树选中无 SubMesh/三角形/坐标信息）。
+    if (m_selectedModel >= 0 && m_selectedRuntimeNode >= 0) {
+        ShowMessage(QStringLiteral("选中 [%1]")
+            .arg(NodeDisplayName(m_selectedModel, m_selectedRuntimeNode)), false);
+    } else if (hadSelection) {
+        ShowMessage(QStringLiteral("已取消选择"), false);
+    }
+}
+
+// 点击项目树空白处：清除选择并（确有选中时）提示“已取消选择”。
+void MainWindow::ClearSelectionByEmptyClick() {
+    const bool hadSelection = m_selectedModel >= 0 && m_selectedRuntimeNode >= 0;
+    // 清掉项目树的选中与 current（信号屏蔽：状态与提示由本函数统一处理）。
+    if (m_projectPanel) {
+        const QSignalBlocker blocker(m_projectPanel);
+        m_projectPanel->clearSelection();
+        m_projectPanel->setCurrentItem(nullptr);
+    }
+    m_selectedModel = -1;
+    m_selectedRuntimeNode = -1;
+    ApplySelectionHighlight();
+    SyncTransformPanelFromSelection();
+    if (hadSelection) {
+        ShowMessage(QStringLiteral("已取消选择"), false);
+    }
 }
 
 // 用选中节点的变换刷新变换面板。
@@ -2383,6 +2434,56 @@ void MainWindow::MarkSubtreeDeleted(LoadedModel& model, int runtimeNode) {
     for (int child : model.nodes[static_cast<size_t>(runtimeNode)].children) {
         MarkSubtreeDeleted(model, child);
     }
+}
+
+// ---------------- 任务 2.3：选中高亮（由项目树驱动） ----------------
+
+// 把高亮状态应用到场景对象（选中节点整棵子树高亮，其余清除）。
+void MainWindow::ApplySelectionHighlight() {
+    // 先清除全部网格对象的高亮。
+    for (LoadedModel& model : m_loadedModels) {
+        for (RuntimeNode& node : model.nodes) {
+            for (RuntimeMesh& mesh : node.meshes) {
+                if (mesh.object) mesh.object->SetHighlighted(false);
+            }
+        }
+    }
+
+    if (m_selectedModel < 0 || m_selectedModel >= static_cast<int>(m_loadedModels.size())) return;
+    if (m_selectedRuntimeNode < 0) return;
+    LoadedModel& model = m_loadedModels[static_cast<size_t>(m_selectedModel)];
+    if (m_selectedRuntimeNode >= static_cast<int>(model.nodes.size())) return;
+
+    // 选中节点及其所有后代节点下的网格对象全部高亮（整个子树）。
+    std::vector<int> stack{ m_selectedRuntimeNode };
+    while (!stack.empty()) {
+        const int r = stack.back();
+        stack.pop_back();
+        if (r < 0 || r >= static_cast<int>(model.nodes.size())) continue;
+        if (r < static_cast<int>(model.nodeDeleted.size()) && model.nodeDeleted[r]) continue;
+        for (RuntimeMesh& mesh : model.nodes[static_cast<size_t>(r)].meshes) {
+            if (mesh.object) mesh.object->SetHighlighted(true);
+        }
+        for (int child : model.nodes[static_cast<size_t>(r)].children) {
+            stack.push_back(child);
+        }
+    }
+}
+
+// 返回某运行时节点的显示名（模型根或无名时用模型文件名）。
+QString MainWindow::NodeDisplayName(int modelIndex, int runtimeNode) const {
+    if (modelIndex < 0 || modelIndex >= static_cast<int>(m_loadedModels.size())) {
+        return QString();
+    }
+    const LoadedModel& model = m_loadedModels[static_cast<size_t>(modelIndex)];
+    QString name;
+    if (runtimeNode >= 0 && runtimeNode < static_cast<int>(model.nodes.size())) {
+        name = QString::fromStdString(model.nodes[static_cast<size_t>(runtimeNode)].name);
+    }
+    if (name.isEmpty()) {
+        name = QFileInfo(QString::fromStdString(model.asset.sourcePath)).fileName();
+    }
+    return name;
 }
 
 // 选中节点：删除（含子树）。

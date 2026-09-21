@@ -467,6 +467,9 @@ public:
     // 返回最近一次世界坐标 Z。
     float GetLastWorldZ() const;
 
+    // 设置当前绘制对象的选中高亮标志（任务 2.3）。
+    void SetObjectHighlight(bool highlighted) override;
+
 protected:
     // 后端初始化完成后的钩子。
     bool OnInitialize() override;
@@ -688,6 +691,9 @@ protected:
     void* m_depthReadbackMapped[MAX_FRAMES_IN_FLIGHT] = {};
     float m_lastWorldCoord[3] = {};
     mutable bool m_newCoordAvailable = false;
+    // 当前绘制对象的选中高亮标志（任务 2.3），由 SetObjectHighlight 写入、
+    // 由 ApplyMaterial 随材质 push constant 上传。
+    bool m_currentHighlight = false;
     glm::mat4 m_frameInvViewProj[MAX_FRAMES_IN_FLIGHT] = {};
     glm::mat4 m_frameRenderToSource[MAX_FRAMES_IN_FLIGHT] = {};
     glm::mat4 m_normalizedToWorld = glm::mat4(1.0f);

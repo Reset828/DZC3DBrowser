@@ -28,7 +28,7 @@ layout(push_constant) uniform PushConstants {
     float occlusionStrength;
     float emissiveStrength;
     int alphaMode;
-    int pad0;
+    int highlight;
     mat4 objectModel;
 } pc;
 #define OBJECT_MODEL pc.objectModel

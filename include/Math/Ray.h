@@ -19,4 +19,11 @@ struct Ray {
 bool RayIntersectsAabb(const Ray& ray, const Aabb& box, float* tNear = nullptr,
                        float* tFar = nullptr);
 
+// 射线与三角形相交（Möller–Trumbore，任务 2.3，CPU 精确拾取用）。
+// 返回是否命中（仅 t > epsilon 的正面/背面命中均算）；命中时输出沿方向的参数 t
+// （命中点 = origin + direction * t）与重心坐标 (u, v)（w = 1 - u - v）。
+// t / u / v 均可为 nullptr。direction 不必单位化；t 以 direction 长度为单位。
+bool RayIntersectsTriangle(const Ray& ray, const Vec3& a, const Vec3& b, const Vec3& c,
+                           float* t = nullptr, float* u = nullptr, float* v = nullptr);
+
 #endif //__RAY_H__

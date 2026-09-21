@@ -5339,6 +5339,8 @@ void VKRender3D::ApplyMaterial(const MaterialParams& params, const MaterialTextu
     if (m_metallicOverrideEnabled) effective.metallic = m_metallicOverride;
     if (m_roughnessOverrideEnabled) effective.roughness = m_roughnessOverride;
     if (m_emissiveOverrideEnabled) effective.emissiveStrength = m_emissiveOverride;
+    // 选中高亮（任务 2.3）：逐对象标志，覆盖材质块中的 highlight 字段。
+    effective.highlight = m_currentHighlight ? 1 : 0;
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(MaterialParams), &effective);
 
@@ -5355,6 +5357,12 @@ void VKRender3D::SetObjectModelMatrix(const float model[16]) {
     VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                        sizeof(MaterialParams), sizeof(float) * 16, model);
+}
+
+// 设置当前绘制对象的选中高亮标志（任务 2.3）。实际写入发生在 ApplyMaterial
+// （随材质 push constant 的 highlight 字段一起上传）。
+void VKRender3D::SetObjectHighlight(bool highlighted) {
+    m_currentHighlight = highlighted;
 }
 
 // 计算点（上传坐标空间）到相机的距离，用于透明排序。

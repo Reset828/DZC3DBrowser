@@ -128,6 +128,8 @@ void VKMesh::Render(int mode) {
         // 逐对象世界矩阵（任务 2.1）：主/阴影通道都需要。
         m_pRender->SetObjectModelMatrix(GetWorldMatrix().m[0]);
         if (mode != Object::RM_SHADOW) {
+            // 选中高亮（任务 2.3）：必须在 ApplyMaterial 之前设置。
+            m_pRender->SetObjectHighlight(IsHighlighted());
             m_pRender->ApplyMaterial(MaterialParams{}, MaterialTextureSet{});
         }
         m_pRender->DrawIndexed(m_indexCount);
@@ -195,6 +197,8 @@ void VKMesh::DrawSubMeshImpl(const SubMeshDrawInfo& info, bool blend, bool shado
 
     // 阴影通道不需要材质参数；主/透明通道应用材质。
     if (!shadow) {
+        // 选中高亮（任务 2.3）：必须在 ApplyMaterial 之前设置。
+        m_pRender->SetObjectHighlight(IsHighlighted());
         m_pRender->ApplyMaterial(info.material, info.textures);
     }
     m_pRender->DrawIndexedRange(info.indexCount, info.indexOffset);
