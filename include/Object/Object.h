@@ -2,6 +2,7 @@
 #define __OBJECT_H__
 
 #include <cstdint>
+#include "Math/Aabb.h"
 #include "Math/EngineTypes.h"
 #include "Math/Transform.h"
 
@@ -80,6 +81,20 @@ public:
     // 世界矩阵（局部 -> 原始模型世界；不含场景归一化，归一化由渲染器施加）。
     const Mat4& GetWorldMatrix() const;
 
+    // ---------------- 包围盒（任务 2.2） ----------------
+    // 局部包围盒（本对象自身几何，对象局部空间；默认空盒）。
+    // 由持有几何的派生类（如 Mesh）在上传时用 SetLocalBounds 写入。
+    void SetLocalBounds(const Aabb& bounds);
+    // 返回局部包围盒（空盒表示本对象无自身几何）。
+    const Aabb& GetLocalBounds() const;
+
+    // 本对象（含自身几何，不含子节点）在 worldMatrix 指定空间下的世界包围盒。
+    // worldMatrix 为“本对象局部 -> 目标空间”的矩阵；目标空间由调用方决定
+    // （归一化场景空间 / 原始模型空间均可）。纯几何查询，不按可见性过滤。
+    // 基类默认：把局部包围盒用 worldMatrix 变换（空盒则返回空盒）。
+    // Layer 覆写为“自身几何 ∪ 所有子节点的子树世界包围盒”。
+    virtual Aabb GetWorldBounds(const Mat4& worldMatrix) const;
+
     // 标记自身及所有后代的世界矩阵需要重算。
     virtual void MarkWorldTransformDirty();
     // 自顶向下刷新世界矩阵；parentChanged 表示父链本帧已变化。
@@ -104,6 +119,9 @@ protected:
     // 局部变换（原始模型坐标）与其派生的世界矩阵。
     Transform m_localTransform;
     Mat4 m_worldMatrix = TransformIdentityMatrix();
+
+    // 局部包围盒（本对象自身几何；默认空盒）。任务 2.2。
+    Aabb m_localBounds = AabbEmpty();
 
 private:
     // 打开或关闭指定标志位。

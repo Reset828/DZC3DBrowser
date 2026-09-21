@@ -131,6 +131,8 @@
     <ClInclude Include="..\include\Asset\TangentGenerator.h" />
     <ClInclude Include="..\include\VertexType\VertexTypes.h" />
     <ClInclude Include="..\include\Math\EngineTypes.h" />
+    <ClInclude Include="..\include\Math\Aabb.h" />
+    <ClInclude Include="..\include\Math\Ray.h" />
     <ClInclude Include="..\include\Math\Transform.h" />
     <ClInclude Include="..\include\Path\AssetPath.h" />
     <ClInclude Include="..\include\Texture\TextureTypes.h" />
@@ -163,6 +165,8 @@
     <ClCompile Include="VKMesh.cpp" />
     <ClCompile Include="GLMesh.cpp" />
     <ClCompile Include="..\include\VertexType\VertexTypes.cpp" />
+    <ClCompile Include="..\include\Math\Aabb.cpp" />
+    <ClCompile Include="..\include\Math\Ray.cpp" />
     <ClCompile Include="..\include\Math\Transform.cpp" />
     <ClCompile Include="..\include\Asset\TangentGenerator.cpp" />
     <ClCompile Include="..\include\Path\AssetPath.cpp" />

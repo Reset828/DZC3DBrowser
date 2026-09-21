@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include "Asset/SceneAsset.h"
+#include "Math/Aabb.h"
 #include "Math/Transform.h"
 #include "Render/Render.h"
 #include "TextureImport.h"
@@ -234,6 +235,12 @@ private:
     // 累计某模型所有网格在“归一化场景空间”的包围盒（含场景归一化）。
     void AccumulateModelBounds(const LoadedModel& model, Vec3& boundsMin, Vec3& boundsMax,
                                bool& any) const;
+    // 计算某模型在“归一化场景空间”的整体世界包围盒（任务 2.2）；无几何返回空盒。
+    Aabb ModelWorldBounds(const LoadedModel& model) const;
+    // 计算整个场景在“归一化场景空间”的世界包围盒（所有模型并集，任务 2.2）。
+    Aabb SceneWorldBounds() const;
+    // 在消息栏输出某模型的包围盒（归一化场景空间，任务 2.2，仅导入时调用）。
+    void ShowModelBounds(const LoadedModel& model);
     // 重建项目树的节点层级（在每个模型项下填充节点）。
     void RebuildProjectTree();
     // 把某模型节点层级写入项目树。

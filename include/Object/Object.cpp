@@ -16,6 +16,7 @@ Object& Object::operator=(const Object& obj) {
         m_uClr = obj.m_uClr;
         m_localTransform = obj.m_localTransform;
         m_worldMatrix = obj.m_worldMatrix;
+        m_localBounds = obj.m_localBounds;
     }
     return *this;
 }
@@ -135,6 +136,23 @@ void Object::ResetTransform() {
 // 世界矩阵（局部 -> 原始模型世界；不含场景归一化）。
 const Mat4& Object::GetWorldMatrix() const {
     return m_worldMatrix;
+}
+
+// ---------------- 包围盒（任务 2.2） ----------------
+
+// 设置局部包围盒（本对象自身几何，对象局部空间）。
+void Object::SetLocalBounds(const Aabb& bounds) {
+    m_localBounds = bounds;
+}
+
+// 返回局部包围盒（空盒表示本对象无自身几何）。
+const Aabb& Object::GetLocalBounds() const {
+    return m_localBounds;
+}
+
+// 本对象（含自身几何，不含子节点）在 worldMatrix 指定空间下的世界包围盒。
+Aabb Object::GetWorldBounds(const Mat4& worldMatrix) const {
+    return AabbTransform(m_localBounds, worldMatrix);
 }
 
 // 标记自身及所有后代的世界矩阵需要重算。

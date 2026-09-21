@@ -38,6 +38,10 @@ public:
     // 自顶向下刷新自身与所有子对象的世界矩阵；返回自身是否变化。
     bool UpdateWorldTransforms(const Mat4* parentWorld, bool parentChanged) override;
 
+    // 子树世界包围盒（任务 2.2）：自身几何 ∪ 所有子节点的子树包围盒。
+    // worldMatrix 为“本 Layer 局部 -> 目标空间”的矩阵；子节点的矩阵在内部递推。
+    Aabb GetWorldBounds(const Mat4& worldMatrix) const override;
+
     // 遍历可见子对象并绘制。
     void Render(int iMode = 0) override;
 

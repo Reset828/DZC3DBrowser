@@ -124,6 +124,18 @@ bool Layer::UpdateWorldTransforms(const Mat4* parentWorld, bool parentChanged) {
     return changed;
 }
 
+// 子树世界包围盒（任务 2.2）：自身几何 ∪ 所有子节点的子树包围盒。
+Aabb Layer::GetWorldBounds(const Mat4& worldMatrix) const {
+    Aabb result = Object::GetWorldBounds(worldMatrix);
+    std::shared_lock lock(m_mutex);
+    for (auto* child : m_arrChild) {
+        if (!child) continue;
+        const Mat4 childWorld = TransformMultiply(worldMatrix, child->GetLocalTransform().ToMatrix());
+        result = AabbUnion(result, child->GetWorldBounds(childWorld));
+    }
+    return result;
+}
+
 // 遍历可见子对象并绘制。
 void Layer::Render(int iMode) {
     if (!IsVisible()) return;

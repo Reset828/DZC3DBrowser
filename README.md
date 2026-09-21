@@ -157,3 +157,15 @@ Scene nodes now carry an editable local **Transform** (translate / rotate / scal
 - **Editing**: the 工具栏 "变换" panel edits the selected node's T/R/S numerically; the project tree shows the node hierarchy with a right-click menu (重置变换 / 复制 / 删除). Moving a parent node moves its children (dirty-flagged propagation, refreshed once per frame).
 - **Bounds**: model / node bounds are computed in normalized scene space with the current transforms, so focus and shadow range stay correct after edits.
 
+## Bounding boxes and spatial basics (task 2.2)
+
+Reusable, backend-independent AABB math plus a unified bounds query on the scene graph. This is the foundation for picking, frustum culling, focus and measurement (tasks 2.3 / 3.2).
+
+- **Math (`include/Math/Aabb.*`)**: `AabbEmpty` / `AabbIsEmpty` / `AabbIsValid` / `AabbCenter` / `AabbSize` / `AabbRadius` / `AabbExpand` / `AabbUnion` / `AabbContains` / `AabbTransform`. `AabbTransform` transforms all 8 corners and re-unions, so rotated / non-uniformly scaled boxes stay correct (transforming only `min`/`max` would be wrong under rotation). Reuses `Transform` for point transforms.
+- **Ray (`include/Math/Ray.*`)**: a `Ray` (origin + direction) and `RayIntersectsAabb(ray, box, &tNear, &tFar)` using the slab method; returns hit + entry/exit distances. Screen-to-world reprojection is deliberately left to task 2.3.
+- **Unified query (scene graph)**: `Object::GetLocalBounds()` / `SetLocalBounds()` carry the object's own geometry AABB (a mesh object is filled from `MeshData::bounds` at upload). `Object::GetWorldBounds(worldMatrix)` returns the object's own box transformed into the caller's target space; `Layer::GetWorldBounds` overrides it to union its own geometry with every child's subtree bounds, so one call yields a subtree's bounds. `MainWindow::ModelWorldBounds` / `SceneWorldBounds` wrap this for a model / the whole scene.
+- **Space**: "world bounds" in this task means **normalized scene space** (the shared shading / shadow / measurement space, i.e. after the scene-root normalization matrix). The same API can target raw model space by passing a different matrix.
+- **Display**: on each successful import, the model's bounds are printed to the message panel as one line: `包围盒 [name]：min(x, y, z)  max(x, y, z)` (3 decimals, normalized scene space). Bounds are not shown in the project tree, and are not recomputed when a node transform is edited.
+- **Edge cases**: an **empty box** is `min = +inf`, `max = -inf`; it is ignored by unions / accumulation and shown as `（无几何）`. A **degenerate box** (`min == max`, e.g. a single-point mesh) is valid. **Invalid** boxes (NaN / `min > max`) are rejected by `AabbIsValid`. **Huge coordinates** rely on `float` precision — extreme magnitudes lose precision and are not special-cased; the normalization step keeps the working range near `[-1, 1]` regardless of source units.
+
+

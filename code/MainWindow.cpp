@@ -1538,6 +1538,8 @@ void MainWindow::AddLoadedModel(const QString& filePath, SceneAsset&& asset) {
     BuildModelHierarchy(m_loadedModels.back());
     RebuildSceneMeshes(true);
     RebuildProjectTree();
+    // 任务 2.2：导入后在消息栏输出该模型的包围盒（归一化场景空间）。
+    ShowModelBounds(m_loadedModels.back());
     AddRecentFile(filePath);
 }
 
@@ -1675,33 +1677,15 @@ void MainWindow::FocusSceneOrModel(QTreeWidgetItem* treeItem) {
         selectedModel = &(*it);
     }
 
-    Vec3 bboxMin = { std::numeric_limits<float>::max(),
-                     std::numeric_limits<float>::max(),
-                     std::numeric_limits<float>::max() };
-    Vec3 bboxMax = { std::numeric_limits<float>::lowest(),
-                     std::numeric_limits<float>::lowest(),
-                     std::numeric_limits<float>::lowest() };
-    bool any = false;
+    // 统一的包围盒查询（归一化场景空间）：单模型或整个场景。
+    const Aabb bounds = selectedModel ? ModelWorldBounds(*selectedModel) : SceneWorldBounds();
+    if (AabbIsEmpty(bounds)) return;
 
-    if (selectedModel) {
-        // 已含场景归一化，得到归一化场景空间包围盒。
-        AccumulateModelBounds(*selectedModel, bboxMin, bboxMax, any);
-    } else {
-        for (const LoadedModel& model : m_loadedModels) {
-            AccumulateModelBounds(model, bboxMin, bboxMax, any);
-        }
-    }
-    if (!any) return;
-
-    const Vec3 normalizedCenter = {
-        (bboxMin.x + bboxMax.x) * 0.5f,
-        (bboxMin.y + bboxMax.y) * 0.5f,
-        (bboxMin.z + bboxMax.z) * 0.5f
-    };
-
-    const float sizeX = bboxMax.x - bboxMin.x;
-    const float sizeY = bboxMax.y - bboxMin.y;
-    const float sizeZ = bboxMax.z - bboxMin.z;
+    const Vec3 normalizedCenter = AabbCenter(bounds);
+    const Vec3 boundsSize = AabbSize(bounds);
+    const float sizeX = boundsSize.x;
+    const float sizeY = boundsSize.y;
+    const float sizeZ = boundsSize.z;
     QWindow* focusWindow = IsOpenGLBackend()
         ? static_cast<QWindow*>(m_openglWindow)
         : static_cast<QWindow*>(m_vulkanWindow);
@@ -1868,24 +1852,14 @@ void MainWindow::RebuildSceneMeshes(bool recomputeNormalization) {
     // 场景取景：仅在新模型加入 / 移除 / 后端切换（重算归一化）时复位相机，
     // 变换编辑（删除/复制节点）不重置相机，避免“改一个节点把视角弹回”。
     if (recomputeNormalization) {
-        Vec3 bboxMin = { std::numeric_limits<float>::max(),
-                         std::numeric_limits<float>::max(),
-                         std::numeric_limits<float>::max() };
-        Vec3 bboxMax = { std::numeric_limits<float>::lowest(),
-                         std::numeric_limits<float>::lowest(),
-                         std::numeric_limits<float>::lowest() };
-        bool any = false;
-        for (const LoadedModel& model : m_loadedModels) {
-            AccumulateModelBounds(model, bboxMin, bboxMax, any);
-        }
-        const Vec3 center = any
-            ? Vec3{ (bboxMin.x + bboxMax.x) * 0.5f,
-                    (bboxMin.y + bboxMax.y) * 0.5f,
-                    (bboxMin.z + bboxMax.z) * 0.5f }
-            : Vec3{ 0.0f, 0.0f, 0.0f };
-        const float sizeX = any ? (bboxMax.x - bboxMin.x) : 0.0f;
-        const float sizeY = any ? (bboxMax.y - bboxMin.y) : 0.0f;
-        const float sizeZ = any ? (bboxMax.z - bboxMin.z) : 0.0f;
+        // 统一的场景包围盒查询（归一化场景空间）。
+        const Aabb sceneBounds = SceneWorldBounds();
+        const bool any = !AabbIsEmpty(sceneBounds);
+        const Vec3 center = any ? AabbCenter(sceneBounds) : Vec3{ 0.0f, 0.0f, 0.0f };
+        const Vec3 sceneSize = AabbSize(sceneBounds);
+        const float sizeX = sceneSize.x;
+        const float sizeY = sceneSize.y;
+        const float sizeZ = sceneSize.z;
 
         QWindow* viewWindow = useOpenGL
             ? static_cast<QWindow*>(m_openglWindow)
@@ -1941,6 +1915,8 @@ Object* MainWindow::CreateMeshObject(LoadedModel& model, int assetMeshIndex) {
 
     // 任务 2.1：顶点按“节点局部空间”上传，不再做 CPU 归一化；变换由场景图施加。
     const MeshData& mesh = model.asset.meshes[static_cast<size_t>(assetMeshIndex)];
+    // 任务 2.2：把网格局部包围盒写入对象，供统一的包围盒查询（GetWorldBounds）使用。
+    object->SetLocalBounds(mesh.bounds);
     if (auto* vkMesh = dynamic_cast<VKMesh*>(object)) {
         vkMesh->SetMeshData(mesh);
     } else if (auto* glMesh = dynamic_cast<GLMesh*>(object)) {
@@ -2091,24 +2067,44 @@ void MainWindow::AccumulateModelBounds(const LoadedModel& model, Vec3& boundsMin
                 continue;
             }
             const Aabb& box = model.asset.meshes[static_cast<size_t>(mesh.assetMeshIndex)].bounds;
-            const Vec3 corners[8] = {
-                { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
-                { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
-                { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
-                { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z }
-            };
-            for (const Vec3& c : corners) {
-                const Vec3 p = TransformPoint(world, c);
-                boundsMin.x = std::min(boundsMin.x, p.x);
-                boundsMin.y = std::min(boundsMin.y, p.y);
-                boundsMin.z = std::min(boundsMin.z, p.z);
-                boundsMax.x = std::max(boundsMax.x, p.x);
-                boundsMax.y = std::max(boundsMax.y, p.y);
-                boundsMax.z = std::max(boundsMax.z, p.z);
-                any = true;
-            }
+            // 用统一的 AabbTransform（8 角点变换重求并）替代手写角点循环。
+            const Aabb worldBox = AabbTransform(box, world);
+            if (AabbIsEmpty(worldBox)) continue;
+            boundsMin.x = std::min(boundsMin.x, worldBox.min.x);
+            boundsMin.y = std::min(boundsMin.y, worldBox.min.y);
+            boundsMin.z = std::min(boundsMin.z, worldBox.min.z);
+            boundsMax.x = std::max(boundsMax.x, worldBox.max.x);
+            boundsMax.y = std::max(boundsMax.y, worldBox.max.y);
+            boundsMax.z = std::max(boundsMax.z, worldBox.max.z);
+            any = true;
         }
     }
+}
+
+// 计算某模型在“归一化场景空间”的整体世界包围盒（任务 2.2）；无几何返回空盒。
+Aabb MainWindow::ModelWorldBounds(const LoadedModel& model) const {
+    Vec3 boundsMin = { std::numeric_limits<float>::max(),
+                       std::numeric_limits<float>::max(),
+                       std::numeric_limits<float>::max() };
+    Vec3 boundsMax = { std::numeric_limits<float>::lowest(),
+                       std::numeric_limits<float>::lowest(),
+                       std::numeric_limits<float>::lowest() };
+    bool any = false;
+    AccumulateModelBounds(model, boundsMin, boundsMax, any);
+    if (!any) return AabbEmpty();
+    Aabb out;
+    out.min = boundsMin;
+    out.max = boundsMax;
+    return out;
+}
+
+// 计算整个场景在“归一化场景空间”的世界包围盒（所有模型并集，任务 2.2）。
+Aabb MainWindow::SceneWorldBounds() const {
+    Aabb result = AabbEmpty();
+    for (const LoadedModel& model : m_loadedModels) {
+        result = AabbUnion(result, ModelWorldBounds(model));
+    }
+    return result;
 }
 
 // 计算场景归一化：更新 m_sceneSourceCenter / m_sceneNormalizationScale。
@@ -2132,22 +2128,16 @@ void MainWindow::ComputeSceneNormalization() {
                 }
                 const Aabb& box =
                     model.asset.meshes[static_cast<size_t>(mesh.assetMeshIndex)].bounds;
-                const Vec3 corners[8] = {
-                    { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
-                    { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
-                    { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
-                    { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z }
-                };
-                for (const Vec3& c : corners) {
-                    const Vec3 p = TransformPoint(world, c);
-                    boundsMin.x = std::min(boundsMin.x, p.x);
-                    boundsMin.y = std::min(boundsMin.y, p.y);
-                    boundsMin.z = std::min(boundsMin.z, p.z);
-                    boundsMax.x = std::max(boundsMax.x, p.x);
-                    boundsMax.y = std::max(boundsMax.y, p.y);
-                    boundsMax.z = std::max(boundsMax.z, p.z);
-                    any = true;
-                }
+                // 统一的 AabbTransform（8 角点变换重求并）替代手写角点循环。
+                const Aabb worldBox = AabbTransform(box, world);
+                if (AabbIsEmpty(worldBox)) continue;
+                boundsMin.x = std::min(boundsMin.x, worldBox.min.x);
+                boundsMin.y = std::min(boundsMin.y, worldBox.min.y);
+                boundsMin.z = std::min(boundsMin.z, worldBox.min.z);
+                boundsMax.x = std::max(boundsMax.x, worldBox.max.x);
+                boundsMax.y = std::max(boundsMax.y, worldBox.max.y);
+                boundsMax.z = std::max(boundsMax.z, worldBox.max.z);
+                any = true;
             }
         }
     }
@@ -2208,6 +2198,26 @@ void MainWindow::RebuildProjectTree() {
         model.treeItem->setExpanded(true);
     }
     m_modelsTreeItem->setExpanded(true);
+}
+
+// 在消息栏输出某模型的包围盒（归一化场景空间，任务 2.2）。
+void MainWindow::ShowModelBounds(const LoadedModel& model) {
+    const Aabb box = ModelWorldBounds(model);
+    const QString name = model.treeItem
+        ? model.treeItem->text(0)
+        : QFileInfo(QString::fromStdString(model.asset.sourcePath)).fileName();
+    if (AabbIsEmpty(box)) {
+        ShowMessage(QStringLiteral("包围盒 [%1]：（无几何）").arg(name), false);
+        return;
+    }
+    ShowMessage(QStringLiteral("包围盒 [%1]：min(%2, %3, %4)  max(%5, %6, %7)")
+        .arg(name)
+        .arg(box.min.x, 0, 'f', 3)
+        .arg(box.min.y, 0, 'f', 3)
+        .arg(box.min.z, 0, 'f', 3)
+        .arg(box.max.x, 0, 'f', 3)
+        .arg(box.max.y, 0, 'f', 3)
+        .arg(box.max.z, 0, 'f', 3), false);
 }
 
 // 把某模型节点层级写入项目树。
