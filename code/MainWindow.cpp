@@ -50,6 +50,7 @@
 #include <QTimeEdit>
 #include <QDial>
 #include <QSlider>
+#include <QColorDialog>
 #include <QDate>
 #include <QTime>
 #include <QtGlobal>
@@ -237,6 +238,14 @@ void MainWindow::SetupToolBar() {
     m_pbrButton = new QPushButton(QStringLiteral("PBR 参数"));
     toolbar->addWidget(m_pbrButton);
     connect(m_pbrButton, &QPushButton::clicked, this, &MainWindow::onPbrPanel);
+
+    m_hdrButton = new QPushButton(QStringLiteral("HDR/曝光"));
+    toolbar->addWidget(m_hdrButton);
+    connect(m_hdrButton, &QPushButton::clicked, this, &MainWindow::onHdrPanel);
+
+    m_debugButton = new QPushButton(QStringLiteral("调试视图"));
+    toolbar->addWidget(m_debugButton);
+    connect(m_debugButton, &QPushButton::clicked, this, &MainWindow::onDebugPanel);
 
     QWidget* spacer = new QWidget();
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -483,6 +492,72 @@ void MainWindow::SetupVulkan() {
     m_lightAnalysisPanel->setVisible(false);
     ApplyLightAnalysisToRenderer();
 
+    // 1.7：阴影偏移 / PCF / 法线偏移（追加到光照分析面板）。
+    m_pShadowBiasSlider = new QSlider(Qt::Horizontal, m_lightAnalysisPanel);
+    // 滑块 0..50 映射 0.000..0.005（步长 0.0001）。
+    m_pShadowBiasSlider->setRange(0, 50);
+    m_pShadowBiasSlider->setValue(20);  // 0.002（旧默认值）
+    pFormLayout->addRow(QStringLiteral("阴影偏移"), m_pShadowBiasSlider);
+
+    m_pPcfCombo = new QComboBox(m_lightAnalysisPanel);
+    m_pPcfCombo->addItems(QStringList() << QStringLiteral("关闭")
+                                        << QStringLiteral("3x3")
+                                        << QStringLiteral("5x5"));
+    m_pPcfCombo->setCurrentIndex(1);  // 3x3（旧默认）
+    pFormLayout->addRow(QStringLiteral("PCF"), m_pPcfCombo);
+
+    m_pNormalOffsetSlider = new QSlider(Qt::Horizontal, m_lightAnalysisPanel);
+    // 滑块 0..50 映射 0.0..5.0 世界纹素倍数（步长 0.1）。
+    m_pNormalOffsetSlider->setRange(0, 50);
+    m_pNormalOffsetSlider->setValue(10);  // 1.0
+    pFormLayout->addRow(QStringLiteral("法线偏移"), m_pNormalOffsetSlider);
+
+    // 1.7：半球环境光（天空色 / 地面色 / 强度）。
+    m_pSkyColorButton = new QPushButton(m_lightAnalysisPanel);
+    pFormLayout->addRow(QStringLiteral("天空色"), m_pSkyColorButton);
+    m_pGroundColorButton = new QPushButton(m_lightAnalysisPanel);
+    pFormLayout->addRow(QStringLiteral("地面色"), m_pGroundColorButton);
+    m_pAmbientIntensitySlider = new QSlider(Qt::Horizontal, m_lightAnalysisPanel);
+    // 滑块 0..300 映射 0.0..3.0 强度（步长 0.01）。
+    m_pAmbientIntensitySlider->setRange(0, 300);
+    m_pAmbientIntensitySlider->setValue(100);  // 1.0
+    pFormLayout->addRow(QStringLiteral("环境光强度"), m_pAmbientIntensitySlider);
+
+    // 环境光颜色按钮：用线性色初始化（默认天空 0.03/0.035/0.045、地面 0.015/0.013/0.011）。
+    m_ambientSkyColor = QColor::fromRgbF(0.03, 0.035, 0.045);
+    m_ambientGroundColor = QColor::fromRgbF(0.015, 0.013, 0.011);
+    auto updateColorButtons = [this]() {
+        if (m_pSkyColorButton) {
+            m_pSkyColorButton->setStyleSheet(QStringLiteral("background-color: %1;")
+                .arg(m_ambientSkyColor.name()));
+        }
+        if (m_pGroundColorButton) {
+            m_pGroundColorButton->setStyleSheet(QStringLiteral("background-color: %1;")
+                .arg(m_ambientGroundColor.name()));
+        }
+    };
+    updateColorButtons();
+    connect(m_pSkyColorButton, &QPushButton::clicked, this, [this, updateColorButtons]() {
+        const QColor c = QColorDialog::getColor(m_ambientSkyColor, this, QStringLiteral("天空色"));
+        if (c.isValid()) {
+            m_ambientSkyColor = c;
+            updateColorButtons();
+            ApplyLightAnalysisToRenderer();
+        }
+    });
+    connect(m_pGroundColorButton, &QPushButton::clicked, this, [this, updateColorButtons]() {
+        const QColor c = QColorDialog::getColor(m_ambientGroundColor, this, QStringLiteral("地面色"));
+        if (c.isValid()) {
+            m_ambientGroundColor = c;
+            updateColorButtons();
+            ApplyLightAnalysisToRenderer();
+        }
+    });
+    connect(m_pShadowBiasSlider, &QSlider::valueChanged, this, [this](int) { ApplyLightAnalysisToRenderer(); });
+    connect(m_pPcfCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) { ApplyLightAnalysisToRenderer(); });
+    connect(m_pNormalOffsetSlider, &QSlider::valueChanged, this, [this](int) { ApplyLightAnalysisToRenderer(); });
+    connect(m_pAmbientIntensitySlider, &QSlider::valueChanged, this, [this](int) { ApplyLightAnalysisToRenderer(); });
+
     // PBR 调试面板（1.5）：金属度 / 粗糙度 / 自发光覆盖。默认不勾选，跟随材质自带值。
     m_pbrPanel = new QWidget();
     m_pbrPanel->setFixedWidth(250);
@@ -525,6 +600,75 @@ void MainWindow::SetupVulkan() {
 
     m_pbrPanel->setVisible(false);
 
+    // HDR/曝光面板（1.6）：HDR 开关 + 曝光(EV) 滑块。默认关闭 HDR，回退到旧 LDR 画面。
+    m_hdrPanel = new QWidget();
+    m_hdrPanel->setFixedWidth(250);
+    m_hdrPanel->setAutoFillBackground(true);
+    m_hdrPanel->setStyleSheet(QStringLiteral("background-color: #252526; border: 1px solid #3c3c3c;"));
+    QVBoxLayout* hdrLayout = new QVBoxLayout(m_hdrPanel);
+    hdrLayout->setContentsMargins(8, 6, 8, 6);
+    hdrLayout->setSpacing(6);
+    hdrLayout->setAlignment(Qt::AlignTop);
+
+    m_hdrCheck = new QCheckBox(QStringLiteral("启用 HDR + ACES 色调映射"));
+    m_hdrCheck->setChecked(false);
+    hdrLayout->addWidget(m_hdrCheck);
+
+    m_exposureValueLabel = new QLabel(QStringLiteral("曝光: 0.0 EV"));
+    m_exposureValueLabel->setStyleSheet(QStringLiteral("color: #d4d4d4; border: none;"));
+    hdrLayout->addWidget(m_exposureValueLabel);
+
+    m_exposureSlider = new QSlider(Qt::Horizontal);
+    // EV 档位 -5..+5，步长 0.1（滑块整数 0..100 映射 -5..+5）。
+    m_exposureSlider->setRange(0, 100);
+    m_exposureSlider->setValue(50);
+    hdrLayout->addWidget(m_exposureSlider);
+
+    auto applyHdr = [this]() { ApplyHdrToRenderer(); };
+    connect(m_hdrCheck, &QCheckBox::toggled, this, [applyHdr](bool) { applyHdr(); });
+    connect(m_exposureSlider, &QSlider::valueChanged, this, [applyHdr](int) { applyHdr(); });
+
+    m_hdrPanel->setVisible(false);
+
+    // 调试视图面板（1.7）：调试视图下拉 + 4x MSAA 开关。
+    m_debugPanel = new QWidget();
+    m_debugPanel->setFixedWidth(250);
+    m_debugPanel->setAutoFillBackground(true);
+    m_debugPanel->setStyleSheet(QStringLiteral("background-color: #252526; border: 1px solid #3c3c3c;"));
+    QVBoxLayout* debugLayout = new QVBoxLayout(m_debugPanel);
+    debugLayout->setContentsMargins(8, 6, 8, 6);
+    debugLayout->setSpacing(6);
+    debugLayout->setAlignment(Qt::AlignTop);
+
+    QLabel* debugViewLabel = new QLabel(QStringLiteral("调试视图"));
+    debugViewLabel->setStyleSheet(QStringLiteral("color: #d4d4d4; border: none;"));
+    debugLayout->addWidget(debugViewLabel);
+    m_debugViewCombo = new QComboBox();
+    m_debugViewCombo->addItems(QStringList()
+        << QStringLiteral("正常")
+        << QStringLiteral("深度")
+        << QStringLiteral("世界法线")
+        << QStringLiteral("阴影贴图"));
+    m_debugViewCombo->setCurrentIndex(0);
+    debugLayout->addWidget(m_debugViewCombo);
+
+    m_msaaCheck = new QCheckBox(QStringLiteral("启用 4x MSAA"));
+    m_msaaCheck->setChecked(false);
+    debugLayout->addWidget(m_msaaCheck);
+
+    m_debugHintLabel = new QLabel(QString());
+    m_debugHintLabel->setWordWrap(true);
+    m_debugHintLabel->setStyleSheet(QStringLiteral("color: #c8a000; border: none;"));
+    m_debugHintLabel->setVisible(false);
+    debugLayout->addWidget(m_debugHintLabel);
+
+    auto applyDebug = [this]() { ApplyDebugToRenderer(); };
+    connect(m_debugViewCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [applyDebug](int) { applyDebug(); });
+    connect(m_msaaCheck, &QCheckBox::toggled, this, [applyDebug](bool) { applyDebug(); });
+
+    m_debugPanel->setVisible(false);
+
     QWidget* viewportHost = new QWidget();
     QHBoxLayout* viewportLayout = new QHBoxLayout(viewportHost);
     viewportLayout->setContentsMargins(0, 0, 0, 0);
@@ -533,6 +677,8 @@ void MainWindow::SetupVulkan() {
     viewportLayout->addWidget(m_container, 1);
     viewportLayout->addWidget(m_lightAnalysisPanel, 0);
     viewportLayout->addWidget(m_pbrPanel, 0);
+    viewportLayout->addWidget(m_hdrPanel, 0);
+    viewportLayout->addWidget(m_debugPanel, 0);
 
     // 右栏：上方视口，下方消息区（projectPanel 右边、渲染视口下方、状态栏上方）。
     m_messageList = new QListWidget();
@@ -916,6 +1062,76 @@ void MainWindow::ApplyPbrToRenderer() {
     apply(dynamic_cast<GLRender3D*>(m_openglRenderer));
 }
 
+// 打开或关闭 HDR/曝光面板。
+void MainWindow::onHdrPanel() {
+    if (!m_hdrPanel) return;
+    const bool open = !m_hdrPanel->isVisible();
+    m_hdrPanel->setVisible(open);
+    if (m_hdrButton) {
+        m_hdrButton->setStyleSheet(open
+            ? QStringLiteral("background-color: #0078d4; color: #ffffff;")
+            : QString());
+    }
+    ApplyHdrToRenderer();
+}
+
+// 打开或关闭调试视图面板。
+void MainWindow::onDebugPanel() {
+    if (!m_debugPanel) return;
+    const bool open = !m_debugPanel->isVisible();
+    m_debugPanel->setVisible(open);
+    if (m_debugButton) {
+        m_debugButton->setStyleSheet(open
+            ? QStringLiteral("background-color: #0078d4; color: #ffffff;")
+            : QString());
+    }
+    ApplyDebugToRenderer();
+}
+
+// 把调试视图面板参数写进当前三维渲染器。
+void MainWindow::ApplyDebugToRenderer() {
+    const int view = m_debugViewCombo ? m_debugViewCombo->currentIndex() : 0;
+    const bool msaaOn = m_msaaCheck && m_msaaCheck->isChecked();
+
+    auto apply = [&](auto* render3D) {
+        if (!render3D) return;
+        render3D->SetDebugView(view);
+        render3D->SetMsaaEnabled(msaaOn);
+    };
+    apply(dynamic_cast<VKRender3D*>(m_renderer));
+    apply(dynamic_cast<GLRender3D*>(m_openglRenderer));
+
+    // “阴影贴图”调试视图需要先开启光照分析（否则无阴影贴图可显示）。
+    if (m_debugHintLabel) {
+        const bool needsLight = (view == 3)
+            && !(m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible());
+        m_debugHintLabel->setText(needsLight
+            ? QStringLiteral("提示：请先开启“光照分析”以渲染阴影贴图")
+            : QString());
+        m_debugHintLabel->setVisible(needsLight);
+    }
+}
+
+// 把 HDR/曝光面板参数写进当前三维渲染器。
+void MainWindow::ApplyHdrToRenderer() {
+    const bool hdrOn = m_hdrCheck && m_hdrCheck->isChecked();
+    // 滑块 0..100 映射 EV -5..+5。
+    const float ev = m_exposureSlider
+        ? (static_cast<float>(m_exposureSlider->value()) - 50.0f) / 10.0f
+        : 0.0f;
+    if (m_exposureValueLabel) {
+        m_exposureValueLabel->setText(QStringLiteral("曝光: %1 EV").arg(ev, 0, 'f', 1));
+    }
+
+    auto apply = [&](auto* render3D) {
+        if (!render3D) return;
+        render3D->SetHdrEnabled(hdrOn);
+        render3D->SetExposureEV(ev);
+    };
+    apply(dynamic_cast<VKRender3D*>(m_renderer));
+    apply(dynamic_cast<GLRender3D*>(m_openglRenderer));
+}
+
 // 重建材质面板内容（按模型分组 + 每材质复选框 + 组内总开关）。
 void MainWindow::RebuildMaterialPanel() {
     if (!m_materialTree) return;
@@ -999,7 +1215,31 @@ void MainWindow::ApplyLightAnalysisToRenderer() {    auto applySun = [this](auto
             render3D->SetLightTimeMinutes((t.hour() - 6) * 60 + t.minute());
         }
     };
-    auto applyShadow = [this](auto* render3D) {
+    // 1.7：阴影偏移 / PCF / 法线偏移 + 半球环境光（仅存参数，不分配资源）——两个后端都写入。
+    auto applySharedParams = [this](auto* render3D) {
+        if (!render3D) return;
+        if (m_pShadowBiasSlider) {
+            render3D->SetShadowBias(static_cast<float>(m_pShadowBiasSlider->value()) / 10000.0f);
+        }
+        if (m_pPcfCombo) {
+            render3D->SetShadowPcfMode(m_pPcfCombo->currentIndex());
+        }
+        if (m_pNormalOffsetSlider) {
+            render3D->SetShadowNormalOffsetScale(static_cast<float>(m_pNormalOffsetSlider->value()) / 10.0f);
+        }
+        if (m_pAmbientIntensitySlider) {
+            const Vec3 sky = { static_cast<float>(m_ambientSkyColor.redF()),
+                               static_cast<float>(m_ambientSkyColor.greenF()),
+                               static_cast<float>(m_ambientSkyColor.blueF()) };
+            const Vec3 ground = { static_cast<float>(m_ambientGroundColor.redF()),
+                                  static_cast<float>(m_ambientGroundColor.greenF()),
+                                  static_cast<float>(m_ambientGroundColor.blueF()) };
+            render3D->SetAmbientLight(sky, ground,
+                static_cast<float>(m_pAmbientIntensitySlider->value()) / 100.0f);
+        }
+    };
+    // 阴影资源相关（会分配阴影贴图）：只应用到当前活动后端。
+    auto applyShadowState = [this](auto* render3D) {
         if (!render3D) return;
         render3D->SetLightAnalysisEnabled(m_lightAnalysisPanel && m_lightAnalysisPanel->isVisible());
         if (m_pComboTexSize) {
@@ -1016,10 +1256,12 @@ void MainWindow::ApplyLightAnalysisToRenderer() {    auto applySun = [this](auto
     auto* opengl3D = dynamic_cast<GLRender3D*>(m_openglRenderer);
     applySun(vulkan3D);
     applySun(opengl3D);
+    applySharedParams(vulkan3D);
+    applySharedParams(opengl3D);
     if (IsOpenGLBackend()) {
-        applyShadow(opengl3D);
+        applyShadowState(opengl3D);
     } else {
-        applyShadow(vulkan3D);
+        applyShadowState(vulkan3D);
     }
     UpdateShadowSceneBounds();
     // 光照参数变化后让阴影通道立即重画一次，锁定新的光源矩阵。
@@ -1732,6 +1974,8 @@ void MainWindow::SwitchTo3D() {
         render3D->SetWireframeEnabled(m_borderCheck && m_borderCheck->isChecked());
         ApplyLightAnalysisToRenderer();
         ApplyPbrToRenderer();
+        ApplyHdrToRenderer();
+        ApplyDebugToRenderer();
         RebuildSceneMeshes();
         m_renderTimer->start(kRenderTickMs);
     } else {
@@ -1856,6 +2100,8 @@ void MainWindow::EnsureOpenGLInitialized() {
         render3D->SetOrthographicEnabled(m_orthographicCheck && m_orthographicCheck->isChecked());
         ApplyLightAnalysisToRenderer();
         ApplyPbrToRenderer();
+        ApplyHdrToRenderer();
+        ApplyDebugToRenderer();
     }
     RebuildSceneMeshes();
 }
@@ -1921,6 +2167,8 @@ void MainWindow::SwitchToVulkan() {
                 render3D->SetOrthographicEnabled(m_orthographicCheck && m_orthographicCheck->isChecked());
                 ApplyLightAnalysisToRenderer();
                 ApplyPbrToRenderer();
+                ApplyHdrToRenderer();
+                ApplyDebugToRenderer();
             }
             RebuildSceneMeshes();
         } else {

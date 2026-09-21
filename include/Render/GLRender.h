@@ -86,6 +86,8 @@ protected:
     // 关闭前释放后端资源的钩子。
     virtual void OnShutdown() {}
 
+    // 每帧开始、绑定帧缓冲前的钩子（1.6：HDR 目标在此按当前尺寸重建）。
+    virtual void OnPrepareFrame() {}
     // 每帧开始时的钩子。
     virtual void OnBeginFrame() {}
     // 每帧结束时的钩子。
@@ -93,6 +95,11 @@ protected:
 
     // 交换链/帧缓冲重建后的钩子。
     virtual void OnRecreateSwapchain() {}
+
+    // 本帧场景绘制的目标帧缓冲（1.6：HDR 时返回 HDR 中间目标，否则 0=默认帧缓冲）。
+    virtual unsigned int GetSceneFramebuffer() const { return 0; }
+    // 场景绘制完成后、交换缓冲前的钩子（1.6：HDR 后处理在此执行）。
+    virtual void OnAfterSceneRender() {}
 
     // 创建渲染通道。
     virtual bool CreateRenderPass();
@@ -209,6 +216,29 @@ public:
     void SetMetallicOverride(bool enabled, float value);
     void SetRoughnessOverride(bool enabled, float value);
     void SetEmissiveOverride(bool enabled, float value);
+    // HDR + 色调映射（1.6）：开启后场景先渲染到 HDR 中间目标，再经 ACES 色调映射输出。
+    void SetHdrEnabled(bool enabled);
+    // 设置曝光（EV 档位，最终线性乘数 = 2^EV）。
+    void SetExposureEV(float ev);
+    // 查询 HDR 路径是否开启。
+    bool IsHdrEnabled() const { return m_hdrEnabled; }
+    // ---- 1.7 阴影/环境光/调试/抗锯齿 ----
+    // 设置阴影基础深度偏移。
+    void SetShadowBias(float bias);
+    // 设置 PCF 档位：0 关闭 / 1 = 3x3 / 2 = 5x5。
+    void SetShadowPcfMode(int mode);
+    // 设置阴影法线偏移的世界纹素倍数。
+    void SetShadowNormalOffsetScale(float scale);
+    // 设置半球环境光的天空色、地面色与强度（线性空间）。
+    void SetAmbientLight(const Vec3& skyColor, const Vec3& groundColor, float intensity);
+    // 设置调试视图：0 正常 / 1 深度 / 2 世界法线 / 3 阴影。
+    void SetDebugView(int view);
+    // 查询当前调试视图。
+    int GetDebugView() const { return m_debugView; }
+    // 开关 4x MSAA。
+    void SetMsaaEnabled(bool enabled);
+    // 查询 4x MSAA 是否开启。
+    bool IsMsaaEnabled() const { return m_msaaEnabled; }
     // 设置阴影贴图边长。
     void SetShadowTextureSize(uint32_t size);
     // 返回阴影贴图边长。
@@ -273,8 +303,14 @@ protected:
     void OnBeginFrame() override;
     // 每帧结束时的钩子。
     void OnEndFrame() override;
+    // 每帧开始、绑定帧缓冲前准备 HDR 目标。
+    void OnPrepareFrame() override;
     // 交换链/帧缓冲重建后的钩子。
     void OnRecreateSwapchain() override;
+    // 本帧场景绘制的目标帧缓冲（HDR 时返回 HDR 中间目标）。
+    unsigned int GetSceneFramebuffer() const override;
+    // 场景绘制完成后执行 HDR 后处理。
+    void OnAfterSceneRender() override;
 
     // 创建渲染通道。
     bool CreateRenderPass() override;
@@ -328,6 +364,28 @@ protected:
     bool CreateDepthResources();
     // 销毁深度附件。
     void DestroyDepthResources();
+
+    // ---------------- HDR + 色调映射（1.6） ----------------
+    // 确保 HDR 中间目标（FBO + 颜色纹理 + 深度）与当前尺寸匹配。
+    bool EnsureHdrTarget();
+    // 创建 HDR 后处理程序（全屏三角形）。
+    bool CreatePostProgram();
+    // 销毁 HDR 后处理程序。
+    void DestroyPostProgram();
+    // 销毁 HDR 中间目标（FBO + 颜色纹理 + 深度渲染缓冲）。
+    void DestroyHdrResources();
+    // 执行 HDR 后处理：HDR 目标 -> 曝光 + ACES -> 默认帧缓冲。
+    void RenderPostPass();
+
+    // ---------------- 1.7 4x MSAA + 深度解析 ----------------
+    // 确保 4x MSAA 目标（多重采样 FBO + 颜色/深度渲染缓冲 + 解析 FBO）与当前尺寸/模式匹配。
+    bool EnsureMsaaTargets();
+    // 创建多重采样颜色/深度渲染缓冲与解析目标（单采样颜色 + 深度纹理）。
+    bool CreateMsaaResources();
+    // 销毁尺寸相关的 MSAA 资源。
+    void DestroyMsaaResources();
+    // 把多重采样深度解析为单采样深度纹理（glBlitFramebuffer），供世界坐标回读。
+    void ResolveMsaaDepth();
 
     bool m_wireframeMode = false;
     bool m_grayEnabled = false;
@@ -416,6 +474,42 @@ protected:
     static constexpr int kNormalTextureUnit = 4;
     static constexpr int kOcclusionTextureUnit = 5;
     static constexpr int kEmissiveTextureUnit = 6;
+
+    // ---------------- HDR + 色调映射（1.6） ----------------
+    bool m_hdrEnabled = false;         // 默认关闭：关闭时走旧的默认帧缓冲直出路径
+    float m_exposureEV = 0.0f;         // 曝光档位（EV），线性乘数 = 2^EV
+    unsigned int m_hdrFbo = 0;         // HDR 中间目标帧缓冲
+    unsigned int m_hdrColorTexture = 0;// 线性高精度颜色附件（RGBA16F）
+    unsigned int m_hdrDepthRbo = 0;    // 深度渲染缓冲
+    int m_hdrWidth = 0;                // 当前 HDR 目标宽度（0 = 尚未创建）
+    int m_hdrHeight = 0;
+    unsigned int m_postProgram = 0;    // 后处理程序
+    unsigned int m_postVao = 0;        // 空 VAO（Core Profile 下必须绑定）
+    int m_uPostExposureLoc = -1;       // uPostParams 位置
+    int m_uPostTextureLoc = -1;        // hdrTexture 位置
+
+    // ---------------- 1.7 阴影 / 环境光 / 调试 / MSAA ----------------
+    float m_shadowBias = 0.002f;
+    int m_shadowPcfMode = 1;                 // 0 关闭 / 1 = 3x3 / 2 = 5x5
+    float m_shadowNormalOffsetScale = 1.0f;
+    glm::vec3 m_ambientSkyColor = glm::vec3(0.030f, 0.035f, 0.045f);
+    glm::vec3 m_ambientGroundColor = glm::vec3(0.015f, 0.013f, 0.011f);
+    float m_ambientIntensity = 1.0f;
+    int m_debugView = 0;
+
+    bool m_msaaEnabled = false;
+    bool m_msaaPassActive = false;
+    bool m_msaaTargetsReady = false;
+    int m_msaaSamples = 4;
+    int m_msaaWidth = 0;
+    int m_msaaHeight = 0;
+    unsigned int m_msaaFbo = 0;              // 多重采样帧缓冲（颜色 + 深度）
+    unsigned int m_msaaColorRbo = 0;         // 多重采样颜色渲染缓冲（RGBA16F，线性）
+    unsigned int m_msaaDepthRbo = 0;         // 多重采样深度渲染缓冲
+    unsigned int m_msaaResolveFbo = 0;       // 解析目标帧缓冲（单采样颜色纹理 + 深度纹理）
+    unsigned int m_msaaResolveColorTexture = 0;  // 单采样颜色纹理（RGBA16F，线性）
+    unsigned int m_msaaResolveDepthTexture = 0;  // 单采样深度纹理（世界坐标回读用）
+    unsigned int m_postInputTexture = 0;     // 后处理输入纹理（HDR 或 MSAA 解析结果）
 };
 
 #endif //__GL_RENDER_H__

@@ -265,6 +265,7 @@ bool VKRender::EnsureFrameRecording() {
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(m_commandBuffers[m_currentFrame], &beginInfo);
+    m_colorPassOpen = false;
     m_frameRecording = true;
     return true;
 }
@@ -298,6 +299,15 @@ void VKRender::BeginColorRenderPass() {
     scissor.offset = { 0, 0 };
     scissor.extent = m_swapchainExtent;
     vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
+
+    m_colorPassOpen = true;
+}
+
+// 结束当前颜色渲染通道（1.6：HDR 后处理需要先结束场景通道再开新的通道）。
+void VKRender::EndColorRenderPass() {
+    if (!m_colorPassOpen) return;
+    vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
+    m_colorPassOpen = false;
 }
 
 // 开始一帧渲染。
@@ -317,7 +327,14 @@ void VKRender::EndFrame() {
     // 主通道结束前刷新透明绘制（按深度排序）。
     FlushTransparentDraws();
 
-    vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
+    // 1.6：场景通道结束后、关闭当前通道前执行 HDR 后处理（子类实现）。
+    OnAfterScenePass();
+
+    // 场景通道由 BeginColorRenderPass 打开；后处理可能在 OnAfterScenePass 中提前结束它。
+    if (m_colorPassOpen) {
+        vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
+        m_colorPassOpen = false;
+    }
 
     OnEndFrame();
 
@@ -1093,6 +1110,8 @@ bool VKRender::CreateSyncObjects() {
 
 // 清理 Vulkan 交换链资源。
 void VKRender::CleanupSwapchain() {
+    // 1.6：先释放尺寸相关的 HDR 中间目标（引用交换链尺寸）。
+    OnBeforeCleanupSwapchain();
     if (m_device != VK_NULL_HANDLE) {
         for (auto framebuffer : m_swapchainFramebuffers) {
             if (framebuffer != VK_NULL_HANDLE) {
@@ -1967,6 +1986,10 @@ bool VKRender3D::OnInitialize() {
 
 // 关闭前释放后端资源的钩子。
 void VKRender3D::OnShutdown() {
+    DestroyHdrResources();
+    DestroyHdrSupport();
+    DestroyMsaaResources();
+    DestroyMsaaSupport();
     DestroyDepthReadbackResources();
     DestroyShadowMap();
     DestroyDummyShadowMap();
@@ -1989,6 +2012,22 @@ void VKRender3D::OnDestroyPipelines() {
     if (m_shadowPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_shadowPipeline, nullptr);
         m_shadowPipeline = VK_NULL_HANDLE;
+    }
+    // 1.6/1.7：HDR 与 MSAA 场景管线均与 m_pipelines 共用 m_pipelineLayout，
+    // 必须在布局销毁前释放。
+    for (int i = 0; i < DT_COUNT; ++i) {
+        if (m_hdrPipelines[i] != VK_NULL_HANDLE) {
+            vkDestroyPipeline(m_device, m_hdrPipelines[i], nullptr);
+            m_hdrPipelines[i] = VK_NULL_HANDLE;
+        }
+        if (m_msaaLdrPipelines[i] != VK_NULL_HANDLE) {
+            vkDestroyPipeline(m_device, m_msaaLdrPipelines[i], nullptr);
+            m_msaaLdrPipelines[i] = VK_NULL_HANDLE;
+        }
+        if (m_msaaHdrPipelines[i] != VK_NULL_HANDLE) {
+            vkDestroyPipeline(m_device, m_msaaHdrPipelines[i], nullptr);
+            m_msaaHdrPipelines[i] = VK_NULL_HANDLE;
+        }
     }
 }
 
@@ -2014,6 +2053,1574 @@ void VKRender3D::OnBeginFrame() {
 // 交换链/帧缓冲重建后的钩子。
 void VKRender3D::OnRecreateSwapchain() {
     DestroyDepthResources();
+}
+
+// 交换链清理前释放 HDR 中间目标（尺寸相关资源）。
+void VKRender3D::OnBeforeCleanupSwapchain() {
+    DestroyHdrResources();
+    DestroyMsaaResources();
+}
+
+// ---------------- HDR + 色调映射（1.6） ----------------
+
+// 开启/关闭 HDR 路径。关闭时完全回退到旧的直接写交换链路径。
+void VKRender3D::SetHdrEnabled(bool enabled) {
+    m_hdrEnabled = enabled;
+}
+
+// 设置曝光（EV 档位）。
+void VKRender3D::SetExposureEV(float ev) {
+    m_exposureEV = ev;
+}
+
+// 1.7：阴影基础深度偏移。
+void VKRender3D::SetShadowBias(float bias) {
+    m_shadowBias = bias;
+}
+
+// 1.7：PCF 档位（0 关闭 / 1 = 3x3 / 2 = 5x5）。
+void VKRender3D::SetShadowPcfMode(int mode) {
+    m_shadowPcfMode = (mode < 0) ? 0 : (mode > 2 ? 2 : mode);
+}
+
+// 1.7：法线偏移的世界纹素倍数。
+void VKRender3D::SetShadowNormalOffsetScale(float scale) {
+    m_shadowNormalOffsetScale = (scale < 0.0f) ? 0.0f : scale;
+}
+
+// 1.7：半球环境光（线性空间）。
+void VKRender3D::SetAmbientLight(const Vec3& skyColor, const Vec3& groundColor, float intensity) {
+    m_ambientSkyColor = glm::vec3(skyColor.x, skyColor.y, skyColor.z);
+    m_ambientGroundColor = glm::vec3(groundColor.x, groundColor.y, groundColor.z);
+    m_ambientIntensity = (intensity < 0.0f) ? 0.0f : intensity;
+}
+
+// 1.7：调试视图（0 正常 / 1 深度 / 2 世界法线 / 3 阴影）。
+void VKRender3D::SetDebugView(int view) {
+    m_debugView = (view < 0) ? 0 : (view > 3 ? 3 : view);
+}
+
+// 1.7：开关 4x MSAA。
+void VKRender3D::SetMsaaEnabled(bool enabled) {
+    m_msaaEnabled = enabled;
+}
+
+// 按当前渲染目标返回管线：多重采样目标激活时优先返回 MSAA 管线，否则 HDR/LDR。
+// 以“通道是否激活”为准（而非 UI 开关），避免目标创建失败回退时误用不匹配的管线。
+VkPipeline VKRender3D::GetPipeline(DrawTopology topology) const {
+    if (topology < 0 || topology >= DT_COUNT) return VK_NULL_HANDLE;
+    if (m_msaaPassActive) {
+        if (m_hdrPassActive && m_msaaHdrPipelines[topology] != VK_NULL_HANDLE) {
+            return m_msaaHdrPipelines[topology];
+        }
+        if (m_msaaLdrPipelines[topology] != VK_NULL_HANDLE) {
+            return m_msaaLdrPipelines[topology];
+        }
+    }
+    if (m_hdrPassActive && m_hdrPipelines[topology] != VK_NULL_HANDLE) {
+        return m_hdrPipelines[topology];
+    }
+    return m_pipelines[topology];
+}
+
+// 开始主颜色渲染通道：按 MSAA / HDR 开关绑定对应帧缓冲。
+// 优先级：4x MSAA 目标 > HDR 中间目标 > 交换链主通道。
+void VKRender3D::BeginColorRenderPass() {
+    // HDR 颜色目标是 MSAA-HDR 的 resolve 目标，故 MSAA 或 HDR 任一开启时都需保证其存在。
+    // 两者都关闭时完全走旧的直接写交换链路径，不分配 HDR 目标。
+    const bool needHdrTarget = m_hdrEnabled || m_msaaEnabled;
+    const bool hdrTargetReady = needHdrTarget
+        ? (EnsureHdrTarget() && m_hdrFramebuffer != VK_NULL_HANDLE)
+        : false;
+    const bool wantHdr = m_hdrEnabled && hdrTargetReady;
+    const bool wantMsaa = m_msaaEnabled && hdrTargetReady && EnsureMsaaTargets();
+
+    if (wantMsaa) {
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        VkRenderPass renderPass = VK_NULL_HANDLE;
+        if (wantHdr) {
+            framebuffer = m_msaaHdrFramebuffer;
+            renderPass = m_msaaHdrRenderPass;
+        } else if (m_imageIndex < m_msaaLdrFramebuffers.size()) {
+            framebuffer = m_msaaLdrFramebuffers[m_imageIndex];
+            renderPass = m_msaaLdrRenderPass;
+        }
+        if (framebuffer != VK_NULL_HANDLE && renderPass != VK_NULL_HANDLE) {
+            m_msaaPassActive = true;
+            m_hdrPassActive = wantHdr;
+            OnBeginFrame();
+
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass = renderPass;
+            renderPassInfo.framebuffer = framebuffer;
+            renderPassInfo.renderArea.offset = { 0, 0 };
+            renderPassInfo.renderArea.extent = m_swapchainExtent;
+            renderPassInfo.clearValueCount = m_clearValueCount;
+            renderPassInfo.pClearValues = m_clearValues;
+            vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            VkViewport viewport{};
+            viewport.width = static_cast<float>(m_swapchainExtent.width);
+            viewport.height = static_cast<float>(m_swapchainExtent.height);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.extent = m_swapchainExtent;
+            vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
+
+            m_colorPassOpen = true;
+            return;
+        }
+    }
+
+    m_msaaPassActive = false;
+
+    if (wantHdr) {
+        m_hdrPassActive = true;
+        OnBeginFrame();
+
+        VkRenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassInfo.renderPass = m_hdrRenderPass;
+        renderPassInfo.framebuffer = m_hdrFramebuffer;
+        renderPassInfo.renderArea.offset = { 0, 0 };
+        renderPassInfo.renderArea.extent = m_swapchainExtent;
+        renderPassInfo.clearValueCount = m_clearValueCount;
+        renderPassInfo.pClearValues = m_clearValues;
+        vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = static_cast<float>(m_swapchainExtent.width);
+        viewport.height = static_cast<float>(m_swapchainExtent.height);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = { 0, 0 };
+        scissor.extent = m_swapchainExtent;
+        vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
+
+        m_colorPassOpen = true;
+        return;
+    }
+
+    m_hdrPassActive = false;
+    VKRender::BeginColorRenderPass();
+}
+
+// 场景通道结束后执行 HDR 后处理：HDR 目标 -> 曝光 + ACES -> 交换链。
+// LDR 路径无需后处理（MSAA 时场景通道已把多重采样颜色 resolve 到交换链图像）。
+void VKRender3D::OnAfterScenePass() {
+    const bool hdr = m_hdrPassActive;
+    m_hdrPassActive = false;
+
+    if (!hdr) return;
+
+    // 结束写入 HDR 中间目标的场景通道（MSAA 时 resolve 到 m_hdrColorImage）。
+    EndColorRenderPass();
+
+    if (!m_postPipelineReady || m_postPipeline == VK_NULL_HANDLE ||
+        m_hdrColorView == VK_NULL_HANDLE || m_postDescriptorSet == VK_NULL_HANDLE ||
+        m_postRenderPass == VK_NULL_HANDLE || m_imageIndex >= m_postFramebuffers.size() ||
+        m_postFramebuffers[m_imageIndex] == VK_NULL_HANDLE) {
+        return;
+    }
+
+    VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+
+    // 写入交换链的后处理通道（仅颜色附件，不触碰场景深度）。
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = m_postRenderPass;
+    renderPassInfo.framebuffer = m_postFramebuffers[m_imageIndex];
+    renderPassInfo.renderArea.offset = { 0, 0 };
+    renderPassInfo.renderArea.extent = m_swapchainExtent;
+    renderPassInfo.clearValueCount = 0;
+    renderPassInfo.pClearValues = nullptr;
+    vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(m_swapchainExtent.width);
+    viewport.height = static_cast<float>(m_swapchainExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = { 0, 0 };
+    scissor.extent = m_swapchainExtent;
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // 曝光乘数 = 2^EV；调试视图时置位调试标志（后处理跳过曝光与色调映射）。
+    struct PostParams { float params[4]; } push{};
+    push.params[0] = std::pow(2.0f, m_exposureEV);
+    push.params[1] = (m_debugView != 0) ? 1.0f : 0.0f;
+    push.params[2] = 0.0f;
+    push.params[3] = 0.0f;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_postPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_postPipelineLayout,
+                            0, 1, &m_postDescriptorSet, 0, nullptr);
+    vkCmdPushConstants(cmd, m_postPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(push), &push);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    vkCmdEndRenderPass(cmd);
+    m_colorPassOpen = false;
+}
+
+// 确保 HDR 中间目标与当前交换链尺寸一致；必要时创建。
+bool VKRender3D::EnsureHdrTarget() {
+    if (m_hdrFramebuffer != VK_NULL_HANDLE && m_hdrColorImage != VK_NULL_HANDLE) {
+        return true;
+    }
+    try {
+        if (!CreateHdrRenderPass()) return false;
+        if (!CreateHdrResources()) return false;
+        if (!CreatePostPipeline()) return false;
+    } catch (const std::exception& e) {
+        // 设备不支持所需 HDR 格式等情况：本次回退到旧的 LDR 直出路径，避免崩溃。
+        SetLastError(e.what());
+        return false;
+    }
+    // 资源（重新）创建后刷新后处理描述符绑定（交换链重建会替换 HDR 视图）。
+    UpdatePostDescriptors();
+    return true;
+}
+
+// 创建 HDR 渲染通道（颜色附件 + 深度附件，最终布局可被采样）。
+bool VKRender3D::CreateHdrRenderPass() {
+    if (m_hdrRenderPass != VK_NULL_HANDLE) return true;
+
+    // 优先 16F，退回 32F；两者都是线性高精度格式。
+    m_hdrFormat = FindSupportedFormat(
+        { VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT },
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = m_hdrFormat;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = FindDepthFormat();
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 1;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dependencies[2]{};
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                   VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependencies[0].srcAccessMask = 0;
+    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    // 出向依赖：把 HDR 颜色写入转为着色器可读（供后续后处理片元采样）。
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    std::vector<VkAttachmentDescription> attachments = { colorAttachment, depthAttachment };
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 2;
+    renderPassInfo.pDependencies = dependencies;
+
+    if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_hdrRenderPass) != VK_SUCCESS) {
+        return Fail("3D: 创建 HDR RenderPass 失败");
+    }
+    return true;
+}
+
+// 创建 HDR 颜色图像、视图与帧缓冲（尺寸随交换链）。
+bool VKRender3D::CreateHdrResources() {
+    if (m_hdrFormat == VK_FORMAT_UNDEFINED) return false;
+    // 深度图像由主交换链帧缓冲路径（CreateFramebuffers -> CreateDepthResources）创建，
+    // 这里复用同一张 m_depthImageView，避免重复分配。
+    if (m_depthImageView == VK_NULL_HANDLE) return false;
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = m_swapchainExtent.width;
+    imageInfo.extent.height = m_swapchainExtent.height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = m_hdrFormat;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_hdrColorImage) != VK_SUCCESS) {
+        return Fail("3D: 创建 HDR 颜色图像失败");
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(m_device, m_hdrColorImage, &memRequirements);
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    try {
+        allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    } catch (...) {
+        DestroyHdrResources();
+        return false;
+    }
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_hdrColorMemory) != VK_SUCCESS) {
+        DestroyHdrResources();
+        return Fail("3D: 分配 HDR 颜色图像内存失败");
+    }
+    vkBindImageMemory(m_device, m_hdrColorImage, m_hdrColorMemory, 0);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_hdrColorImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = m_hdrFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_hdrColorView) != VK_SUCCESS) {
+        DestroyHdrResources();
+        return Fail("3D: 创建 HDR 颜色图像视图失败");
+    }
+
+    VkImageView attachments[] = { m_hdrColorView, m_depthImageView };
+    VkFramebufferCreateInfo framebufferInfo{};
+    framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    framebufferInfo.renderPass = m_hdrRenderPass;
+    framebufferInfo.attachmentCount = 2;
+    framebufferInfo.pAttachments = attachments;
+    framebufferInfo.width = m_swapchainExtent.width;
+    framebufferInfo.height = m_swapchainExtent.height;
+    framebufferInfo.layers = 1;
+    if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_hdrFramebuffer) != VK_SUCCESS) {
+        DestroyHdrResources();
+        return Fail("3D: 创建 HDR 帧缓冲失败");
+    }
+
+    // 后处理写入交换链的帧缓冲（每个交换链图像一个，仅颜色附件）。
+    if (!CreatePostRenderPass()) {
+        DestroyHdrResources();
+        return false;
+    }
+    m_postFramebuffers.assign(m_swapchainImageViews.size(), VK_NULL_HANDLE);
+    for (size_t i = 0; i < m_swapchainImageViews.size(); ++i) {
+        VkImageView colorAttachment = m_swapchainImageViews[i];
+        VkFramebufferCreateInfo postFbInfo{};
+        postFbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        postFbInfo.renderPass = m_postRenderPass;
+        postFbInfo.attachmentCount = 1;
+        postFbInfo.pAttachments = &colorAttachment;
+        postFbInfo.width = m_swapchainExtent.width;
+        postFbInfo.height = m_swapchainExtent.height;
+        postFbInfo.layers = 1;
+        if (vkCreateFramebuffer(m_device, &postFbInfo, nullptr, &m_postFramebuffers[i]) != VK_SUCCESS) {
+            DestroyHdrResources();
+            return Fail("3D: 创建后处理帧缓冲失败");
+        }
+    }
+    return true;
+}
+
+// 创建后处理渲染通道：仅颜色附件，最终布局为 PRESENT_SRC（可直接呈现）。
+bool VKRender3D::CreatePostRenderPass() {
+    if (m_postRenderPass != VK_NULL_HANDLE) return true;
+
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = m_swapchainImageFormat;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;   // 全屏覆盖，无需加载旧内容
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_postRenderPass) != VK_SUCCESS) {
+        return Fail("3D: 创建后处理 RenderPass 失败");
+    }
+    return true;
+}
+
+// 创建 HDR 后处理管线（全屏三角形 + 曝光 + ACES）。
+bool VKRender3D::CreatePostPipeline() {
+    if (m_postPipelineReady) return true;
+
+    // 采样器。
+    if (m_postSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo samplerInfo{};
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.maxAnisotropy = 1.0f;
+        if (vkCreateSampler(m_device, &samplerInfo, nullptr, &m_postSampler) != VK_SUCCESS) {
+            return Fail("3D: 创建后处理采样器失败");
+        }
+    }
+
+    // 描述符集布局：binding 0 = HDR 颜色纹理。
+    if (m_postSetLayout == VK_NULL_HANDLE) {
+        VkDescriptorSetLayoutBinding binding{};
+        binding.binding = 0;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        binding.descriptorCount = 1;
+        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &binding;
+        if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_postSetLayout) != VK_SUCCESS) {
+            return Fail("3D: 创建后处理描述符集布局失败");
+        }
+    }
+
+    if (m_postDescriptorPool == VK_NULL_HANDLE) {
+        VkDescriptorPoolSize poolSize{};
+        poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSize.descriptorCount = 1;
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes = &poolSize;
+        poolInfo.maxSets = 1;
+        if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_postDescriptorPool) != VK_SUCCESS) {
+            return Fail("3D: 创建后处理描述符池失败");
+        }
+    }
+
+    if (m_postDescriptorSet == VK_NULL_HANDLE) {
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_postDescriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &m_postSetLayout;
+        if (vkAllocateDescriptorSets(m_device, &allocInfo, &m_postDescriptorSet) != VK_SUCCESS) {
+            return Fail("3D: 分配后处理描述符集失败");
+        }
+    }
+    UpdatePostDescriptors();
+
+    // 管线布局：push constant（后处理参数）。
+    if (m_postPipelineLayout == VK_NULL_HANDLE) {
+        VkPushConstantRange pushRange{};
+        pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushRange.offset = 0;
+        pushRange.size = sizeof(float) * 4;
+        VkPipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts = &m_postSetLayout;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushRange;
+        if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_postPipelineLayout) != VK_SUCCESS) {
+            return Fail("3D: 创建后处理管线布局失败");
+        }
+    }
+
+    // 着色器。
+    const std::string vertPath = AssetPath::ShaderFile("post_vert.spv");
+    const std::string fragPath = AssetPath::ShaderFile("post_frag.spv");
+    VkShaderModule vertModule = CreateShaderModuleHelper(ReadShaderFile(vertPath), vertPath);
+    VkShaderModule fragModule = CreateShaderModuleHelper(ReadShaderFile(fragPath), fragPath);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_FALSE;
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = m_postPipelineLayout;
+    pipelineInfo.renderPass = m_postRenderPass;  // 后处理专用通道（仅颜色附件）
+    pipelineInfo.subpass = 0;
+
+    VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_postPipeline);
+    vkDestroyShaderModule(m_device, fragModule, nullptr);
+    vkDestroyShaderModule(m_device, vertModule, nullptr);
+    if (result != VK_SUCCESS) {
+        return Fail("3D: 创建后处理管线失败");
+    }
+
+    m_postPipelineReady = true;
+    return true;
+}
+
+// 写入后处理描述符集（HDR 视图 + 采样器）。
+void VKRender3D::UpdatePostDescriptors() {
+    if (m_device == VK_NULL_HANDLE || m_postDescriptorSet == VK_NULL_HANDLE) return;
+    if (m_postSampler == VK_NULL_HANDLE || m_hdrColorView == VK_NULL_HANDLE) return;
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = m_postSampler;
+    imageInfo.imageView = m_hdrColorView;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_postDescriptorSet;
+    write.dstBinding = 0;
+    write.dstArrayElement = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+}
+
+// 销毁 HDR 中间目标（图像/视图/帧缓冲 + 后处理帧缓冲）。
+void VKRender3D::DestroyHdrResources() {
+    if (m_device == VK_NULL_HANDLE) {
+        m_postFramebuffers.clear();
+        m_hdrFramebuffer = VK_NULL_HANDLE;
+        m_hdrColorView = VK_NULL_HANDLE;
+        m_hdrColorMemory = VK_NULL_HANDLE;
+        m_hdrColorImage = VK_NULL_HANDLE;
+        return;
+    }
+    for (VkFramebuffer fb : m_postFramebuffers) {
+        if (fb != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(m_device, fb, nullptr);
+        }
+    }
+    m_postFramebuffers.clear();
+    if (m_hdrFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(m_device, m_hdrFramebuffer, nullptr);
+        m_hdrFramebuffer = VK_NULL_HANDLE;
+    }
+    if (m_hdrColorView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, m_hdrColorView, nullptr);
+        m_hdrColorView = VK_NULL_HANDLE;
+    }
+    if (m_hdrColorMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_hdrColorMemory, nullptr);
+        m_hdrColorMemory = VK_NULL_HANDLE;
+    }
+    if (m_hdrColorImage != VK_NULL_HANDLE) {
+        vkDestroyImage(m_device, m_hdrColorImage, nullptr);
+        m_hdrColorImage = VK_NULL_HANDLE;
+    }
+}
+
+// 销毁 HDR 渲染通道、管线、描述符与采样器（非尺寸相关）。
+void VKRender3D::DestroyHdrSupport() {
+    if (m_device != VK_NULL_HANDLE) {
+        // HDR 场景管线已在 OnDestroyPipelines 中随 m_pipelineLayout 一起释放。
+        if (m_postPipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(m_device, m_postPipeline, nullptr);
+            m_postPipeline = VK_NULL_HANDLE;
+        }
+        if (m_postPipelineLayout != VK_NULL_HANDLE) {
+            vkDestroyPipelineLayout(m_device, m_postPipelineLayout, nullptr);
+            m_postPipelineLayout = VK_NULL_HANDLE;
+        }
+        if (m_postDescriptorPool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(m_device, m_postDescriptorPool, nullptr);
+            m_postDescriptorPool = VK_NULL_HANDLE;
+        }
+        if (m_postSetLayout != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(m_device, m_postSetLayout, nullptr);
+            m_postSetLayout = VK_NULL_HANDLE;
+        }
+        if (m_postSampler != VK_NULL_HANDLE) {
+            vkDestroySampler(m_device, m_postSampler, nullptr);
+            m_postSampler = VK_NULL_HANDLE;
+        }
+        if (m_hdrRenderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(m_device, m_hdrRenderPass, nullptr);
+            m_hdrRenderPass = VK_NULL_HANDLE;
+        }
+        if (m_postRenderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(m_device, m_postRenderPass, nullptr);
+            m_postRenderPass = VK_NULL_HANDLE;
+        }
+    }
+    m_postDescriptorSet = VK_NULL_HANDLE;
+    m_postPipelineReady = false;
+}
+
+
+// ---------------- 1.7 4x MSAA + 深度解析 ----------------
+
+// 确保 4x MSAA 中间目标与当前尺寸/模式匹配；必要时创建。
+bool VKRender3D::EnsureMsaaTargets() {
+    if (!m_msaaEnabled) return false;
+    if (m_msaaTargetsReady && m_msaaSupportReady) return true;
+    try {
+        if (!CreateMsaaRenderPasses()) return false;
+        if (!CreateDepthResolveSupport()) return false;
+        if (!CreateMsaaColorDepthResources()) return false;
+        if (!CreateMsaaPipelines()) return false;
+    } catch (const std::exception& e) {
+        SetLastError(e.what());
+        return false;
+    }
+    m_msaaTargetsReady = true;
+    m_msaaSupportReady = true;
+    UpdateDepthResolveDescriptors();
+    return true;
+}
+
+// 创建 LDR / HDR 两个多重采样渲染通道（颜色为多重采样并在子通道中 resolve）。
+bool VKRender3D::CreateMsaaRenderPasses() {
+    if (m_msaaLdrRenderPass != VK_NULL_HANDLE && m_msaaHdrRenderPass != VK_NULL_HANDLE) {
+        return true;
+    }
+    m_msaaSampleCount = VK_SAMPLE_COUNT_4_BIT;
+    m_msaaDepthFormat = FindSupportedFormat(
+        { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT },
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+
+    // 颜色附件（多重采样，子通道 resolve 到单采样目标）。
+    VkAttachmentDescription msaaColor{};
+    msaaColor.format = m_swapchainImageFormat;
+    msaaColor.samples = m_msaaSampleCount;
+    msaaColor.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    msaaColor.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;  // 仅用于 resolve
+    msaaColor.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    msaaColor.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    msaaColor.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    msaaColor.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    // 多重采样深度附件（也用于深度解析）。
+    VkAttachmentDescription msaaDepth{};
+    msaaDepth.format = m_msaaDepthFormat;
+    msaaDepth.samples = m_msaaSampleCount;
+    msaaDepth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    msaaDepth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;  // 深度解析需要保留
+    msaaDepth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    msaaDepth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    msaaDepth.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    msaaDepth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference msaaColorRef{};
+    msaaColorRef.attachment = 0;
+    msaaColorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkAttachmentReference msaaDepthRef{};
+    msaaDepthRef.attachment = 1;
+    msaaDepthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    // LDR：resolve 到交换链图像（附件 2），finalLayout=PRESENT_SRC。
+    {
+        VkAttachmentDescription resolveAttachment{};
+        resolveAttachment.format = m_swapchainImageFormat;
+        resolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        resolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        resolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        resolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        resolveAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        VkAttachmentReference resolveRef{};
+        resolveRef.attachment = 2;
+        resolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &msaaColorRef;
+        subpass.pResolveAttachments = &resolveRef;
+        subpass.pDepthStencilAttachment = &msaaDepthRef;
+
+        VkSubpassDependency dependency{};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                   VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        std::vector<VkAttachmentDescription> attachments = { msaaColor, msaaDepth, resolveAttachment };
+        VkRenderPassCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        info.attachmentCount = static_cast<uint32_t>(attachments.size());
+        info.pAttachments = attachments.data();
+        info.subpassCount = 1;
+        info.pSubpasses = &subpass;
+        info.dependencyCount = 1;
+        info.pDependencies = &dependency;
+        if (vkCreateRenderPass(m_device, &info, nullptr, &m_msaaLdrRenderPass) != VK_SUCCESS) {
+            return Fail("3D: 创建 MSAA LDR RenderPass 失败");
+        }
+    }
+
+    // HDR：resolve 到 HDR 中间目标颜色图像（附件 2），finalLayout=SHADER_READ_ONLY。
+    // 注意：resolve 目标格式必须与多重采样附件格式兼容，故 HDR 通道使用 HDR 格式的
+    // 多重采样颜色附件（与 LDR 通道的交换链格式不同）。
+    {
+        VkAttachmentDescription hdrMsaaColor = msaaColor;
+        hdrMsaaColor.format = m_hdrFormat;
+
+        VkAttachmentDescription resolveAttachment{};
+        resolveAttachment.format = m_hdrFormat;
+        resolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        resolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        resolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        resolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        resolveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference resolveRef{};
+        resolveRef.attachment = 2;
+        resolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &msaaColorRef;
+        subpass.pResolveAttachments = &resolveRef;
+        subpass.pDepthStencilAttachment = &msaaDepthRef;
+
+        VkSubpassDependency dependencies[2]{};
+        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[0].dstSubpass = 0;
+        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependencies[0].srcAccessMask = 0;
+        dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        dependencies[1].srcSubpass = 0;
+        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        std::vector<VkAttachmentDescription> attachments = { hdrMsaaColor, msaaDepth, resolveAttachment };
+        VkRenderPassCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        info.attachmentCount = static_cast<uint32_t>(attachments.size());
+        info.pAttachments = attachments.data();
+        info.subpassCount = 1;
+        info.pSubpasses = &subpass;
+        info.dependencyCount = 2;
+        info.pDependencies = dependencies;
+        if (vkCreateRenderPass(m_device, &info, nullptr, &m_msaaHdrRenderPass) != VK_SUCCESS) {
+            return Fail("3D: 创建 MSAA HDR RenderPass 失败");
+        }
+    }
+
+    return true;
+}
+
+// 创建多重采样颜色/深度图像、视图与帧缓冲。
+bool VKRender3D::CreateMsaaColorDepthResources() {
+    if (m_hdrFormat == VK_FORMAT_UNDEFINED) return false;
+    if (m_depthImageView == VK_NULL_HANDLE) return false;
+
+    // 多重采样颜色图像。
+    VkImageCreateInfo colorInfo{};
+    colorInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    colorInfo.imageType = VK_IMAGE_TYPE_2D;
+    colorInfo.extent = { m_swapchainExtent.width, m_swapchainExtent.height, 1 };
+    colorInfo.mipLevels = 1;
+    colorInfo.arrayLayers = 1;
+    colorInfo.format = m_swapchainImageFormat;
+    colorInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    colorInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    colorInfo.samples = m_msaaSampleCount;
+    colorInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(m_device, &colorInfo, nullptr, &m_msaaColorImage) != VK_SUCCESS) {
+        DestroyMsaaResources();
+        return Fail("3D: 创建 MSAA 颜色图像失败");
+    }
+    VkMemoryRequirements colorReqs{};
+    vkGetImageMemoryRequirements(m_device, m_msaaColorImage, &colorReqs);
+    VkMemoryAllocateInfo colorAlloc{};
+    colorAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    colorAlloc.allocationSize = colorReqs.size;
+    colorAlloc.memoryTypeIndex = FindMemoryType(colorReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(m_device, &colorAlloc, nullptr, &m_msaaColorMemory) != VK_SUCCESS) {
+        DestroyMsaaResources();
+        return Fail("3D: 分配 MSAA 颜色内存失败");
+    }
+    vkBindImageMemory(m_device, m_msaaColorImage, m_msaaColorMemory, 0);
+
+    VkImageViewCreateInfo colorViewInfo{};
+    colorViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    colorViewInfo.image = m_msaaColorImage;
+    colorViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    colorViewInfo.format = m_swapchainImageFormat;
+    colorViewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    if (vkCreateImageView(m_device, &colorViewInfo, nullptr, &m_msaaColorView) != VK_SUCCESS) {
+        DestroyMsaaResources();
+        return Fail("3D: 创建 MSAA 颜色视图失败");
+    }
+
+    // HDR 多重采样颜色图像（格式 = HDR 格式，供 HDR 通道 resolve）。
+    VkImageCreateInfo hdrColorInfo = colorInfo;
+    hdrColorInfo.format = m_hdrFormat;
+    if (vkCreateImage(m_device, &hdrColorInfo, nullptr, &m_msaaHdrColorImage) != VK_SUCCESS) {
+        DestroyMsaaResources();
+        return Fail("3D: 创建 MSAA HDR 颜色图像失败");
+    }
+    VkMemoryRequirements hdrColorReqs{};
+    vkGetImageMemoryRequirements(m_device, m_msaaHdrColorImage, &hdrColorReqs);
+    VkMemoryAllocateInfo hdrColorAlloc{};
+    hdrColorAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    hdrColorAlloc.allocationSize = hdrColorReqs.size;
+    hdrColorAlloc.memoryTypeIndex = FindMemoryType(hdrColorReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(m_device, &hdrColorAlloc, nullptr, &m_msaaHdrColorMemory) != VK_SUCCESS) {
+        DestroyMsaaResources();
+        return Fail("3D: 分配 MSAA HDR 颜色内存失败");
+    }
+    vkBindImageMemory(m_device, m_msaaHdrColorImage, m_msaaHdrColorMemory, 0);
+
+    VkImageViewCreateInfo hdrColorViewInfo = colorViewInfo;
+    hdrColorViewInfo.image = m_msaaHdrColorImage;
+    hdrColorViewInfo.format = m_hdrFormat;
+    if (vkCreateImageView(m_device, &hdrColorViewInfo, nullptr, &m_msaaHdrColorView) != VK_SUCCESS) {
+        DestroyMsaaResources();
+        return Fail("3D: 创建 MSAA HDR 颜色视图失败");
+    }
+
+    // 多重采样深度图像（供深度解析采样，故需 SAMPLED_BIT）。
+    VkFormat msaaDepthFormat = FindSupportedFormat(
+        { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT },
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+    VkImageCreateInfo depthInfo{};
+    depthInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    depthInfo.imageType = VK_IMAGE_TYPE_2D;
+    depthInfo.extent = { m_swapchainExtent.width, m_swapchainExtent.height, 1 };
+    depthInfo.mipLevels = 1;
+    depthInfo.arrayLayers = 1;
+    depthInfo.format = msaaDepthFormat;
+    depthInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    depthInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    depthInfo.samples = m_msaaSampleCount;
+    depthInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(m_device, &depthInfo, nullptr, &m_msaaDepthImage) != VK_SUCCESS) {
+        DestroyMsaaResources();
+        return Fail("3D: 创建 MSAA 深度图像失败");
+    }
+    VkMemoryRequirements depthReqs{};
+    vkGetImageMemoryRequirements(m_device, m_msaaDepthImage, &depthReqs);
+    VkMemoryAllocateInfo depthAlloc{};
+    depthAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    depthAlloc.allocationSize = depthReqs.size;
+    depthAlloc.memoryTypeIndex = FindMemoryType(depthReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(m_device, &depthAlloc, nullptr, &m_msaaDepthMemory) != VK_SUCCESS) {
+        DestroyMsaaResources();
+        return Fail("3D: 分配 MSAA 深度内存失败");
+    }
+    vkBindImageMemory(m_device, m_msaaDepthImage, m_msaaDepthMemory, 0);
+
+    VkImageViewCreateInfo depthViewInfo{};
+    depthViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    depthViewInfo.image = m_msaaDepthImage;
+    depthViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    depthViewInfo.format = depthInfo.format;
+    depthViewInfo.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+    if (vkCreateImageView(m_device, &depthViewInfo, nullptr, &m_msaaDepthView) != VK_SUCCESS) {
+        DestroyMsaaResources();
+        return Fail("3D: 创建 MSAA 深度视图失败");
+    }
+
+    // LDR 帧缓冲（每交换链图像一个）：MS 颜色 + MS 深度 + 交换链图像（resolve 目标）。
+    m_msaaLdrFramebuffers.assign(m_swapchainImageViews.size(), VK_NULL_HANDLE);
+    for (size_t i = 0; i < m_swapchainImageViews.size(); ++i) {
+        VkImageView attachments[] = { m_msaaColorView, m_msaaDepthView, m_swapchainImageViews[i] };
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_msaaLdrRenderPass;
+        fbInfo.attachmentCount = 3;
+        fbInfo.pAttachments = attachments;
+        fbInfo.width = m_swapchainExtent.width;
+        fbInfo.height = m_swapchainExtent.height;
+        fbInfo.layers = 1;
+        if (vkCreateFramebuffer(m_device, &fbInfo, nullptr, &m_msaaLdrFramebuffers[i]) != VK_SUCCESS) {
+            DestroyMsaaResources();
+            return Fail("3D: 创建 MSAA LDR 帧缓冲失败");
+        }
+    }
+
+    // HDR 帧缓冲（单个）：MS HDR 颜色 + MS 深度 + HDR 颜色图像（resolve 目标）。
+    {
+        VkImageView attachments[] = { m_msaaHdrColorView, m_msaaDepthView, m_hdrColorView };
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_msaaHdrRenderPass;
+        fbInfo.attachmentCount = 3;
+        fbInfo.pAttachments = attachments;
+        fbInfo.width = m_swapchainExtent.width;
+        fbInfo.height = m_swapchainExtent.height;
+        fbInfo.layers = 1;
+        if (vkCreateFramebuffer(m_device, &fbInfo, nullptr, &m_msaaHdrFramebuffer) != VK_SUCCESS) {
+            DestroyMsaaResources();
+            return Fail("3D: 创建 MSAA HDR 帧缓冲失败");
+        }
+    }
+
+    // 深度解析帧缓冲（单采样深度视图）。
+    {
+        VkImageView attachment = m_depthImageView;
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_depthResolveRenderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &attachment;
+        fbInfo.width = m_swapchainExtent.width;
+        fbInfo.height = m_swapchainExtent.height;
+        fbInfo.layers = 1;
+        if (vkCreateFramebuffer(m_device, &fbInfo, nullptr, &m_depthResolveFramebuffer) != VK_SUCCESS) {
+            DestroyMsaaResources();
+            return Fail("3D: 创建深度解析帧缓冲失败");
+        }
+    }
+
+    return true;
+}
+
+// 创建多重采样场景管线（LDR 与 HDR 两套，共用 m_pipelineLayout）。
+bool VKRender3D::CreateMsaaPipelines() {
+    if (m_msaaLdrPipelines[DT_TRIANGLE] != VK_NULL_HANDLE) return true;
+
+    const std::string vertPath = AssetPath::ShaderFile("3d_vert.spv");
+    const std::string fragPath = AssetPath::ShaderFile("3d_frag.spv");
+    VkShaderModule vertModule = CreateShaderModuleHelper(ReadShaderFile(vertPath), vertPath);
+    VkShaderModule fragModule = CreateShaderModuleHelper(ReadShaderFile(fragPath), fragPath);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    auto bindingDescription = Vertex3D::GetBindingDescription();
+    auto attributeDescriptions = Vertex3D::GetAttributeDescriptions();
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+
+    std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
+    DrawTopology topologies[] = { DT_TRIANGLE, DT_TRIANGLE_WIREFRAME, DT_LINE, DT_POINT, DT_TRIANGLE_BLEND };
+    for (auto topo : topologies) {
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineRasterizationStateCreateInfo rasterizer{};
+        rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizer.lineWidth = 1.0f;
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
+        rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+        if (topo == DT_TRIANGLE_WIREFRAME) {
+            rasterizer.polygonMode = VK_POLYGON_MODE_LINE;
+        } else if (topo == DT_LINE) {
+            inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        } else if (topo == DT_POINT) {
+            inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+        }
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+
+        VkPipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.rasterizationSamples = m_msaaSampleCount;
+
+        VkPipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+
+        VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+        colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttachment.blendEnable = VK_FALSE;
+        if (topo == DT_TRIANGLE_BLEND) {
+            depthStencil.depthWriteEnable = VK_FALSE;
+            colorBlendAttachment.blendEnable = VK_TRUE;
+            colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+            colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+        }
+
+        VkPipelineColorBlendStateCreateInfo colorBlending{};
+        colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments = &colorBlendAttachment;
+
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount = 2;
+        pipelineInfo.pStages = stages;
+        pipelineInfo.pVertexInputState = &vertexInputInfo;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState = &multisampling;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlending;
+        pipelineInfo.pDynamicState = &dynamicState;
+        pipelineInfo.layout = m_pipelineLayout;
+        pipelineInfo.subpass = 0;
+
+        pipelineInfo.renderPass = m_msaaLdrRenderPass;
+        if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                &m_msaaLdrPipelines[topo]) != VK_SUCCESS) {
+            vkDestroyShaderModule(m_device, fragModule, nullptr);
+            vkDestroyShaderModule(m_device, vertModule, nullptr);
+            return Fail("3D: 创建 MSAA LDR 管线失败");
+        }
+        pipelineInfo.renderPass = m_msaaHdrRenderPass;
+        if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                &m_msaaHdrPipelines[topo]) != VK_SUCCESS) {
+            vkDestroyShaderModule(m_device, fragModule, nullptr);
+            vkDestroyShaderModule(m_device, vertModule, nullptr);
+            return Fail("3D: 创建 MSAA HDR 管线失败");
+        }
+    }
+
+    vkDestroyShaderModule(m_device, fragModule, nullptr);
+    vkDestroyShaderModule(m_device, vertModule, nullptr);
+    return true;
+}
+
+// 创建深度解析通道（多重采样深度 -> 单采样深度，供世界坐标回读）。
+bool VKRender3D::CreateDepthResolveSupport() {
+    if (m_depthResolveRenderPass != VK_NULL_HANDLE) return true;
+
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = FindDepthFormat();
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 0;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = 1;
+    info.pAttachments = &depthAttachment;
+    info.subpassCount = 1;
+    info.pSubpasses = &subpass;
+    info.dependencyCount = 1;
+    info.pDependencies = &dependency;
+    if (vkCreateRenderPass(m_device, &info, nullptr, &m_depthResolveRenderPass) != VK_SUCCESS) {
+        return Fail("3D: 创建深度解析 RenderPass 失败");
+    }
+
+    // 采样器（多重采样深度）。
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    if (vkCreateSampler(m_device, &samplerInfo, nullptr, &m_msaaDepthSampler) != VK_SUCCESS) {
+        return Fail("3D: 创建 MSAA 深度采样器失败");
+    }
+
+    // 描述符集布局 + 池 + 集。
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo setInfo{};
+    setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    setInfo.bindingCount = 1;
+    setInfo.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(m_device, &setInfo, nullptr, &m_depthResolveSetLayout) != VK_SUCCESS) {
+        return Fail("3D: 创建深度解析描述符布局失败");
+    }
+
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = 1;
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = 1;
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_depthResolvePool) != VK_SUCCESS) {
+        return Fail("3D: 创建深度解析描述符池失败");
+    }
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_depthResolvePool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_depthResolveSetLayout;
+    if (vkAllocateDescriptorSets(m_device, &allocInfo, &m_depthResolveSet) != VK_SUCCESS) {
+        return Fail("3D: 分配深度解析描述符集失败");
+    }
+
+    // 管线。
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &m_depthResolveSetLayout;
+    if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_depthResolveLayout) != VK_SUCCESS) {
+        return Fail("3D: 创建深度解析管线布局失败");
+    }
+
+    const std::string vertPath = AssetPath::ShaderFile("depth_resolve_vert.spv");
+    const std::string fragPath = AssetPath::ShaderFile("depth_resolve_frag.spv");
+    VkShaderModule vertModule = CreateShaderModuleHelper(ReadShaderFile(vertPath), vertPath);
+    VkShaderModule fragModule = CreateShaderModuleHelper(ReadShaderFile(fragPath), fragPath);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_ALWAYS;  // 用 gl_FragDepth 直接写入
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 0;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = m_depthResolveLayout;
+    pipelineInfo.renderPass = m_depthResolveRenderPass;
+    pipelineInfo.subpass = 0;
+
+    VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+        &m_depthResolvePipeline);
+    vkDestroyShaderModule(m_device, fragModule, nullptr);
+    vkDestroyShaderModule(m_device, vertModule, nullptr);
+    if (result != VK_SUCCESS) {
+        return Fail("3D: 创建深度解析管线失败");
+    }
+
+    return true;
+}
+
+// 写入深度解析描述符集（多重采样深度视图 + 采样器）。
+void VKRender3D::UpdateDepthResolveDescriptors() {
+    if (m_device == VK_NULL_HANDLE || m_depthResolveSet == VK_NULL_HANDLE) return;
+    if (m_msaaDepthSampler == VK_NULL_HANDLE || m_msaaDepthView == VK_NULL_HANDLE) return;
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = m_msaaDepthSampler;
+    imageInfo.imageView = m_msaaDepthView;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_depthResolveSet;
+    write.dstBinding = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+}
+
+// 在命令缓冲中记录深度解析通道（把多重采样深度解析为单采样 m_depthImage）。
+void VKRender3D::RecordDepthResolve() {
+    if (m_depthResolveRenderPass == VK_NULL_HANDLE || m_depthResolveFramebuffer == VK_NULL_HANDLE ||
+        m_depthResolvePipeline == VK_NULL_HANDLE || m_msaaDepthView == VK_NULL_HANDLE) {
+        return;
+    }
+    VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+
+    // 多重采样深度：着色器读取 -> 布局转换到 SHADER_READ_ONLY。
+    VkImageMemoryBarrier toRead{};
+    toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toRead.image = m_msaaDepthImage;
+    toRead.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+    toRead.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &toRead);
+
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = m_depthResolveRenderPass;
+    renderPassInfo.framebuffer = m_depthResolveFramebuffer;
+    renderPassInfo.renderArea.extent = m_swapchainExtent;
+    VkClearValue clearValue{};
+    clearValue.depthStencil = { 1.0f, 0 };
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearValue;
+    vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport{};
+    viewport.width = static_cast<float>(m_swapchainExtent.width);
+    viewport.height = static_cast<float>(m_swapchainExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    VkRect2D scissor{};
+    scissor.extent = m_swapchainExtent;
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_depthResolvePipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_depthResolveLayout,
+                            0, 1, &m_depthResolveSet, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+
+    // 还原多重采样深度布局，供下一帧继续作为深度附件使用。
+    VkImageMemoryBarrier toAttachment = toRead;
+    toAttachment.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toAttachment.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    toAttachment.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toAttachment.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &toAttachment);
+}
+
+// 销毁尺寸相关的 MSAA 资源（图像/视图/帧缓冲/解析帧缓冲）。
+void VKRender3D::DestroyMsaaResources() {
+    if (m_device == VK_NULL_HANDLE) {
+        m_msaaLdrFramebuffers.clear();
+        m_msaaHdrFramebuffer = VK_NULL_HANDLE;
+        m_depthResolveFramebuffer = VK_NULL_HANDLE;
+        m_msaaColorView = VK_NULL_HANDLE;
+        m_msaaColorMemory = VK_NULL_HANDLE;
+        m_msaaColorImage = VK_NULL_HANDLE;
+        m_msaaHdrColorView = VK_NULL_HANDLE;
+        m_msaaHdrColorMemory = VK_NULL_HANDLE;
+        m_msaaHdrColorImage = VK_NULL_HANDLE;
+        m_msaaDepthView = VK_NULL_HANDLE;
+        m_msaaDepthMemory = VK_NULL_HANDLE;
+        m_msaaDepthImage = VK_NULL_HANDLE;
+        m_msaaTargetsReady = false;
+        return;
+    }
+    for (VkFramebuffer fb : m_msaaLdrFramebuffers) {
+        if (fb != VK_NULL_HANDLE) vkDestroyFramebuffer(m_device, fb, nullptr);
+    }
+    m_msaaLdrFramebuffers.clear();
+    if (m_msaaHdrFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(m_device, m_msaaHdrFramebuffer, nullptr);
+        m_msaaHdrFramebuffer = VK_NULL_HANDLE;
+    }
+    if (m_depthResolveFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(m_device, m_depthResolveFramebuffer, nullptr);
+        m_depthResolveFramebuffer = VK_NULL_HANDLE;
+    }
+    if (m_msaaColorView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, m_msaaColorView, nullptr);
+        m_msaaColorView = VK_NULL_HANDLE;
+    }
+    if (m_msaaColorMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_msaaColorMemory, nullptr);
+        m_msaaColorMemory = VK_NULL_HANDLE;
+    }
+    if (m_msaaColorImage != VK_NULL_HANDLE) {
+        vkDestroyImage(m_device, m_msaaColorImage, nullptr);
+        m_msaaColorImage = VK_NULL_HANDLE;
+    }
+    if (m_msaaHdrColorView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, m_msaaHdrColorView, nullptr);
+        m_msaaHdrColorView = VK_NULL_HANDLE;
+    }
+    if (m_msaaHdrColorMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_msaaHdrColorMemory, nullptr);
+        m_msaaHdrColorMemory = VK_NULL_HANDLE;
+    }
+    if (m_msaaHdrColorImage != VK_NULL_HANDLE) {
+        vkDestroyImage(m_device, m_msaaHdrColorImage, nullptr);
+        m_msaaHdrColorImage = VK_NULL_HANDLE;
+    }
+    if (m_msaaDepthView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, m_msaaDepthView, nullptr);
+        m_msaaDepthView = VK_NULL_HANDLE;
+    }
+    if (m_msaaDepthMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_msaaDepthMemory, nullptr);
+        m_msaaDepthMemory = VK_NULL_HANDLE;
+    }
+    if (m_msaaDepthImage != VK_NULL_HANDLE) {
+        vkDestroyImage(m_device, m_msaaDepthImage, nullptr);
+        m_msaaDepthImage = VK_NULL_HANDLE;
+    }
+    m_msaaTargetsReady = false;
+}
+
+// 销毁非尺寸相关的 MSAA 支持资源（渲染通道/管线/描述符/采样器）。
+void VKRender3D::DestroyMsaaSupport() {
+    if (m_device != VK_NULL_HANDLE) {
+        for (int i = 0; i < DT_COUNT; ++i) {
+            if (m_msaaLdrPipelines[i] != VK_NULL_HANDLE) {
+                vkDestroyPipeline(m_device, m_msaaLdrPipelines[i], nullptr);
+                m_msaaLdrPipelines[i] = VK_NULL_HANDLE;
+            }
+            if (m_msaaHdrPipelines[i] != VK_NULL_HANDLE) {
+                vkDestroyPipeline(m_device, m_msaaHdrPipelines[i], nullptr);
+                m_msaaHdrPipelines[i] = VK_NULL_HANDLE;
+            }
+        }
+        if (m_depthResolvePipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(m_device, m_depthResolvePipeline, nullptr);
+            m_depthResolvePipeline = VK_NULL_HANDLE;
+        }
+        if (m_depthResolveLayout != VK_NULL_HANDLE) {
+            vkDestroyPipelineLayout(m_device, m_depthResolveLayout, nullptr);
+            m_depthResolveLayout = VK_NULL_HANDLE;
+        }
+        if (m_depthResolvePool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(m_device, m_depthResolvePool, nullptr);
+            m_depthResolvePool = VK_NULL_HANDLE;
+        }
+        if (m_depthResolveSetLayout != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(m_device, m_depthResolveSetLayout, nullptr);
+            m_depthResolveSetLayout = VK_NULL_HANDLE;
+        }
+        if (m_msaaDepthSampler != VK_NULL_HANDLE) {
+            vkDestroySampler(m_device, m_msaaDepthSampler, nullptr);
+            m_msaaDepthSampler = VK_NULL_HANDLE;
+        }
+        if (m_depthResolveRenderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(m_device, m_depthResolveRenderPass, nullptr);
+            m_depthResolveRenderPass = VK_NULL_HANDLE;
+        }
+        if (m_msaaLdrRenderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(m_device, m_msaaLdrRenderPass, nullptr);
+            m_msaaLdrRenderPass = VK_NULL_HANDLE;
+        }
+        if (m_msaaHdrRenderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(m_device, m_msaaHdrRenderPass, nullptr);
+            m_msaaHdrRenderPass = VK_NULL_HANDLE;
+        }
+    }
+    m_depthResolveSet = VK_NULL_HANDLE;
+    m_msaaSupportReady = false;
 }
 
 
@@ -2147,6 +3754,14 @@ bool VKRender3D::CreatePipelines() {
     dynamicState.pDynamicStates = dynamicStates.data();
 
     DrawTopology topologies[] = { DT_TRIANGLE, DT_TRIANGLE_WIREFRAME, DT_LINE, DT_POINT, DT_TRIANGLE_BLEND };
+    // 1.6：HDR 场景管线渲染到 HDR 中间目标，需先备好 HDR 渲染通道（复用同一管线布局）。
+    // HDR 为可选功能：若设备不支持所需 HDR 格式，跳过 HDR 管线（保留 LDR 路径，不使初始化失败）。
+    bool hdrPipelinesReady = false;
+    try {
+        hdrPipelinesReady = CreateHdrRenderPass();
+    } catch (...) {
+        hdrPipelinesReady = false;
+    }
     for (auto topo : topologies) {
         VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
         inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -2247,6 +3862,17 @@ bool VKRender3D::CreatePipelines() {
             vkDestroyShaderModule(m_device, fragShaderModule, nullptr);
             vkDestroyShaderModule(m_device, vertShaderModule, nullptr);
             return Fail("3D: 创建图形管线失败");
+        }
+
+        // 1.6：同一状态创建渲染到 HDR 中间目标的对应管线（仅 renderPass 不同）。
+        if (hdrPipelinesReady) {
+            pipelineInfo.renderPass = m_hdrRenderPass;
+            result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_hdrPipelines[topo]);
+            if (result != VK_SUCCESS) {
+                vkDestroyShaderModule(m_device, fragShaderModule, nullptr);
+                vkDestroyShaderModule(m_device, vertShaderModule, nullptr);
+                return Fail("3D: 创建 HDR 图形管线失败");
+            }
         }
     }
 
@@ -2796,6 +4422,32 @@ void VKRender3D::UpdateUniformBuffer(uint32_t currentImage) {
     ubo.cameraObjectPosition[1] = cameraObject.y;
     ubo.cameraObjectPosition[2] = cameraObject.z;
     ubo.cameraObjectPosition[3] = 0.0f;
+    // 1.7：半球环境光（线性）。
+    ubo.ambientSkyColor[0] = m_ambientSkyColor.x;
+    ubo.ambientSkyColor[1] = m_ambientSkyColor.y;
+    ubo.ambientSkyColor[2] = m_ambientSkyColor.z;
+    ubo.ambientSkyColor[3] = m_ambientIntensity;
+    ubo.ambientGroundColor[0] = m_ambientGroundColor.x;
+    ubo.ambientGroundColor[1] = m_ambientGroundColor.y;
+    ubo.ambientGroundColor[2] = m_ambientGroundColor.z;
+    ubo.ambientGroundColor[3] = 0.0f;
+    // 1.7：阴影偏移/PCF/法线偏移。
+    ubo.shadowParams[0] = m_shadowBias;
+    ubo.shadowParams[1] = static_cast<float>(m_shadowPcfMode);
+    ubo.shadowParams[2] = (m_shadowNormalOffsetScale > 0.0f && m_allocatedShadowTextureSize > 0)
+        ? (2.0f * glm::length(glm::vec3(m_shadowBoundsMax - m_shadowBoundsMin))
+            / static_cast<float>(m_allocatedShadowTextureSize)) * m_shadowNormalOffsetScale
+        : 0.0f;
+    ubo.shadowParams[3] = 0.0f;
+    // 1.7：调试视图 + 线性深度归一化范围。
+    ubo.debugOptions[0] = static_cast<float>(m_debugView);
+    ubo.debugOptions[1] = 0.0f;
+    ubo.debugOptions[2] = 0.0f;
+    ubo.debugOptions[3] = 0.0f;
+    ubo.depthRange[0] = 0.1f;   // 近平面（与 UpdateUniformBuffer 中的 proj 一致）
+    ubo.depthRange[1] = 100.0f; // 远平面
+    ubo.depthRange[2] = 0.0f;
+    ubo.depthRange[3] = 0.0f;
     memcpy(m_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
@@ -2960,7 +4612,26 @@ glm::mat4 VKRender3D::ComputeLightViewProj() const {
 
     float zNear = std::max(0.01f, -viewMax.z);
     float zFar = std::max(zNear + 0.01f, -viewMin.z);
-    glm::mat4 lightProj = glm::orthoRH_ZO(viewMin.x, viewMax.x, viewMin.y, viewMax.y, zNear, zFar);
+
+    // 1.7：光源正交投影 texel 对齐。把光源空间投影窗口的 x/y 中心量化到阴影贴图纹素
+    // 网格上，消除物体/太阳移动时的阴影游动与闪烁。窗口边长取光照空间 AABB 的较大边，
+    // 保持每帧稳定。
+    const uint32_t shadowSize = (m_allocatedShadowTextureSize != 0)
+        ? m_allocatedShadowTextureSize : m_shadowTextureSize;
+    const float halfSize = std::max(viewMax.x - viewMin.x, viewMax.y - viewMin.y) * 0.5f;
+    const float texelWorld = (shadowSize != 0 && halfSize > 1.0e-6f)
+        ? (2.0f * halfSize / static_cast<float>(shadowSize)) : 0.0f;
+    float centerX = (viewMin.x + viewMax.x) * 0.5f;
+    float centerY = (viewMin.y + viewMax.y) * 0.5f;
+    if (texelWorld > 0.0f) {
+        centerX = std::floor(centerX / texelWorld) * texelWorld;
+        centerY = std::floor(centerY / texelWorld) * texelWorld;
+    }
+
+    glm::mat4 lightProj = glm::orthoRH_ZO(
+        centerX - halfSize, centerX + halfSize,
+        centerY - halfSize, centerY + halfSize,
+        zNear, zFar);
     lightProj[1][1] *= -1;
     return lightProj * lightView;
 }
@@ -3792,6 +5463,11 @@ void VKRender3D::OnEndFrame() {
     m_depthReadbackRequested = false;
 
     VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+
+    // 1.7：MSAA 开启时，深度写在多重采样图像里；先把多重采样深度解析为单采样深度。
+    if (m_msaaPassActive) {
+        RecordDepthResolve();
+    }
 
     int32_t pixelX = static_cast<int32_t>(m_requestedNDCX * m_swapchainExtent.width);
     int32_t pixelY = static_cast<int32_t>(m_requestedNDCY * m_swapchainExtent.height);

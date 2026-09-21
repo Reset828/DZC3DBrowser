@@ -182,6 +182,10 @@
     <None Include="res\3d.vert" />
     <None Include="res\3d_shadow.frag" />
     <None Include="res\3d_shadow.vert" />
+    <None Include="res\post.vert" />
+    <None Include="res\post.frag" />
+    <None Include="res\depth_resolve.vert" />
+    <None Include="res\depth_resolve.frag" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="$(QtMsBuild)\qt.targets" Condition="Exists('$(QtMsBuild)\qt.targets')" />
@@ -194,12 +198,16 @@
     <Error Condition="'$(VULKAN_SDK)'==''" Text="未设置 VULKAN_SDK。请安装 Vulkan SDK 并设置该环境变量后，再编译 GLSL 到 windows/shaders。" />
     <Error Condition="!Exists('$(VULKAN_SDK)\Bin\glslc.exe')" Text="找不到 glslc：$(VULKAN_SDK)\Bin\glslc.exe" />
     <MakeDir Directories="$(RuntimeShaderDir)" />
-    <Copy SourceFiles="$(ProjectDir)res\2d.vert;$(ProjectDir)res\2d.frag;$(ProjectDir)res\3d.vert;$(ProjectDir)res\3d.frag;$(ProjectDir)res\3d_shadow.vert;$(ProjectDir)res\3d_shadow.frag" DestinationFolder="$(RuntimeShaderDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)res\2d.vert;$(ProjectDir)res\2d.frag;$(ProjectDir)res\3d.vert;$(ProjectDir)res\3d.frag;$(ProjectDir)res\3d_shadow.vert;$(ProjectDir)res\3d_shadow.frag;$(ProjectDir)res\post.vert;$(ProjectDir)res\post.frag;$(ProjectDir)res\depth_resolve.vert;$(ProjectDir)res\depth_resolve.frag" DestinationFolder="$(RuntimeShaderDir)" SkipUnchangedFiles="true" />
     <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\2d.vert&quot; -o &quot;$(RuntimeShaderDir)\2d_vert.spv&quot;" />
     <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\2d.frag&quot; -o &quot;$(RuntimeShaderDir)\2d_frag.spv&quot;" />
     <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\3d.vert&quot; -o &quot;$(RuntimeShaderDir)\3d_vert.spv&quot;" />
     <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\3d.frag&quot; -o &quot;$(RuntimeShaderDir)\3d_frag.spv&quot;" />
     <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\3d_shadow.vert&quot; -o &quot;$(RuntimeShaderDir)\3d_shadow_vert.spv&quot;" />
     <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\3d_shadow.frag&quot; -o &quot;$(RuntimeShaderDir)\3d_shadow_frag.spv&quot;" />
+    <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\post.vert&quot; -o &quot;$(RuntimeShaderDir)\post_vert.spv&quot;" />
+    <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\post.frag&quot; -o &quot;$(RuntimeShaderDir)\post_frag.spv&quot;" />
+    <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\depth_resolve.vert&quot; -o &quot;$(RuntimeShaderDir)\depth_resolve_vert.spv&quot;" />
+    <Exec Command="&quot;$(VULKAN_SDK)\Bin\glslc.exe&quot; --target-env=vulkan1.0 &quot;$(ProjectDir)res\depth_resolve.frag&quot; -o &quot;$(RuntimeShaderDir)\depth_resolve_frag.spv&quot;" />
   </Target>
 </Project>

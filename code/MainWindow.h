@@ -12,6 +12,7 @@
 #include <string>
 #include <QStringList>
 #include <QElapsedTimer>
+#include <QColor>
 
 class QWindowVulkan;
 class QWindowOpenGL;
@@ -85,6 +86,10 @@ private slots:
     void onMaterialPanel();
     // 打开或关闭 PBR 调试面板。
     void onPbrPanel();
+    // 打开或关闭 HDR/曝光面板。
+    void onHdrPanel();
+    // 打开或关闭调试视图面板。
+    void onDebugPanel();
     // 打开最近文件菜单项对应路径。
     void onRecentFileTriggered();
     // 在 Vulkan / OpenGL 后端间切换。
@@ -138,6 +143,10 @@ private:
     void ApplyLightAnalysisToRenderer();
     // 把 PBR 调试面板（金属度/粗糙度/自发光覆盖）参数写进当前三维渲染器。
     void ApplyPbrToRenderer();
+    // 把 HDR/曝光面板（HDR 开关 + 曝光 EV）参数写进当前三维渲染器。
+    void ApplyHdrToRenderer();
+    // 把调试视图面板（调试视图 + 4x MSAA）参数写进当前三维渲染器。
+    void ApplyDebugToRenderer();
     // 用已加载模型包围盒更新阴影范围。
     void UpdateShadowSceneBounds();
     // 同步阴影贴图尺寸下拉框。
@@ -216,6 +225,27 @@ private:
     QSlider* m_roughnessSlider = nullptr;
     QCheckBox* m_emissiveOverrideCheck = nullptr;
     QSlider* m_emissiveSlider = nullptr;
+    // HDR/曝光面板（1.6）：HDR 开关 + 曝光 EV 滑块。
+    QPushButton* m_hdrButton = nullptr;
+    QWidget* m_hdrPanel = nullptr;
+    QCheckBox* m_hdrCheck = nullptr;
+    QSlider* m_exposureSlider = nullptr;
+    QLabel* m_exposureValueLabel = nullptr;
+    // 调试视图面板（1.7）：调试视图下拉 + 4x MSAA 开关。
+    QPushButton* m_debugButton = nullptr;
+    QWidget* m_debugPanel = nullptr;
+    QComboBox* m_debugViewCombo = nullptr;
+    QCheckBox* m_msaaCheck = nullptr;
+    QLabel* m_debugHintLabel = nullptr;
+    // 光照分析面板新增（1.7）：阴影偏移 / PCF / 法线偏移 + 半球环境光。
+    QSlider* m_pShadowBiasSlider = nullptr;
+    QComboBox* m_pPcfCombo = nullptr;
+    QSlider* m_pNormalOffsetSlider = nullptr;
+    QPushButton* m_pSkyColorButton = nullptr;
+    QPushButton* m_pGroundColorButton = nullptr;
+    QSlider* m_pAmbientIntensitySlider = nullptr;
+    QColor m_ambientSkyColor;
+    QColor m_ambientGroundColor;
     QComboBox* m_backendEngineCombo = nullptr;
     QWidget* m_lightAnalysisPanel = nullptr;
     QWidget* m_materialPanel = nullptr;

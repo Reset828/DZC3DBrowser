@@ -8,6 +8,11 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     mat4 lightViewProj;
     vec4 shadowOptions;
     vec4 cameraObjectPosition; // xyz: 相机在物体空间的位置（PBR 视线向量），w 未用
+    vec4 ambientSkyColor;      // 1.7: xyz 天空色(线性), w 环境光强度
+    vec4 ambientGroundColor;   // 1.7: xyz 地面色(线性), w 未用
+    vec4 shadowParams;         // 1.7: x 基础深度偏移, y PCF 档位, z 世界纹素尺寸, w 未用
+    vec4 debugOptions;         // 1.7: x 调试视图(0正常/1深度/2世界法线/3阴影), yzw 未用
+    vec4 depthRange;           // 1.7: x 近平面, y 远平面, zw 未用
 } ubo;
 
 layout(binding = 1) uniform sampler2DShadow shadowMap;
@@ -83,11 +88,10 @@ layout(location = 7) in vec4 fragObjectTangent; // xyz 切线 + w 手性（1.5�
 
 layout(location = 0) out vec4 outColor;
 
-// 光照常量（简化模型：单方向太阳光 + 常数环境光；完整 IBL 属 1.7）。
+// 光照常量（简化模型：单方向太阳光 + 半球环境光；完整 IBL 属 1.7 之后）。
 const float kPi = 3.14159265359;
 const vec3 kSunColor = vec3(1.0, 0.98, 0.92);   // 线性太阳色
 const float kSunIntensity = 3.0;                // 太阳辐射强度（线性）
-const vec3 kAmbientColor = vec3(0.030, 0.035, 0.045); // 常数环境光（天空近似）
 
 vec3 DyeColor() {
     float t = clamp(fragWorldPosition.z * 0.5 + 0.5, 0.0, 1.0);
@@ -205,7 +209,10 @@ float ShadowFactor() {
         return 1.0;
     }
 
-    vec4 lightClip = ubo.lightViewProj * vec4(fragObjectPosition, 1.0);
+    // 法线偏移（1.7）：沿物体空间法线偏移若干世界纹素，缓解斜面上的阴影失真。
+    vec3 shadingNormal = ObjectNormal();
+    vec4 lightClip = ubo.lightViewProj *
+        vec4(fragObjectPosition + shadingNormal * ubo.shadowParams.z, 1.0);
     if (lightClip.w <= 1.0e-6) {
         return 1.0;
     }
@@ -218,16 +225,37 @@ float ShadowFactor() {
         return 1.0;
     }
 
-    const float bias = 0.002;
+    // 斜率缩放偏移（1.7）：N·L 越小（斜射）偏移越大，抑制 Shadow Acne。
+    vec3 L = normalize(ubo.sunDirection.xyz);
+    float NdotL = max(dot(shadingNormal, L), 0.0);
+    float slope = sqrt(max(1.0 - NdotL * NdotL, 0.0)) / max(NdotL, 0.1);
+    float bias = ubo.shadowParams.x * (1.0 + clamp(slope, 0.0, 4.0));
     float ref = depth - bias;
+
     vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
+    int pcf = int(ubo.shadowParams.y + 0.5);
     float shadow = 0.0;
-    for (int x = -1; x <= 1; ++x) {
-        for (int y = -1; y <= 1; ++y) {
-            shadow += texture(shadowMap, vec3(uv + vec2(float(x), float(y)) * texel, ref));
+    if (pcf <= 0) {
+        // 关闭 PCF：单次比较（硬边）。
+        shadow = texture(shadowMap, vec3(uv, ref));
+    } else if (pcf == 1) {
+        // 3x3 PCF。
+        for (int x = -1; x <= 1; ++x) {
+            for (int y = -1; y <= 1; ++y) {
+                shadow += texture(shadowMap, vec3(uv + vec2(float(x), float(y)) * texel, ref));
+            }
         }
+        shadow /= 9.0;
+    } else {
+        // 5x5 PCF（固定偏移采样）。
+        for (int x = -2; x <= 2; ++x) {
+            for (int y = -2; y <= 2; ++y) {
+                shadow += texture(shadowMap, vec3(uv + vec2(float(x), float(y)) * texel, ref));
+            }
+        }
+        shadow /= 25.0;
     }
-    return shadow / 9.0;
+    return shadow;
 }
 
 // 灰度/染色模式使用的太阳因子（Lambert × 阴影，含夜间环境光）。
@@ -303,11 +331,18 @@ vec3 ComputeDirectLighting(vec3 N, vec3 V, vec3 albedo, float metallic, float ro
     return (diffuse + specular) * radiance * NdotL;
 }
 
-// 简化常数环境光（漫反射 + 廉价镜面环境近似）。
-vec3 ComputeAmbient(vec3 albedo, float metallic, float ao) {
+// 半球环境光（1.7）：按物体空间法线的上下方向在地面色与天空色之间插值。
+// 物体空间 +Z 为上方（与 sunDirection 约定一致）。强度由 ambientSkyColor.w 统一缩放。
+vec3 ComputeAmbient(vec3 N, vec3 albedo, float metallic, float ao) {
+    float up = clamp(N.z * 0.5 + 0.5, 0.0, 1.0);
+    float intensity = ubo.ambientSkyColor.w;
+    vec3 skyColor = ubo.ambientSkyColor.rgb * intensity;
+    vec3 groundColor = ubo.ambientGroundColor.rgb * intensity;
+    vec3 irradiance = mix(groundColor, skyColor, up);
+
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
-    vec3 ambientDiffuse = kAmbientColor * albedo * (1.0 - metallic) * ao;
-    vec3 ambientSpecular = kAmbientColor * F0 * ao;
+    vec3 ambientDiffuse = irradiance * albedo * (1.0 - metallic) * ao;
+    vec3 ambientSpecular = irradiance * F0 * ao;
     return ambientDiffuse + ambientSpecular;
 }
 
@@ -320,8 +355,32 @@ vec3 ComputePBR(vec3 baseColor, float metallic, float roughness, float ao) {
 
     vec3 albedo = baseColor;
     vec3 color = ComputeDirectLighting(N, V, albedo, metallic, roughness)
-               + ComputeAmbient(albedo, metallic, ao);
+               + ComputeAmbient(N, albedo, metallic, ao);
     return color;
+}
+
+// 调试视图（1.7）。返回线性 RGB（[0,1] 显示值）。0 表示未启用。
+vec3 DebugViewColor() {
+    int mode = int(ubo.debugOptions.x + 0.5);
+    if (mode == 1) {
+        // 线性深度：近=黑、远=白，按近/远平面归一化（视空间）。
+        float viewDepth = max(-fragViewPosition.z, 0.0);
+        float nearPlane = max(ubo.depthRange.x, 1.0e-4);
+        float farPlane = max(ubo.depthRange.y, nearPlane + 1.0e-4);
+        float linearDepth = clamp((viewDepth - nearPlane) / (farPlane - nearPlane), 0.0, 1.0);
+        return vec3(linearDepth);
+    }
+    if (mode == 2) {
+        // 世界空间法线：物体空间法线经 model 变换 -> 映射到 [0,1] 颜色。
+        vec3 objectNormal = ObjectNormal();
+        vec3 worldNormal = normalize(mat3(ubo.model) * objectNormal);
+        return worldNormal * 0.5 + 0.5;
+    }
+    if (mode == 3) {
+        // 阴影项：被照亮=白，处于阴影=黑（灰度）。
+        return vec3(ShadowFactor());
+    }
+    return vec3(0.0);
 }
 
 void main() {
@@ -329,9 +388,10 @@ void main() {
     // 1. 采样基础色：base = material.baseColor.rgb * 顶点色 * baseColorTexture.rgb（无纹理 -> 1x1 白）。
     // 2. 采样 metallicRoughness（G=roughness，B=metallic，R=AO 兼容 glTF 合并图约定）。
     // 3. 采样 AO（R 通道）与自发光。
-    // 4. 默认路径走 Cook-Torrance PBR（直接光 + 常数环境光）；
+    // 4. 默认路径走 Cook-Torrance PBR（直接光 + 半球环境光）；
     //    染色/灰度/线框为覆盖模式，沿用旧显示逻辑。
     // 5. 光照分析开启时给 PBR 直接光叠加阴影（阴影贴图仅在光照分析模式下渲染）。
+    // 6. 调试视图（1.7）开启时覆盖最终颜色（后处理会跳过曝光/色调映射）。
     const float grayEnabled = ubo.displayOptions.x;
     const float dyeEnabled = ubo.displayOptions.y;
 
@@ -370,6 +430,12 @@ void main() {
     } else {
         // 默认：Metallic-Roughness PBR。
         color = ComputePBR(baseColor, metallic, roughness, ao) + emissive;
+    }
+
+    // 调试视图覆盖最终颜色。
+    if (ubo.debugOptions.x > 0.5) {
+        color = DebugViewColor();
+        alpha = 1.0;
     }
 
     outColor = vec4(color, alpha);

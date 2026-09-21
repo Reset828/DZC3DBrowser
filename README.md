@@ -25,7 +25,9 @@ Do not put machine-local absolute paths in runtime loaders.
 | Vulkan 2D | `2d_vert.spv`, `2d_frag.spv` |
 | Vulkan 3D | `3d_vert.spv`, `3d_frag.spv` |
 | Vulkan shadow | `3d_shadow_vert.spv`, `3d_shadow_frag.spv` |
-| OpenGL 3D | `3d.vert`, `3d.frag`, `3d_shadow.vert`, `3d_shadow.frag` |
+| Vulkan HDR post | `post_vert.spv`, `post_frag.spv` |
+| Vulkan MSAA depth resolve | `depth_resolve_vert.spv`, `depth_resolve_frag.spv` |
+| OpenGL 3D | `3d.vert`, `3d.frag`, `3d_shadow.vert`, `3d_shadow.frag`, `post.vert`, `post.frag` |
 
 Missing files, invalid SPIR-V, or shader-module creation failures surface as a dialog with the resolved absolute path. Confirm that a `shaders/` directory with the files above sits next to (or above) the executable.
 
@@ -58,6 +60,10 @@ Vulkan is the primary backend and the startup default. OpenGL 4.2 Core is a swit
 | 3D mesh, orbit camera, ortho | supported | supported |
 | Gray / dye / wireframe | supported | supported |
 | Light analysis + shadow map | supported | supported |
+| HDR + ACES tone mapping + exposure (1.6) | supported | supported |
+| Shadow bias/PCF + hemisphere ambient + debug views (1.7) | supported | supported |
+| 4x MSAA + depth resolve (1.7) | supported | supported |
+| SSAO (1.7) | not implemented (evaluated) | not implemented (evaluated) |
 | World-coord from depth | supported | supported |
 | 2D | partial (see task 0.4) | unsupported |
 
@@ -118,3 +124,24 @@ The default 3D shading is a Metallic-Roughness PBR (Cook-Torrance) pipeline. Gra
 - **Color space**: all shading is linear; the sRGB swapchain encodes on write (no manual gamma).
 - **Debug panel**: the 工具栏 "PBR 参数" button opens sliders to override metallic / roughness / emissive for the whole scene. By default the panel is off and each material uses its own values.
 - **Sample**: `samples/pbr_showcase.gltf` — a row of spheres sweeping metallic 0 → 0.5 → 1, a row sweeping roughness 0.15 → 0.45 → 0.80, a normal/AO-mapped plane, and an emissive sphere. Regenerate with `samples/generate_pbr_sample.py` (standard library only).
+
+## HDR and tone mapping (task 1.6)
+
+The 3D scene can be rendered into a **linear high-precision intermediate target** and then tone-mapped to the display. This is off by default; when off, both backends keep the pre-1.6 direct-to-swapchain path unchanged (useful as an A/B comparison). When on, the 3D scene is drawn into the intermediate target and a fullscreen post pass applies **exposure + ACES tone mapping** to the swapchain / default framebuffer.
+
+- **Toggle + exposure**: the 工具栏 "HDR/曝光" button opens a panel with a HDR checkbox and an exposure slider. Exposure is in **EV** (−5..+5); the linear multiplier is `2^EV`.
+- **Tone mapping**: ACES (Narkowicz 2015 fit) in `code/res/post.frag`. Highlights roll off smoothly instead of clipping to white.
+- **Color space**: shading stays linear; the post pass outputs linear on Vulkan (the `B8G8R8A8_SRGB` swapchain encodes on write) and manually encodes linear → sRGB on OpenGL (the default framebuffer is not sRGB). Exactly one gamma transform per output.
+- **Intermediate format**: Vulkan `R16G16B16A16_SFLOAT` (fallback `R32G32B32A32_SFLOAT`); OpenGL `RGBA16F` color + depth renderbuffer.
+- **Shaders**: `code/res/post.vert` (fullscreen triangle) + `code/res/post.frag`, compiled to `post_vert.spv` / `post_frag.spv` for Vulkan and compiled directly by OpenGL.
+- Both backends support HDR + ACES + exposure. When off, output is identical to the previous LDR look.
+
+## Shadows, antialiasing, ambient and debug views (task 1.7)
+
+- **Shadow stability**: the light's orthographic projection is **texel-snapped** to the shadow-map grid, removing the swim/jitter that appears when the object or sun moves. The light `up` axis is chosen to avoid a near-zenith roll flip.
+- **Shadow bias / Peter Panning / acne**: a **slope-scaled** depth bias (larger at grazing angles) plus an optional **normal offset** (shift the lookup along the surface normal). Both are sliders in the 光照分析 panel (阴影偏移 / 法线偏移).
+- **PCF**: configurable kernel — off / 3x3 / 5x5 — via the 光照分析 panel "PCF" combo.
+- **Hemisphere ambient light**: replaces the old constant ambient term. The ambient irradiance is a blend of a **sky color** and a **ground color** based on how much the surface normal points up, scaled by an **intensity**. All three are editable in the 光照分析 panel (天空色 / 地面色 / 环境光强度). This is a deliberately simple, explainable model; full IBL is future work.
+- **Debug views**: the 工具栏 "调试视图" panel switches the 3D view between 正常 / 深度 (linear, near=black far=white) / 世界法线 / 阴影贴图 (the shadow term: lit=white, shadowed=black). Debug output bypasses exposure and tone mapping so the values are stable. The 阴影贴图 view needs 光照分析 enabled (a hint is shown otherwise).
+- **MSAA**: optional **4x** MSAA (off by default). The scene renders into multisampled color + depth targets that are resolved to a single-sample target before display; it composes with HDR and the debug views. On Vulkan the depth is resolved by a small shader pass (`code/res/depth_resolve.{vert,frag}`) because Vulkan 1.0 cannot resolve depth formats; on OpenGL it uses `glBlitFramebuffer`. The click-to-read world-coordinate feature keeps working because the multisampled depth is resolved into the single-sample depth buffer that readback uses.
+- **SSAO cost (evaluated, not implemented)**: a screen-space ambient occlusion pass would require (1) a depth + view-space normal G-buffer (extra render target(s) or a second geometry pass), (2) a hemisphere kernel of 16–64 samples, (3) a noise texture (4x4) to rotate the kernel and reduce banding, (4) a separable or box blur pass, and (5) one new render pass + pipeline + descriptor set per backend, plus composition into the final color. The main costs are the extra bandwidth for the G-buffer and blur, and the tuning (radius, bias, strength) to avoid halos on thin geometry. It was left out of this task because the 1.7 requirement is satisfied by the hemisphere ambient term and the effort/risk of a correct, artifact-free SSAO is comparable to a full task of its own.

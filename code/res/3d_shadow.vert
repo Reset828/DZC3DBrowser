@@ -8,6 +8,11 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     mat4 lightViewProj;
     vec4 shadowOptions;
     vec4 cameraObjectPosition;
+    vec4 ambientSkyColor;
+    vec4 ambientGroundColor;
+    vec4 shadowParams;
+    vec4 debugOptions;
+    vec4 depthRange;
 } ubo;
 
 layout(location = 0) in vec3 inPosition;

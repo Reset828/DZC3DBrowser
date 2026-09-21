@@ -118,6 +118,12 @@ bool GLRender::BeginFrame() {
 
     if (!m_functions) return false;
 
+    // 1.6：绑定帧缓冲前准备本帧渲染目标（HDR 开启时按当前尺寸重建 HDR 中间目标）。
+    OnPrepareFrame();
+
+    // 1.6：HDR 开启时把场景画进离屏 HDR 中间目标，否则回到默认帧缓冲。
+    const unsigned int sceneFbo = GetSceneFramebuffer();
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, sceneFbo);
     m_functions->glViewport(0, 0,
         static_cast<int>(m_framebufferWidth),
         static_cast<int>(m_framebufferHeight));
@@ -135,6 +141,8 @@ void GLRender::EndFrame() {
     // 主通道结束前刷新透明绘制（按深度排序）。
     FlushTransparentDraws();
     OnEndFrame();
+    // 1.6：场景已画进 HDR 中间目标时，做后处理并输出到默认帧缓冲。
+    OnAfterSceneRender();
     // 推进纹理延迟销毁队列（每帧一次）。
     ProcessDeferredTextureDestruction();
     m_context->swapBuffers(m_window);
@@ -616,6 +624,10 @@ bool GLRender3D::OnInitialize() {
         SetLastError("OpenGL 创建占位阴影贴图失败");
         return false;
     }
+    // HDR 后处理为可选功能：程序创建失败时记录但不中断（HDR 会自动降级为 LDR 直出）。
+    if (!CreatePostProgram()) {
+        std::cerr << "OpenGL: 后处理程序创建失败，HDR 将不可用" << std::endl;
+    }
     if (m_functions) {
         m_functions->glEnable(GL_DEPTH_TEST);
         m_functions->glDepthFunc(GL_LESS);
@@ -629,6 +641,9 @@ bool GLRender3D::OnInitialize() {
 
 // 关闭前释放后端资源的钩子。
 void GLRender3D::OnShutdown() {
+    DestroyPostProgram();
+    DestroyHdrResources();
+    DestroyMsaaResources();
     DestroyShadowMap();
     DestroyDummyShadowMap();
     DestroyDepthReadbackResources();
@@ -648,8 +663,25 @@ void GLRender3D::OnBeginFrame() {
     UpdateUniformBuffer();
 }
 
+// 每帧开始、绑定帧缓冲前准备 HDR / MSAA 目标。
+void GLRender3D::OnPrepareFrame() {
+    if (m_msaaEnabled) {
+        EnsureMsaaTargets();
+        m_msaaPassActive = (m_msaaTargetsReady && m_msaaFbo != 0);
+    } else {
+        m_msaaPassActive = false;
+    }
+    if (m_hdrEnabled) {
+        EnsureHdrTarget();
+    }
+}
+
 // 每帧结束时的钩子。
 void GLRender3D::OnEndFrame() {
+    // MSAA 时先把多重采样深度解析为单采样深度纹理，回读才能取到有效深度。
+    if (m_msaaPassActive) {
+        ResolveMsaaDepth();
+    }
     ProcessDepthReadback();
 }
 
@@ -657,6 +689,9 @@ void GLRender3D::OnEndFrame() {
 void GLRender3D::OnRecreateSwapchain() {
     DestroyDepthResources();
     CreateDepthResources();
+    // 尺寸变化后释放 HDR / MSAA 中间目标，下一帧按新尺寸重建。
+    DestroyHdrResources();
+    DestroyMsaaResources();
 }
 
 // 创建渲染通道。
@@ -905,6 +940,32 @@ void GLRender3D::UpdateUniformBuffer() {
     ubo.cameraObjectPosition[1] = cameraObject.y;
     ubo.cameraObjectPosition[2] = cameraObject.z;
     ubo.cameraObjectPosition[3] = 0.0f;
+    // 1.7：半球环境光（线性）。
+    ubo.ambientSkyColor[0] = m_ambientSkyColor.x;
+    ubo.ambientSkyColor[1] = m_ambientSkyColor.y;
+    ubo.ambientSkyColor[2] = m_ambientSkyColor.z;
+    ubo.ambientSkyColor[3] = m_ambientIntensity;
+    ubo.ambientGroundColor[0] = m_ambientGroundColor.x;
+    ubo.ambientGroundColor[1] = m_ambientGroundColor.y;
+    ubo.ambientGroundColor[2] = m_ambientGroundColor.z;
+    ubo.ambientGroundColor[3] = 0.0f;
+    // 1.7：阴影偏移/PCF/法线偏移。
+    ubo.shadowParams[0] = m_shadowBias;
+    ubo.shadowParams[1] = static_cast<float>(m_shadowPcfMode);
+    ubo.shadowParams[2] = (m_shadowNormalOffsetScale > 0.0f && m_allocatedShadowTextureSize > 0)
+        ? (2.0f * glm::length(glm::vec3(m_shadowBoundsMax - m_shadowBoundsMin))
+            / static_cast<float>(m_allocatedShadowTextureSize)) * m_shadowNormalOffsetScale
+        : 0.0f;
+    ubo.shadowParams[3] = 0.0f;
+    // 1.7：调试视图 + 线性深度归一化范围。
+    ubo.debugOptions[0] = static_cast<float>(m_debugView);
+    ubo.debugOptions[1] = 0.0f;
+    ubo.debugOptions[2] = 0.0f;
+    ubo.debugOptions[3] = 0.0f;
+    ubo.depthRange[0] = 0.1f;
+    ubo.depthRange[1] = 100.0f;
+    ubo.depthRange[2] = 0.0f;
+    ubo.depthRange[3] = 0.0f;
 
     m_functions->glBindBuffer(GL_UNIFORM_BUFFER, m_ubo);
     m_functions->glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(ubo), &ubo);
@@ -1048,6 +1109,434 @@ void GLRender3D::FlushTransparentDraws() {
 bool GLRender3D::CreateDepthResources() { return true; }
 // 销毁深度附件。
 void GLRender3D::DestroyDepthResources() {}
+
+// ---------------- HDR + 色调映射（1.6） ----------------
+
+// 开启/关闭 HDR 路径。关闭时完全回退到默认帧缓冲直出。
+void GLRender3D::SetHdrEnabled(bool enabled) {
+    m_hdrEnabled = enabled;
+}
+
+// 设置曝光（EV 档位）。
+void GLRender3D::SetExposureEV(float ev) {
+    m_exposureEV = ev;
+}
+
+// 1.7：阴影基础深度偏移。
+void GLRender3D::SetShadowBias(float bias) {
+    m_shadowBias = bias;
+}
+
+// 1.7：PCF 档位（0 关闭 / 1 = 3x3 / 2 = 5x5）。
+void GLRender3D::SetShadowPcfMode(int mode) {
+    m_shadowPcfMode = (mode < 0) ? 0 : (mode > 2 ? 2 : mode);
+}
+
+// 1.7：法线偏移的世界纹素倍数。
+void GLRender3D::SetShadowNormalOffsetScale(float scale) {
+    m_shadowNormalOffsetScale = (scale < 0.0f) ? 0.0f : scale;
+}
+
+// 1.7：半球环境光（线性空间）。
+void GLRender3D::SetAmbientLight(const Vec3& skyColor, const Vec3& groundColor, float intensity) {
+    m_ambientSkyColor = glm::vec3(skyColor.x, skyColor.y, skyColor.z);
+    m_ambientGroundColor = glm::vec3(groundColor.x, groundColor.y, groundColor.z);
+    m_ambientIntensity = (intensity < 0.0f) ? 0.0f : intensity;
+}
+
+// 1.7：调试视图（0 正常 / 1 深度 / 2 世界法线 / 3 阴影）。
+void GLRender3D::SetDebugView(int view) {
+    m_debugView = (view < 0) ? 0 : (view > 3 ? 3 : view);
+}
+
+// 1.7：开关 4x MSAA。
+void GLRender3D::SetMsaaEnabled(bool enabled) {
+    m_msaaEnabled = enabled;
+}
+
+// 本帧场景绘制的目标帧缓冲：
+//   4x MSAA 开启且目标就绪 -> 多重采样 FBO；
+//   否则 HDR 开启且就绪 -> HDR FBO；
+//   否则默认帧缓冲。
+unsigned int GLRender3D::GetSceneFramebuffer() const {
+    if (m_msaaEnabled && m_msaaTargetsReady && m_msaaFbo != 0) {
+        return m_msaaFbo;
+    }
+    if (m_hdrEnabled && m_hdrFbo != 0 && m_postProgram != 0) {
+        return m_hdrFbo;
+    }
+    return 0;
+}
+
+// 场景绘制完成后：MSAA 时先把多重采样颜色/深度解析到单采样目标，再按 HDR 开关后处理或直出。
+void GLRender3D::OnAfterSceneRender() {
+    if (m_msaaPassActive) {
+        // 颜色解析：多重采样 -> 单采样 RGBA16F 纹理。
+        if (m_functions && m_msaaResolveFbo != 0) {
+            m_functions->glBindFramebuffer(GL_READ_FRAMEBUFFER, m_msaaFbo);
+            m_functions->glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_msaaResolveFbo);
+            m_functions->glBlitFramebuffer(0, 0,
+                static_cast<int>(m_framebufferWidth), static_cast<int>(m_framebufferHeight),
+                0, 0, static_cast<int>(m_framebufferWidth), static_cast<int>(m_framebufferHeight),
+                GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            m_functions->glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            m_functions->glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        }
+        // 深度解析（供世界坐标回读）。
+        ResolveMsaaDepth();
+
+        if (m_hdrEnabled) {
+            // HDR：后处理读取 MSAA 解析结果。
+            RenderPostPass();
+        } else {
+            // LDR：直接把解析结果拷贝到默认帧缓冲（不做 gamma，与旧 LDR 路径一致）。
+            if (m_functions && m_msaaResolveFbo != 0) {
+                m_functions->glBindFramebuffer(GL_READ_FRAMEBUFFER, m_msaaResolveFbo);
+                m_functions->glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+                m_functions->glBlitFramebuffer(0, 0,
+                    static_cast<int>(m_framebufferWidth), static_cast<int>(m_framebufferHeight),
+                    0, 0, static_cast<int>(m_framebufferWidth), static_cast<int>(m_framebufferHeight),
+                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                m_functions->glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+                m_functions->glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            }
+        }
+        return;
+    }
+
+    if (!m_hdrEnabled) return;
+    RenderPostPass();
+}
+
+// 确保 HDR 中间目标与当前尺寸匹配；尺寸变化或未创建时重建。
+bool GLRender3D::EnsureHdrTarget() {
+    if (!m_functions || m_postProgram == 0) return false;
+    const int width = static_cast<int>(m_framebufferWidth);
+    const int height = static_cast<int>(m_framebufferHeight);
+    if (width <= 0 || height <= 0) return false;
+
+    if (m_hdrFbo != 0 && m_hdrWidth == width && m_hdrHeight == height) {
+        return true;
+    }
+
+    DestroyHdrResources();
+
+    // 颜色附件：线性 RGBA16F（HDR 计算需要 >1 的精度与范围）。
+    m_functions->glGenTextures(1, &m_hdrColorTexture);
+    m_functions->glBindTexture(GL_TEXTURE_2D, m_hdrColorTexture);
+    m_functions->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0,
+        GL_RGBA, GL_FLOAT, nullptr);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    m_functions->glBindTexture(GL_TEXTURE_2D, 0);
+
+    // 深度渲染缓冲。
+    m_functions->glGenRenderbuffers(1, &m_hdrDepthRbo);
+    m_functions->glBindRenderbuffer(GL_RENDERBUFFER, m_hdrDepthRbo);
+    m_functions->glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+    m_functions->glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+    m_functions->glGenFramebuffers(1, &m_hdrFbo);
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFbo);
+    m_functions->glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D, m_hdrColorTexture, 0);
+    m_functions->glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER, m_hdrDepthRbo);
+
+    const unsigned int status = m_functions->glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        SetLastError("OpenGL: HDR 中间目标帧缓冲不完整");
+        DestroyHdrResources();
+        return false;
+    }
+
+    m_hdrWidth = width;
+    m_hdrHeight = height;
+    return true;
+}
+
+// 销毁 HDR 中间目标（FBO + 颜色纹理 + 深度渲染缓冲）。
+void GLRender3D::DestroyHdrResources() {
+    if (!m_functions) {
+        m_hdrFbo = 0;
+        m_hdrColorTexture = 0;
+        m_hdrDepthRbo = 0;
+        m_hdrWidth = 0;
+        m_hdrHeight = 0;
+        return;
+    }
+    if (m_hdrFbo != 0) {
+        m_functions->glDeleteFramebuffers(1, &m_hdrFbo);
+        m_hdrFbo = 0;
+    }
+    if (m_hdrDepthRbo != 0) {
+        m_functions->glDeleteRenderbuffers(1, &m_hdrDepthRbo);
+        m_hdrDepthRbo = 0;
+    }
+    if (m_hdrColorTexture != 0) {
+        m_functions->glDeleteTextures(1, &m_hdrColorTexture);
+        m_hdrColorTexture = 0;
+    }
+    m_hdrWidth = 0;
+    m_hdrHeight = 0;
+}
+
+// 创建 HDR 后处理程序（全屏三角形 + 曝光 + ACES）。
+bool GLRender3D::CreatePostProgram() {
+    if (!m_functions) return false;
+    if (m_postProgram != 0) return true;
+    try {
+        const std::string vertPath = AssetPath::ShaderFile("post.vert");
+        const std::string fragPath = AssetPath::ShaderFile("post.frag");
+        const std::vector<char> vertCode = ReadShaderFile(vertPath);
+        const std::vector<char> fragCode = ReadShaderFile(fragPath);
+        std::string vertSource(vertCode.begin(), vertCode.end());
+        std::string fragSource(fragCode.begin(), fragCode.end());
+        unsigned int vert = CompileShader(GL_VERTEX_SHADER, vertSource.c_str());
+        unsigned int frag = CompileShader(GL_FRAGMENT_SHADER, fragSource.c_str());
+        if (vert == 0 || frag == 0) {
+            if (vert) m_functions->glDeleteShader(vert);
+            if (frag) m_functions->glDeleteShader(frag);
+            SetLastError("OpenGL 后处理着色器编译失败: " + vertPath + " 或 " + fragPath);
+            return false;
+        }
+        m_postProgram = LinkProgram(vert, frag);
+        m_functions->glDeleteShader(vert);
+        m_functions->glDeleteShader(frag);
+        if (m_postProgram == 0) {
+            SetLastError("OpenGL 后处理程序链接失败: " + vertPath + " / " + fragPath);
+            return false;
+        }
+
+        m_uPostExposureLoc = m_functions->glGetUniformLocation(m_postProgram, "uPostParams");
+        m_uPostTextureLoc = m_functions->glGetUniformLocation(m_postProgram, "hdrTexture");
+        m_functions->glUseProgram(m_postProgram);
+        if (m_uPostTextureLoc >= 0) {
+            m_functions->glUniform1i(m_uPostTextureLoc, 0);
+        }
+        m_functions->glUseProgram(0);
+
+        // Core Profile 下绘制必须绑定一个 VAO；全屏三角形不需要顶点数据，用空 VAO 即可。
+        m_functions->glGenVertexArrays(1, &m_postVao);
+        return true;
+    } catch (const std::exception& e) {
+        SetLastError(e.what());
+        std::cerr << "OpenGL 读取后处理着色器失败: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+// 销毁 HDR 后处理程序。
+void GLRender3D::DestroyPostProgram() {
+    if (m_functions && m_postProgram != 0) {
+        m_functions->glDeleteProgram(m_postProgram);
+    }
+    if (m_functions && m_postVao != 0) {
+        m_functions->glDeleteVertexArrays(1, &m_postVao);
+    }
+    m_postProgram = 0;
+    m_postVao = 0;
+    m_uPostExposureLoc = -1;
+    m_uPostTextureLoc = -1;
+}
+
+// 执行后处理：输入纹理 -> 曝光 + ACES（或调试直出）-> 默认帧缓冲。
+// 输入纹理：MSAA 开启时用多重采样解析结果，否则用 HDR 中间目标颜色。
+void GLRender3D::RenderPostPass() {
+    if (!m_functions || m_postProgram == 0) return;
+
+    unsigned int inputTexture = m_hdrColorTexture;
+    if (m_msaaPassActive && m_msaaResolveColorTexture != 0) {
+        inputTexture = m_msaaResolveColorTexture;
+    } else if (!EnsureHdrTarget()) {
+        return;
+    }
+    if (inputTexture == 0) return;
+
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    m_functions->glViewport(0, 0,
+        static_cast<int>(m_framebufferWidth),
+        static_cast<int>(m_framebufferHeight));
+    m_functions->glDisable(GL_DEPTH_TEST);
+    m_functions->glDisable(GL_BLEND);
+
+    m_functions->glUseProgram(m_postProgram);
+    m_currentProgram = m_postProgram;
+
+    // x: 曝光乘数 = 2^EV；y: 调试标志（调试视图跳过曝光与色调映射）。
+    if (m_uPostExposureLoc >= 0) {
+        const float exposure = std::pow(2.0f, m_exposureEV);
+        const float debugFlag = (m_debugView != 0) ? 1.0f : 0.0f;
+        m_functions->glUniform4f(m_uPostExposureLoc, exposure, debugFlag, 0.0f, 0.0f);
+    }
+
+    m_functions->glActiveTexture(GL_TEXTURE0);
+    m_functions->glBindTexture(GL_TEXTURE_2D, inputTexture);
+
+    m_functions->glBindVertexArray(m_postVao);
+    m_functions->glDrawArrays(GL_TRIANGLES, 0, 3);
+    m_functions->glBindVertexArray(0);
+
+    m_functions->glActiveTexture(GL_TEXTURE0);
+    m_functions->glBindTexture(GL_TEXTURE_2D, 0);
+    m_functions->glEnable(GL_DEPTH_TEST);
+}
+
+// ---------------- 1.7 4x MSAA + 深度解析 ----------------
+
+// 确保 4x MSAA 目标与当前尺寸/模式匹配；必要时创建。
+bool GLRender3D::EnsureMsaaTargets() {
+    if (!m_functions) return false;
+    const int width = static_cast<int>(m_framebufferWidth);
+    const int height = static_cast<int>(m_framebufferHeight);
+    if (width <= 0 || height <= 0) return false;
+
+    if (m_msaaTargetsReady && m_msaaWidth == width && m_msaaHeight == height) {
+        return true;
+    }
+    return CreateMsaaResources();
+}
+
+// 创建多重采样颜色/深度渲染缓冲、解析目标（单采样颜色纹理 + 深度纹理）。
+bool GLRender3D::CreateMsaaResources() {
+    if (!m_functions) return false;
+    const int width = static_cast<int>(m_framebufferWidth);
+    const int height = static_cast<int>(m_framebufferHeight);
+    if (width <= 0 || height <= 0) return false;
+
+    DestroyMsaaResources();
+
+    int maxSamples = 0;
+    m_functions->glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+    m_msaaSamples = (maxSamples >= 4) ? 4 : (maxSamples >= 2 ? 2 : 0);
+    if (m_msaaSamples == 0) {
+        SetLastError("OpenGL: 设备不支持多重采样，MSAA 不可用");
+        return false;
+    }
+
+    // 多重采样颜色渲染缓冲（RGBA16F 线性，供 HDR 后处理）。
+    m_functions->glGenRenderbuffers(1, &m_msaaColorRbo);
+    m_functions->glBindRenderbuffer(GL_RENDERBUFFER, m_msaaColorRbo);
+    m_functions->glRenderbufferStorageMultisample(GL_RENDERBUFFER, m_msaaSamples, GL_RGBA16F, width, height);
+
+    // 多重采样深度渲染缓冲。
+    m_functions->glGenRenderbuffers(1, &m_msaaDepthRbo);
+    m_functions->glBindRenderbuffer(GL_RENDERBUFFER, m_msaaDepthRbo);
+    m_functions->glRenderbufferStorageMultisample(GL_RENDERBUFFER, m_msaaSamples, GL_DEPTH_COMPONENT24, width, height);
+    m_functions->glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+    // 多重采样帧缓冲。
+    m_functions->glGenFramebuffers(1, &m_msaaFbo);
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, m_msaaFbo);
+    m_functions->glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_RENDERBUFFER, m_msaaColorRbo);
+    m_functions->glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER, m_msaaDepthRbo);
+    unsigned int status = m_functions->glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        SetLastError("OpenGL: MSAA 帧缓冲不完整");
+        DestroyMsaaResources();
+        return false;
+    }
+
+    // 解析目标：单采样颜色纹理（RGBA16F）+ 深度纹理。
+    m_functions->glGenTextures(1, &m_msaaResolveColorTexture);
+    m_functions->glBindTexture(GL_TEXTURE_2D, m_msaaResolveColorTexture);
+    m_functions->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, nullptr);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    m_functions->glGenTextures(1, &m_msaaResolveDepthTexture);
+    m_functions->glBindTexture(GL_TEXTURE_2D, m_msaaResolveDepthTexture);
+    m_functions->glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0,
+        GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    m_functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    m_functions->glBindTexture(GL_TEXTURE_2D, 0);
+
+    m_functions->glGenFramebuffers(1, &m_msaaResolveFbo);
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, m_msaaResolveFbo);
+    m_functions->glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D, m_msaaResolveColorTexture, 0);
+    m_functions->glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_TEXTURE_2D, m_msaaResolveDepthTexture, 0);
+    status = m_functions->glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        SetLastError("OpenGL: MSAA 解析帧缓冲不完整");
+        DestroyMsaaResources();
+        return false;
+    }
+
+    m_msaaWidth = width;
+    m_msaaHeight = height;
+    m_msaaTargetsReady = true;
+    return true;
+}
+
+// 销毁尺寸相关的 MSAA 资源。
+void GLRender3D::DestroyMsaaResources() {
+    if (!m_functions) {
+        m_msaaFbo = 0;
+        m_msaaColorRbo = 0;
+        m_msaaDepthRbo = 0;
+        m_msaaResolveFbo = 0;
+        m_msaaResolveColorTexture = 0;
+        m_msaaResolveDepthTexture = 0;
+        m_msaaWidth = 0;
+        m_msaaHeight = 0;
+        m_msaaTargetsReady = false;
+        return;
+    }
+    if (m_msaaFbo != 0) {
+        m_functions->glDeleteFramebuffers(1, &m_msaaFbo);
+        m_msaaFbo = 0;
+    }
+    if (m_msaaResolveFbo != 0) {
+        m_functions->glDeleteFramebuffers(1, &m_msaaResolveFbo);
+        m_msaaResolveFbo = 0;
+    }
+    if (m_msaaColorRbo != 0) {
+        m_functions->glDeleteRenderbuffers(1, &m_msaaColorRbo);
+        m_msaaColorRbo = 0;
+    }
+    if (m_msaaDepthRbo != 0) {
+        m_functions->glDeleteRenderbuffers(1, &m_msaaDepthRbo);
+        m_msaaDepthRbo = 0;
+    }
+    if (m_msaaResolveColorTexture != 0) {
+        m_functions->glDeleteTextures(1, &m_msaaResolveColorTexture);
+        m_msaaResolveColorTexture = 0;
+    }
+    if (m_msaaResolveDepthTexture != 0) {
+        m_functions->glDeleteTextures(1, &m_msaaResolveDepthTexture);
+        m_msaaResolveDepthTexture = 0;
+    }
+    m_msaaWidth = 0;
+    m_msaaHeight = 0;
+    m_msaaTargetsReady = false;
+}
+
+// 把多重采样深度解析为单采样深度纹理（glBlitFramebuffer），供世界坐标回读。
+void GLRender3D::ResolveMsaaDepth() {
+    if (!m_functions || m_msaaFbo == 0 || m_msaaResolveFbo == 0) return;
+    m_functions->glBindFramebuffer(GL_READ_FRAMEBUFFER, m_msaaFbo);
+    m_functions->glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_msaaResolveFbo);
+    m_functions->glBlitFramebuffer(0, 0,
+        static_cast<int>(m_framebufferWidth), static_cast<int>(m_framebufferHeight),
+        0, 0, static_cast<int>(m_framebufferWidth), static_cast<int>(m_framebufferHeight),
+        GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    m_functions->glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    m_functions->glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+}
 // 创建深度回读缓冲。
 bool GLRender3D::CreateDepthReadbackResources() { return true; }
 // 销毁深度回读缓冲。
@@ -1060,7 +1549,13 @@ void GLRender3D::ProcessDepthReadback() {
 
     if (m_framebufferWidth == 0 || m_framebufferHeight == 0) return;
 
-    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // 深度可能写在 HDR / MSAA 中间目标里，回读时绑定当前场景帧缓冲。
+    // MSAA 时深度已解析到 m_msaaResolveFbo 的单采样深度纹理，回读它即可。
+    unsigned int readFbo = GetSceneFramebuffer();
+    if (m_msaaPassActive && m_msaaResolveFbo != 0) {
+        readFbo = m_msaaResolveFbo;
+    }
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, readFbo);
 
     int32_t pixelX = static_cast<int32_t>(m_requestedNDCX *
         static_cast<float>(m_framebufferWidth));
@@ -1272,7 +1767,24 @@ glm::mat4 GLRender3D::ComputeLightViewProj() const {
 
     float zNear = std::max(0.01f, -viewMax.z);
     float zFar = std::max(zNear + 0.01f, -viewMin.z);
-    return glm::orthoRH_NO(viewMin.x, viewMax.x, viewMin.y, viewMax.y, zNear, zFar) * lightView;
+
+    // 1.7：光源正交投影 texel 对齐（与 Vulkan 一致），消除阴影游动/闪烁。
+    const uint32_t shadowSize = (m_allocatedShadowTextureSize != 0)
+        ? m_allocatedShadowTextureSize : m_shadowTextureSize;
+    const float halfSize = std::max(viewMax.x - viewMin.x, viewMax.y - viewMin.y) * 0.5f;
+    const float texelWorld = (shadowSize != 0 && halfSize > 1.0e-6f)
+        ? (2.0f * halfSize / static_cast<float>(shadowSize)) : 0.0f;
+    float centerX = (viewMin.x + viewMax.x) * 0.5f;
+    float centerY = (viewMin.y + viewMax.y) * 0.5f;
+    if (texelWorld > 0.0f) {
+        centerX = std::floor(centerX / texelWorld) * texelWorld;
+        centerY = std::floor(centerY / texelWorld) * texelWorld;
+    }
+
+    return glm::orthoRH_NO(
+        centerX - halfSize, centerX + halfSize,
+        centerY - halfSize, centerY + halfSize,
+        zNear, zFar) * lightView;
 }
 
 // 绑定阴影贴图。

@@ -113,8 +113,8 @@ public:
     void SubmitAsync(Render::AsyncTask task) override;
     // 把任务丢进线程池异步执行。
     void SubmitAsync(QRunnable* task);
-    // 按拓扑返回图形管线。
-    VkPipeline GetPipeline(DrawTopology topology) const;
+    // 按拓扑返回图形管线（1.6：3D 可在 HDR 管线集与 LDR 管线集间切换）。
+    virtual VkPipeline GetPipeline(DrawTopology topology) const;
 
     // 设置 Win32 表面（外部所有）。
     void SetSurface(VkSurfaceKHR surface);
@@ -143,10 +143,17 @@ protected:
     // 交换链/帧缓冲重建后的钩子。
     virtual void OnRecreateSwapchain() {}
 
+    // 场景通道结束后、当前渲染通道结束前的钩子（1.6：HDR 后处理在此执行）。
+    virtual void OnAfterScenePass() {}
+    // 清理交换链前释放尺寸相关资源的钩子（1.6：HDR 中间目标在此释放）。
+    virtual void OnBeforeCleanupSwapchain() {}
+
     // 确保本帧已开始录制命令。
     bool EnsureFrameRecording();
-    // 开始主颜色渲染通道。
-    void BeginColorRenderPass();
+    // 开始主颜色渲染通道（1.6：子类可重写以改绑定 HDR 中间目标）。
+    virtual void BeginColorRenderPass();
+    // 结束当前颜色渲染通道（1.6：后处理需要先结束场景通道）。
+    void EndColorRenderPass();
 
     // 创建渲染通道。
     virtual bool CreateRenderPass();
@@ -243,6 +250,7 @@ protected:
 
     VkClearValue m_clearValues[2] = {};
     uint32_t m_clearValueCount = 1;
+    bool m_colorPassOpen = false;  // 颜色渲染通道是否处于打开状态（1.6：HDR 需要显式结束）
 
     VkCommandPool m_commandPool = VK_NULL_HANDLE;             // 命令池（渲染帧）
     VkCommandPool m_singleTimeCommandPool = VK_NULL_HANDLE;   // 单次命令专用池
@@ -388,6 +396,29 @@ public:
     void SetMetallicOverride(bool enabled, float value);
     void SetRoughnessOverride(bool enabled, float value);
     void SetEmissiveOverride(bool enabled, float value);
+    // HDR + 色调映射（1.6）：开启后场景先渲染到 HDR 中间目标，再经 ACES 色调映射输出。
+    void SetHdrEnabled(bool enabled);
+    // 设置曝光（EV 档位，最终线性乘数 = 2^EV）。
+    void SetExposureEV(float ev);
+    // 查询 HDR 路径是否开启。
+    bool IsHdrEnabled() const { return m_hdrEnabled; }
+    // ---- 1.7 阴影/环境光/调试/抗锯齿 ----
+    // 设置阴影基础深度偏移（斜率缩放前的基准）。
+    void SetShadowBias(float bias);
+    // 设置 PCF 档位：0 关闭 / 1 = 3x3 / 2 = 5x5。
+    void SetShadowPcfMode(int mode);
+    // 设置阴影法线偏移的世界纹素倍数（0 = 关闭法线偏移）。
+    void SetShadowNormalOffsetScale(float scale);
+    // 设置半球环境光的天空色、地面色与强度（线性空间）。
+    void SetAmbientLight(const Vec3& skyColor, const Vec3& groundColor, float intensity);
+    // 设置调试视图：0 正常 / 1 深度 / 2 世界法线 / 3 阴影。
+    void SetDebugView(int view);
+    // 查询当前调试视图。
+    int GetDebugView() const { return m_debugView; }
+    // 开关 4x MSAA（关闭时完全走 1x 旧路径）。
+    void SetMsaaEnabled(bool enabled);
+    // 查询 4x MSAA 是否开启。
+    bool IsMsaaEnabled() const { return m_msaaEnabled; }
     // 设置阴影贴图边长。
     void SetShadowTextureSize(uint32_t size);
     // 返回阴影贴图边长。
@@ -533,6 +564,53 @@ protected:
     // 纹理销毁时回收引用它的材质描述符集。
     void OnTextureDestroyed(TextureHandle handle) override;
 
+    // ---------------- HDR + 色调映射（1.6） ----------------
+    // 重写主颜色渲染通道：HDR 开启时绑定 HDR 中间目标帧缓冲。
+    void BeginColorRenderPass() override;
+    // 场景通道结束后执行后处理（HDR -> 曝光 + ACES -> 交换链）。
+    void OnAfterScenePass() override;
+    // 交换链清理前释放 HDR 中间目标（尺寸相关资源）。
+    void OnBeforeCleanupSwapchain() override;
+    // 按当前 HDR 开关返回管线（HDR 管线渲染到 R16G16B16A16_SFLOAT 中间目标）。
+    VkPipeline GetPipeline(DrawTopology topology) const override;
+
+    // 确保 HDR 中间目标与当前尺寸匹配；失败返回 false。
+    bool EnsureHdrTarget();
+    // 创建 HDR 渲染通道与帧缓冲。
+    bool CreateHdrRenderPass();
+    // 创建 HDR 后处理渲染通道（仅颜色附件，避免清掉场景深度回读所需的深度）。
+    bool CreatePostRenderPass();
+    // 创建 HDR 颜色图像、视图与帧缓冲。
+    bool CreateHdrResources();
+    // 创建 HDR 后处理管线（全屏三角形）。
+    bool CreatePostPipeline();
+    // 销毁 HDR 中间目标相关资源（图像/视图/帧缓冲）。
+    void DestroyHdrResources();
+    // 销毁 HDR 渲染通道、管线、描述符与采样器。
+    void DestroyHdrSupport();
+    // 写入后处理描述符集（HDR 视图 + 采样器）。
+    void UpdatePostDescriptors();
+
+    // ---- 1.7 MSAA（4x）与深度解析 ----
+    // 确保 4x MSAA 中间目标（多重采样颜色/深度 + 帧缓冲 + 渲染通道 + 管线）与当前尺寸/模式匹配。
+    bool EnsureMsaaTargets();
+    // 创建 LDR / HDR 两个多重采样渲染通道。
+    bool CreateMsaaRenderPasses();
+    // 创建多重采样颜色/深度图像、视图与帧缓冲。
+    bool CreateMsaaColorDepthResources();
+    // 创建多重采样场景管线（LDR 与 HDR 两套）。
+    bool CreateMsaaPipelines();
+    // 创建深度解析通道（多重采样深度 -> 单采样深度，供世界坐标回读）。
+    bool CreateDepthResolveSupport();
+    // 写入深度解析描述符集（多重采样深度视图 + 采样器）。
+    void UpdateDepthResolveDescriptors();
+    // 在命令缓冲中记录深度解析通道。
+    void RecordDepthResolve();
+    // 销毁尺寸相关的 MSAA 资源（图像/视图/帧缓冲/解析帧缓冲）。
+    void DestroyMsaaResources();
+    // 销毁非尺寸相关的 MSAA 支持资源（渲染通道/管线/描述符/采样器）。
+    void DestroyMsaaSupport();
+
     // 创建深度附件。
     bool CreateDepthResources();
     // 销毁深度附件。
@@ -652,6 +730,83 @@ protected:
     VkImageView m_shadowView = VK_NULL_HANDLE;
     VkFramebuffer m_shadowFramebuffer = VK_NULL_HANDLE;
     VkFormat m_shadowDepthFormat = VK_FORMAT_UNDEFINED;
+
+    // ---------------- HDR + 色调映射（1.6） ----------------
+    // HDR 默认关闭：关闭时完全走旧的直接写交换链路径（画面与旧版一致）。
+    bool m_hdrEnabled = false;
+    float m_exposureEV = 0.0f;              // 曝光档位（EV），线性乘数 = 2^EV
+    bool m_hdrPassActive = false;           // 当前是否在 HDR 中间目标中绘制
+    bool m_postPipelineReady = false;
+    VkFormat m_hdrFormat = VK_FORMAT_UNDEFINED;   // 中间目标格式（优先 R16G16B16A16_SFLOAT）
+    // HDR 场景管线集：与 m_pipelines 拓扑一致，但 renderPass 指向 HDR 渲染通道。
+    VkPipeline m_hdrPipelines[DT_COUNT] = {};
+    // HDR 中间目标（尺寸相关，随交换链重建）。
+    VkImage m_hdrColorImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_hdrColorMemory = VK_NULL_HANDLE;
+    VkImageView m_hdrColorView = VK_NULL_HANDLE;
+    VkFramebuffer m_hdrFramebuffer = VK_NULL_HANDLE;
+    VkRenderPass m_hdrRenderPass = VK_NULL_HANDLE;
+    // 后处理渲染通道（仅颜色附件，finalLayout=PRESENT_SRC），与 HDR 通道分离，
+    // 避免后处理通道清掉场景深度（世界坐标回读依赖深度）。
+    VkRenderPass m_postRenderPass = VK_NULL_HANDLE;
+    // 后处理写入交换链的帧缓冲（每个交换链图像一个）。
+    std::vector<VkFramebuffer> m_postFramebuffers;
+    // 后处理（全屏三角形 + 曝光 + ACES）。
+    VkPipelineLayout m_postPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline m_postPipeline = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_postSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_postDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet m_postDescriptorSet = VK_NULL_HANDLE;
+    VkSampler m_postSampler = VK_NULL_HANDLE;
+
+    // ---------------- 1.7 阴影 / 环境光 / 调试 / MSAA ----------------
+    // 阴影参数。
+    float m_shadowBias = 0.002f;              // 基础深度偏移（斜率缩放前的基准）
+    int m_shadowPcfMode = 1;                  // 0 关闭 / 1 = 3x3 / 2 = 5x5
+    float m_shadowNormalOffsetScale = 1.0f;   // 法线偏移的世界纹素倍数（0 = 关闭）
+    // 半球环境光（线性空间）。
+    glm::vec3 m_ambientSkyColor = glm::vec3(0.030f, 0.035f, 0.045f);
+    glm::vec3 m_ambientGroundColor = glm::vec3(0.015f, 0.013f, 0.011f);
+    float m_ambientIntensity = 1.0f;
+    // 调试视图：0 正常 / 1 深度 / 2 世界法线 / 3 阴影。
+    int m_debugView = 0;
+
+    // 4x MSAA（默认关闭；关闭时完全走 1x 旧路径）。
+    bool m_msaaEnabled = false;
+    bool m_msaaPassActive = false;                 // 当前场景是否绘制到多重采样目标
+    VkSampleCountFlagBits m_msaaSampleCount = VK_SAMPLE_COUNT_4_BIT;
+    VkFormat m_msaaDepthFormat = VK_FORMAT_UNDEFINED;  // 多重采样深度格式（渲染通道与图像须一致）
+    bool m_msaaTargetsReady = false;
+    bool m_msaaSupportReady = false;
+    VkRenderPass m_msaaLdrRenderPass = VK_NULL_HANDLE;  // 多重采样颜色 -> 交换链 resolve
+    VkRenderPass m_msaaHdrRenderPass = VK_NULL_HANDLE;  // 多重采样颜色 -> HDR 目标 resolve
+    VkPipeline m_msaaLdrPipelines[DT_COUNT] = {};
+    VkPipeline m_msaaHdrPipelines[DT_COUNT] = {};
+    // 多重采样颜色目标（尺寸相关）。
+    VkImage m_msaaColorImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_msaaColorMemory = VK_NULL_HANDLE;
+    VkImageView m_msaaColorView = VK_NULL_HANDLE;
+    // HDR 多重采样颜色目标（格式 = HDR 格式；resolve 到 m_hdrColorImage 需格式兼容）。
+    VkImage m_msaaHdrColorImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_msaaHdrColorMemory = VK_NULL_HANDLE;
+    VkImageView m_msaaHdrColorView = VK_NULL_HANDLE;
+    // 多重采样深度目标（尺寸相关；单采样深度仍由 m_depthImage 提供）。
+    VkImage m_msaaDepthImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_msaaDepthMemory = VK_NULL_HANDLE;
+    VkImageView m_msaaDepthView = VK_NULL_HANDLE;
+    // LDR 多重采样帧缓冲（每交换链图像一个）。
+    std::vector<VkFramebuffer> m_msaaLdrFramebuffers;
+    // HDR 多重采样帧缓冲（单个，resolve 到 m_hdrColorImage）。
+    VkFramebuffer m_msaaHdrFramebuffer = VK_NULL_HANDLE;
+    // 深度解析（多重采样深度 -> 单采样 m_depthImage）。
+    VkRenderPass m_depthResolveRenderPass = VK_NULL_HANDLE;
+    VkPipelineLayout m_depthResolveLayout = VK_NULL_HANDLE;
+    VkPipeline m_depthResolvePipeline = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_depthResolveSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_depthResolvePool = VK_NULL_HANDLE;
+    VkDescriptorSet m_depthResolveSet = VK_NULL_HANDLE;
+    VkSampler m_msaaDepthSampler = VK_NULL_HANDLE;
+    VkFramebuffer m_depthResolveFramebuffer = VK_NULL_HANDLE;
 };
 
 #endif //__VK_RENDER_H__
