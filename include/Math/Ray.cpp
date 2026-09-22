@@ -1,6 +1,7 @@
 ﻿#include "Math/Ray.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace {
@@ -90,4 +91,69 @@ bool RayIntersectsTriangle(const Ray& ray, const Vec3& a, const Vec3& b, const V
     if (u) *u = baryU;
     if (v) *v = baryV;
     return true;
+}
+
+// 射线与平面相交（任务 2.4，Gizmo 旋转环拾取用）。
+bool RayIntersectsPlane(const Ray& ray, const Vec3& planePoint, const Vec3& planeNormal,
+                        Vec3* hitPoint, float* t) {
+    constexpr float kEpsilon = 1.0e-8f;
+    const float denom = planeNormal.x * ray.direction.x +
+                        planeNormal.y * ray.direction.y +
+                        planeNormal.z * ray.direction.z;
+    // 射线与平面平行（或退化法线）：无交点。
+    if (denom > -kEpsilon && denom < kEpsilon) return false;
+
+    const float numer = planeNormal.x * (planePoint.x - ray.origin.x) +
+                        planeNormal.y * (planePoint.y - ray.origin.y) +
+                        planeNormal.z * (planePoint.z - ray.origin.z);
+    const float hitT = numer / denom;
+    if (hitT < 0.0f) return false;
+
+    if (t) *t = hitT;
+    if (hitPoint) {
+        hitPoint->x = ray.origin.x + ray.direction.x * hitT;
+        hitPoint->y = ray.origin.y + ray.direction.y * hitT;
+        hitPoint->z = ray.origin.z + ray.direction.z * hitT;
+    }
+    return true;
+}
+
+// 射线与无限直线的最近点（任务 2.4，Gizmo 轴拾取用）。
+float RayLineClosestParam(const Ray& ray, const Vec3& linePoint, const Vec3& lineDir,
+                          float* distance) {
+    constexpr float kEpsilon = 1.0e-12f;
+    const Vec3 w0{ ray.origin.x - linePoint.x, ray.origin.y - linePoint.y,
+                   ray.origin.z - linePoint.z };
+    const float a = ray.direction.x * ray.direction.x +
+                    ray.direction.y * ray.direction.y +
+                    ray.direction.z * ray.direction.z;
+    const float b = ray.direction.x * lineDir.x +
+                    ray.direction.y * lineDir.y +
+                    ray.direction.z * lineDir.z;
+    const float c = lineDir.x * lineDir.x + lineDir.y * lineDir.y + lineDir.z * lineDir.z;
+    const float d = ray.direction.x * w0.x + ray.direction.y * w0.y + ray.direction.z * w0.z;
+    const float e = lineDir.x * w0.x + lineDir.y * w0.y + lineDir.z * w0.z;
+
+    const float denom = a * c - b * b;
+    // 两线平行：约定返回 0，避免除零。
+    if (denom > -kEpsilon && denom < kEpsilon) {
+        if (distance) *distance = std::numeric_limits<float>::infinity();
+        return 0.0f;
+    }
+
+    // 直线上的参数 s：最近点 = linePoint + s * lineDir。
+    const float s = (a * e - b * d) / denom;
+    if (distance) {
+        // 射线上对应参数与两最近点距离。
+        const float rayParam = (b * e - c * d) / denom;
+        const Vec3 p1{ ray.origin.x + ray.direction.x * rayParam,
+                       ray.origin.y + ray.direction.y * rayParam,
+                       ray.origin.z + ray.direction.z * rayParam };
+        const Vec3 p2{ linePoint.x + lineDir.x * s,
+                       linePoint.y + lineDir.y * s,
+                       linePoint.z + lineDir.z * s };
+        const float dx = p1.x - p2.x, dy = p1.y - p2.y, dz = p1.z - p2.z;
+        *distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    return s;
 }

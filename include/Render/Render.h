@@ -129,6 +129,26 @@ public:
     // Vulkan：随材质 push constant 的 highlight 字段上传；OpenGL：普通 uniform uHighlight。
     virtual void SetObjectHighlight(bool highlighted) { (void)highlighted; }
 
+    // ---------------- 任务 2.4：Transform Gizmo 叠加层 ----------------
+    // 提交本帧要绘制的 Gizmo 线段顶点（归一化场景空间）。每顶点 7 个 float：
+    // position.xyz + color.rgba。vertexCount 为 0 表示本帧不画 Gizmo。默认空实现。
+    virtual void SetGizmoGeometry(const float* interleavedPositionColor, uint32_t vertexCount) {
+        (void)interleavedPositionColor;
+        (void)vertexCount;
+    }
+    // 查询屏幕归一化坐标（0..1，左上原点）对应的“归一化场景空间”射线。
+    // 命中/可用返回 true 并写入 origin / direction（direction 单位化）。默认返回 false。
+    virtual bool GetSceneRay(float nx, float ny, Vec3& origin, Vec3& direction) const {
+        (void)nx; (void)ny; (void)origin; (void)direction;
+        return false;
+    }
+    // 查询“归一化场景空间”某点处“每屏幕像素对应的世界长度”（用于固定屏幕尺寸的 Gizmo）。
+    // 默认返回 0。
+    virtual float GetSceneWorldPerPixel(const Vec3& scenePoint) const {
+        (void)scenePoint;
+        return 0.0f;
+    }
+
     // 等待 GPU 与异步任务完成。
     virtual void WaitForIdle() = 0;
     using AsyncTask = std::function<void()>;
@@ -188,6 +208,10 @@ protected:
     void SetLastError(std::string message);
     // 标记设备丢失并记录原因。
     void MarkDeviceLost(std::string message);
+
+    // 任务 2.4：场景/后处理通道结束、交换前绘制叠加层（Gizmo）的钩子。
+    // 此时颜色已写入最终目标（交换链 / 默认帧缓冲），叠加层直接绘制在其上。默认空实现。
+    virtual void OnOverlayPass() {}
 
     bool m_initialized = false;
     uint32_t m_framebufferWidth = 800;

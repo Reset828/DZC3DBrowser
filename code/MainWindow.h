@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include "Asset/SceneAsset.h"
+#include "Gizmo/Gizmo.h"
 #include "Math/Aabb.h"
 #include "Math/Transform.h"
 #include "Render/Render.h"
@@ -119,6 +120,17 @@ private slots:
     void onDebugPanel();
     // 打开或关闭变换编辑面板（任务 2.1）。
     void onTransformPanel();
+    // 任务 2.4：切换 Gizmo 模式（平移 / 旋转 / 缩放）。
+    void onGizmoTranslate();
+    void onGizmoRotate();
+    void onGizmoScale();
+    // 任务 2.4：撤销 / 重做上一次 Transform 修改。
+    void onUndoTransform();
+    void onRedoTransform();
+    // 帮助菜单：关于（版本信息）。
+    void onAbout();
+    // 帮助菜单：快捷键（当前程序已有快捷键）。
+    void onShortcuts();
     // 打开最近文件菜单项对应路径。
     void onRecentFileTriggered();
     // 在 Vulkan / OpenGL 后端间切换。
@@ -269,6 +281,48 @@ private:
     // 标记某运行时节点及其整棵子树为“已删除”。
     void MarkSubtreeDeleted(LoadedModel& model, int runtimeNode);
 
+    // ---------------- 任务 2.4：Transform Gizmo 与编辑闭环 ----------------
+    // 把 Gizmo 模式 / 吸附 / 撤销按钮的选中态同步到 UI。
+    void SyncGizmoUi();
+    // 构建当前选中节点的 Gizmo 放置帧（归一化场景空间，固定屏幕尺寸）；无选中返回 false。
+    bool BuildGizmoFrame(GizmoFrame& outFrame) const;
+    // 每帧把 Gizmo 线段几何提交给当前活动渲染器（无选中/无 Gizmo 时提交空）。
+    void UpdateGizmoGeometry();
+    // 视口鼠标按下：优先尝试抓取 Gizmo 轴；返回 true 表示事件已被 Gizmo 消费（不再转相机）。
+    bool TryBeginGizmoDrag(float nx, float ny);
+    // 视口鼠标拖动：Gizmo 拖拽中则应用变换并返回 true。
+    bool TryUpdateGizmoDrag(float nx, float ny);
+    // 视口鼠标移动（非拖拽）：更新 Gizmo 悬停轴（用于高亮）。
+    void UpdateGizmoHover(float nx, float ny);
+    // 视口鼠标松开：结束 Gizmo 拖拽（若有），并提交一条撤销记录。
+    void EndGizmoDrag();
+    // 当前是否处于 Gizmo 拖拽中。
+    bool IsGizmoDragging() const { return m_gizmoDragging; }
+    // 选中节点局部变换的“快照”（撤销/重做用）。
+    struct TransformSnapshot {
+        int model = -1;
+        int node = -1;
+        Transform local;
+    };
+    // 记录一条撤销记录（清空重做栈）；合并连续拖拽由 mergeKey 控制。
+    void PushUndoSnapshot(const TransformSnapshot& snapshot, bool coalesce);
+    // 把快照应用到场景并刷新面板 / 高亮 / 阴影。
+    void ApplyTransformSnapshot(const TransformSnapshot& snapshot);
+    // 把归一化场景空间向量换算到某运行时节点的父空间（Gizmo 轴 -> 局部平移/旋转用）。
+    Vec3 SceneVectorToParentSpace(const LoadedModel& model, int runtimeNode,
+                                  const Vec3& v) const;
+    // 把归一化场景空间点换算到某运行时节点的父空间（Gizmo 枢轴 -> 局部平移用）。
+    Vec3 ScenePointToParentSpace(const LoadedModel& model, int runtimeNode,
+                                 const Vec3& p) const;
+    // 某运行时节点（含整棵子树）在“归一化场景空间”的包围盒；无几何返回空盒。
+    Aabb NodeSubtreeWorldBounds(const LoadedModel& model, int runtimeNode) const;
+
+    // Gizmo 轴长（屏幕像素）与拾取半径（屏幕像素）。
+    static constexpr float kGizmoPixelLength = 90.0f;
+    static constexpr float kGizmoPickPixels = 8.0f;
+    // 撤销栈上限。
+    static constexpr size_t kMaxUndoSteps = 128;
+
     // ---------------- 任务 2.3：选中高亮（由项目树驱动） ----------------
     // 把高亮状态应用到场景对象（选中节点整棵子树高亮，其余清除）。
     void ApplySelectionHighlight();
@@ -358,6 +412,35 @@ private:
     int m_selectedModel = -1;
     int m_selectedRuntimeNode = -1;
     bool m_syncingTransformPanel = false;
+
+    // ---------------- 任务 2.4：Transform Gizmo 与编辑闭环 ----------------
+    QComboBox* m_gizmoModeCombo = nullptr;         // Gizmo 模式选择器（平移 / 旋转 / 缩放）
+    QCheckBox* m_gizmoWorldSpaceCheck = nullptr;   // 勾选 = 世界坐标模式，默认局部
+    QCheckBox* m_gizmoSnapCheck = nullptr;         // 吸附开关（默认关）
+    QDoubleSpinBox* m_gizmoSnapTranslate = nullptr;
+    QDoubleSpinBox* m_gizmoSnapRotate = nullptr;
+    QDoubleSpinBox* m_gizmoSnapScale = nullptr;
+    GizmoMode m_gizmoMode = GizmoMode::Translate;
+    bool m_gizmoWorldSpace = false;                // 默认局部坐标
+    bool m_gizmoSnapEnabled = false;               // 默认关闭吸附
+    // 拖拽状态。
+    bool m_gizmoDragging = false;
+    GizmoAxis m_gizmoDragAxis = GizmoAxis::None;
+    GizmoFrame m_gizmoDragFrame;                   // 拖拽开始时的放置帧（固定屏幕尺寸）
+    // 拖拽枢轴（= 子树包围盒中心，归一化场景空间）换算到“节点父空间”的坐标；
+    // 旋转/缩放时绕该点进行（保持枢轴不动）。
+    Vec3 m_gizmoDragPivotParent = { 0.0f, 0.0f, 0.0f };
+    float m_gizmoDragStartParam = 0.0f;            // 平移/缩放的起始轴参数
+    float m_gizmoDragStartAngle = 0.0f;            // 旋转的起始方位角
+    Vec3 m_gizmoDragStartTranslation = { 0.0f, 0.0f, 0.0f };
+    Vec3 m_gizmoDragStartRotation = { 0.0f, 0.0f, 0.0f };
+    Vec3 m_gizmoDragStartScale = { 1.0f, 1.0f, 1.0f };
+    bool m_gizmoDragRecorded = false;              // 本次拖拽是否已记录撤销
+    GizmoAxis m_gizmoHoverAxis = GizmoAxis::None;  // 当前悬停轴（用于高亮）
+    // 撤销 / 重做栈（仅覆盖 Transform 修改）。
+    std::vector<TransformSnapshot> m_undoStack;
+    std::vector<TransformSnapshot> m_redoStack;
+    bool m_undoCoalescing = false;                 // 同一连续拖拽是否已入栈
 
     QLabel* m_backendLabel = nullptr;
     QLabel* m_coordX = nullptr;

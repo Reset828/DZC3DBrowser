@@ -26,4 +26,16 @@ bool RayIntersectsAabb(const Ray& ray, const Aabb& box, float* tNear = nullptr,
 bool RayIntersectsTriangle(const Ray& ray, const Vec3& a, const Vec3& b, const Vec3& c,
                            float* t = nullptr, float* u = nullptr, float* v = nullptr);
 
+// 射线与平面相交（任务 2.4，Gizmo 旋转环拾取用）。
+// 平面由“过 planePoint、法线 planeNormal”定义（planeNormal 不必单位化）。
+// 返回是否相交（分母非零且 t >= 0）；命中时输出交点 hitPoint 与参数 t（可为 nullptr）。
+bool RayIntersectsPlane(const Ray& ray, const Vec3& planePoint, const Vec3& planeNormal,
+                        Vec3* hitPoint = nullptr, float* t = nullptr);
+
+// 射线与无限直线（过 linePoint、方向 lineDir）的最近点（任务 2.4，Gizmo 轴拾取用）。
+// 返回直线上的参数 s（最近点 = linePoint + s * lineDir）；两线平行时返回 0。
+// distance 非空时输出两线最近距离。
+float RayLineClosestParam(const Ray& ray, const Vec3& linePoint, const Vec3& lineDir,
+                          float* distance = nullptr);
+
 #endif //__RAY_H__

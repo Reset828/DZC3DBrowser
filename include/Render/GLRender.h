@@ -2,6 +2,7 @@
 #define __GL_RENDER_H__
 
 #include <cstdint>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -299,6 +300,14 @@ public:
     // 设置当前绘制对象的选中高亮标志（任务 2.3）：普通 uniform uHighlight。
     void SetObjectHighlight(bool highlighted) override;
 
+    // ---------------- 任务 2.4：Transform Gizmo 叠加层 ----------------
+    // 提交本帧要绘制的 Gizmo 线段顶点（归一化场景空间；每顶点 7 float：pos.xyz + color.rgba）。
+    void SetGizmoGeometry(const float* interleavedPositionColor, uint32_t vertexCount) override;
+    // 屏幕归一化坐标（0..1，左上原点）-> 归一化场景空间射线。
+    bool GetSceneRay(float nx, float ny, Vec3& origin, Vec3& direction) const override;
+    // 某归一化场景空间点处每屏幕像素对应的世界长度。
+    float GetSceneWorldPerPixel(const Vec3& scenePoint) const override;
+
 protected:
     // 后端初始化完成后的钩子。
     bool OnInitialize() override;
@@ -316,6 +325,18 @@ protected:
     unsigned int GetSceneFramebuffer() const override;
     // 场景绘制完成后执行 HDR 后处理。
     void OnAfterSceneRender() override;
+
+    // ---------------- 任务 2.4：Gizmo 叠加层 ----------------
+    // 叠加层通道钩子：场景/后处理结束后，把 Gizmo 线段叠加到默认帧缓冲（无深度测试）。
+    void OnOverlayPass() override;
+    // 创建 Gizmo 线段程序（复用相机 UBO + 顶点色）。
+    bool CreateGizmoProgram();
+    // 销毁 Gizmo 程序与 VAO/VBO。
+    void DestroyGizmoSupport();
+    // 确保 Gizmo VAO/VBO 可容纳 vertexCount 个顶点。
+    bool EnsureGizmoVertexBuffer(uint32_t vertexCount);
+    // 绘制 Gizmo 叠加层。
+    void DrawGizmoOverlay();
 
     // 创建渲染通道。
     bool CreateRenderPass() override;
@@ -524,6 +545,20 @@ protected:
     unsigned int m_msaaResolveColorTexture = 0;  // 单采样颜色纹理（RGBA16F，线性）
     unsigned int m_msaaResolveDepthTexture = 0;  // 单采样深度纹理（世界坐标回读用）
     unsigned int m_postInputTexture = 0;     // 后处理输入纹理（HDR 或 MSAA 解析结果）
+
+    // ---------------- 任务 2.4：Gizmo 叠加层 ----------------
+    unsigned int m_gizmoProgram = 0;         // Gizmo 线段程序
+    unsigned int m_gizmoVao = 0;             // Gizmo VAO
+    unsigned int m_gizmoVbo = 0;             // Gizmo 顶点缓冲（动态）
+    std::size_t m_gizmoVboCapacity = 0;      // 顶点缓冲容量（字节）
+    // 本帧待绘制的 Gizmo 顶点（每顶点 7 float：pos.xyz + color.rgba）。
+    std::vector<float> m_gizmoVertices;
+    uint32_t m_gizmoVertexCount = 0;
+    // 最近一帧相机矩阵副本（Gizmo 射线拾取 + 固定屏幕尺寸换算）。
+    glm::mat4 m_lastInvViewProj = glm::mat4(1.0f);      // inverse(proj * view)
+    glm::mat4 m_lastSceneFromRender = glm::mat4(1.0f);  // inverse(ubo.model)
+    glm::mat4 m_lastModelView = glm::mat4(1.0f);        // view * model
+    glm::mat4 m_lastProj = glm::mat4(1.0f);             // proj
 };
 
 #endif //__GL_RENDER_H__

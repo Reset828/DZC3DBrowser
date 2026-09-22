@@ -5,6 +5,7 @@
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
+#include <cmath>
 #include <QRunnable>
 #include <QThreadPool>
 #include <QCoreApplication>
@@ -143,6 +144,8 @@ void GLRender::EndFrame() {
     OnEndFrame();
     // 1.6：场景已画进 HDR 中间目标时，做后处理并输出到默认帧缓冲。
     OnAfterSceneRender();
+    // 任务 2.4：场景/后处理结束后把 Gizmo 叠加到默认帧缓冲。
+    OnOverlayPass();
     // 推进纹理延迟销毁队列（每帧一次）。
     ProcessDeferredTextureDestruction();
     m_context->swapBuffers(m_window);
@@ -628,6 +631,10 @@ bool GLRender3D::OnInitialize() {
     if (!CreatePostProgram()) {
         std::cerr << "OpenGL: 后处理程序创建失败，HDR 将不可用" << std::endl;
     }
+    // 任务 2.4：Gizmo 叠加程序为可选功能，失败仅记录（无 Gizmo 仍可正常渲染）。
+    if (!CreateGizmoProgram()) {
+        std::cerr << "OpenGL: Gizmo 程序创建失败，Gizmo 将不可用" << std::endl;
+    }
     if (m_functions) {
         m_functions->glEnable(GL_DEPTH_TEST);
         m_functions->glDepthFunc(GL_LESS);
@@ -641,6 +648,7 @@ bool GLRender3D::OnInitialize() {
 
 // 关闭前释放后端资源的钩子。
 void GLRender3D::OnShutdown() {
+    DestroyGizmoSupport();
     DestroyPostProgram();
     DestroyHdrResources();
     DestroyMsaaResources();
@@ -918,6 +926,11 @@ void GLRender3D::UpdateUniformBuffer() {
 
     m_invViewProj = glm::inverse(proj * view);
     m_renderToSource = m_normalizedToWorld * glm::inverse(model);
+    // 任务 2.4：缓存本帧矩阵供 Gizmo 射线拾取与固定屏幕尺寸换算使用。
+    m_lastInvViewProj = m_invViewProj;
+    m_lastSceneFromRender = glm::inverse(model);
+    m_lastModelView = view * model;
+    m_lastProj = proj;
 
     UniformBufferObject3D ubo{};
     memcpy(ubo.model, glm::value_ptr(model), sizeof(float) * 16);
@@ -2119,4 +2132,195 @@ float GLRender3D::GetLastWorldZ() const { return m_lastWorldCoord[2]; }
 // （随 uHighlight 一起上传）。
 void GLRender3D::SetObjectHighlight(bool highlighted) {
     m_currentHighlight = highlighted;
+}
+
+// ---------------- 任务 2.4：Transform Gizmo 叠加层 ----------------
+
+// 提交本帧要绘制的 Gizmo 线段顶点（归一化场景空间；每顶点 7 float：pos.xyz + color.rgba）。
+void GLRender3D::SetGizmoGeometry(const float* interleavedPositionColor, uint32_t vertexCount) {
+    if (!interleavedPositionColor || vertexCount == 0) {
+        m_gizmoVertices.clear();
+        m_gizmoVertexCount = 0;
+        return;
+    }
+    const size_t floatCount = static_cast<size_t>(vertexCount) * 7;
+    m_gizmoVertices.assign(interleavedPositionColor, interleavedPositionColor + floatCount);
+    m_gizmoVertexCount = vertexCount;
+}
+
+// 屏幕归一化坐标（0..1，左上原点）-> 归一化场景空间射线。
+bool GLRender3D::GetSceneRay(float nx, float ny, Vec3& origin, Vec3& direction) const {
+    // OpenGL 窗口 Y 向上；像素 Y 已按 (1-ny) 处理，NDC 用标准 [-1,1]（深度 NO）。
+    const float xNdc = nx * 2.0f - 1.0f;
+    const float yNdc = 1.0f - ny * 2.0f;
+
+    glm::vec4 nearRender = m_lastInvViewProj * glm::vec4(xNdc, yNdc, -1.0f, 1.0f);
+    glm::vec4 farRender = m_lastInvViewProj * glm::vec4(xNdc, yNdc, 1.0f, 1.0f);
+    if (std::fabs(nearRender.w) < 1.0e-8f || std::fabs(farRender.w) < 1.0e-8f) return false;
+    nearRender /= nearRender.w;
+    farRender /= farRender.w;
+
+    glm::vec4 nearScene = m_lastSceneFromRender * nearRender;
+    glm::vec4 farScene = m_lastSceneFromRender * farRender;
+    if (std::fabs(nearScene.w) < 1.0e-8f || std::fabs(farScene.w) < 1.0e-8f) return false;
+    nearScene /= nearScene.w;
+    farScene /= farScene.w;
+
+    const glm::vec3 dir = glm::vec3(farScene - nearScene);
+    if (glm::length(dir) < 1.0e-8f) return false;
+    origin = Vec3{ nearScene.x, nearScene.y, nearScene.z };
+    const glm::vec3 unit = glm::normalize(dir);
+    direction = Vec3{ unit.x, unit.y, unit.z };
+    return true;
+}
+
+// 某归一化场景空间点处“每屏幕像素对应的世界长度”（固定屏幕尺寸 Gizmo 用）。
+float GLRender3D::GetSceneWorldPerPixel(const Vec3& scenePoint) const {
+    if (m_framebufferHeight == 0) return 0.0f;
+    const float height = static_cast<float>(m_framebufferHeight);
+    const float projYY = std::fabs(m_lastProj[1][1]);
+    if (projYY <= 1.0e-8f) return 0.0f;
+
+    float depth = 1.0f;
+    if (!m_orthographicEnabled) {
+        const glm::vec4 viewPos = m_lastModelView *
+            glm::vec4(scenePoint.x, scenePoint.y, scenePoint.z, 1.0f);
+        depth = std::fabs(viewPos.z);
+        if (depth < 1.0e-4f) depth = 1.0e-4f;
+    }
+    return (2.0f * depth) / (projYY * height);
+}
+
+// 叠加层通道钩子：仅在存在 Gizmo 顶点时绘制。
+void GLRender3D::OnOverlayPass() {
+    if (m_gizmoVertexCount == 0 || m_gizmoVertices.empty()) return;
+    DrawGizmoOverlay();
+    m_gizmoVertices.clear();
+    m_gizmoVertexCount = 0;
+}
+
+// 创建 Gizmo 线段程序（复用相机 UBO + 顶点色）。
+bool GLRender3D::CreateGizmoProgram() {
+    if (!m_functions) return false;
+    if (m_gizmoProgram != 0) return true;
+    try {
+        const std::string vertPath = AssetPath::ShaderFile("gizmo.vert");
+        const std::string fragPath = AssetPath::ShaderFile("gizmo.frag");
+        const std::vector<char> vertCode = ReadShaderFile(vertPath);
+        const std::vector<char> fragCode = ReadShaderFile(fragPath);
+        std::string vertSource(vertCode.begin(), vertCode.end());
+        std::string fragSource(fragCode.begin(), fragCode.end());
+        unsigned int vert = CompileShader(GL_VERTEX_SHADER, vertSource.c_str());
+        unsigned int frag = CompileShader(GL_FRAGMENT_SHADER, fragSource.c_str());
+        if (vert == 0 || frag == 0) {
+            if (vert) m_functions->glDeleteShader(vert);
+            if (frag) m_functions->glDeleteShader(frag);
+            SetLastError("OpenGL Gizmo 着色器编译失败: " + vertPath + " 或 " + fragPath);
+            return false;
+        }
+        m_gizmoProgram = LinkProgram(vert, frag);
+        m_functions->glDeleteShader(vert);
+        m_functions->glDeleteShader(frag);
+        if (m_gizmoProgram == 0) {
+            SetLastError("OpenGL Gizmo 程序链接失败: " + vertPath + " / " + fragPath);
+            return false;
+        }
+
+        // Gizmo 着色器用 ubo 的 model/view/proj（与 3d.frag 同一 UBO 块 binding 0）。
+        unsigned int blockIndex = m_functions->glGetUniformBlockIndex(m_gizmoProgram, "UniformBufferObject");
+        if (blockIndex != GL_INVALID_INDEX) {
+            m_functions->glUniformBlockBinding(m_gizmoProgram, blockIndex, 0);
+        }
+
+        // 顶点属性：pos vec3（0）+ color vec4（1），步长 28 字节。
+        m_functions->glGenVertexArrays(1, &m_gizmoVao);
+        m_functions->glGenBuffers(1, &m_gizmoVbo);
+        m_functions->glBindVertexArray(m_gizmoVao);
+        m_functions->glBindBuffer(GL_ARRAY_BUFFER, m_gizmoVbo);
+        m_functions->glEnableVertexAttribArray(0);
+        m_functions->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(float) * 7, reinterpret_cast<const void*>(0));
+        m_functions->glEnableVertexAttribArray(1);
+        m_functions->glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE,
+            sizeof(float) * 7, reinterpret_cast<const void*>(sizeof(float) * 3));
+        m_functions->glBindVertexArray(0);
+        m_functions->glBindBuffer(GL_ARRAY_BUFFER, 0);
+        return true;
+    } catch (const std::exception& e) {
+        SetLastError(e.what());
+        std::cerr << "OpenGL 读取 Gizmo 着色器失败: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+// 销毁 Gizmo 程序与 VAO/VBO。
+void GLRender3D::DestroyGizmoSupport() {
+    if (m_functions) {
+        if (m_gizmoVbo != 0) {
+            m_functions->glDeleteBuffers(1, &m_gizmoVbo);
+        }
+        if (m_gizmoVao != 0) {
+            m_functions->glDeleteVertexArrays(1, &m_gizmoVao);
+        }
+        if (m_gizmoProgram != 0) {
+            m_functions->glDeleteProgram(m_gizmoProgram);
+        }
+    }
+    m_gizmoVbo = 0;
+    m_gizmoVao = 0;
+    m_gizmoProgram = 0;
+    m_gizmoVboCapacity = 0;
+    m_gizmoVertices.clear();
+    m_gizmoVertexCount = 0;
+}
+
+// 确保 Gizmo VAO/VBO 可容纳 vertexCount 个顶点。
+bool GLRender3D::EnsureGizmoVertexBuffer(uint32_t vertexCount) {
+    if (!m_functions || m_gizmoVbo == 0) return false;
+    const std::size_t required = static_cast<std::size_t>(vertexCount) * sizeof(float) * 7;
+    if (m_gizmoVboCapacity >= required) return true;
+
+    // 预留余量，减少每帧重分配。
+    const std::size_t capacity = required + sizeof(float) * 7 * 1024;
+    m_functions->glBindBuffer(GL_ARRAY_BUFFER, m_gizmoVbo);
+    m_functions->glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(capacity),
+                              nullptr, GL_DYNAMIC_DRAW);
+    m_functions->glBindBuffer(GL_ARRAY_BUFFER, 0);
+    m_gizmoVboCapacity = capacity;
+    return true;
+}
+
+// 绘制 Gizmo 叠加层（无深度测试，直接输出顶点色）。
+void GLRender3D::DrawGizmoOverlay() {
+    if (!m_functions || m_gizmoProgram == 0 || m_gizmoVertexCount == 0) return;
+    if (!EnsureGizmoVertexBuffer(m_gizmoVertexCount)) return;
+
+    const size_t floatCount = static_cast<size_t>(m_gizmoVertexCount) * 7;
+
+    // 叠加到默认帧缓冲：若场景画在 HDR / MSAA 目标，后处理已把结果输出到默认帧缓冲。
+    m_functions->glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    m_functions->glViewport(0, 0,
+        static_cast<int>(m_framebufferWidth),
+        static_cast<int>(m_framebufferHeight));
+    m_functions->glDisable(GL_DEPTH_TEST);
+    m_functions->glDisable(GL_BLEND);
+    m_functions->glDisable(GL_CULL_FACE);
+
+    m_functions->glUseProgram(m_gizmoProgram);
+    m_currentProgram = m_gizmoProgram;
+    // Gizmo 着色器直接读取 UBO 的 model/view/proj（与场景同一块）。
+    m_functions->glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_ubo);
+
+    m_functions->glBindVertexArray(m_gizmoVao);
+    m_functions->glBindBuffer(GL_ARRAY_BUFFER, m_gizmoVbo);
+    m_functions->glBufferSubData(GL_ARRAY_BUFFER, 0,
+        static_cast<GLsizeiptr>(floatCount * sizeof(float)), m_gizmoVertices.data());
+    m_functions->glDrawArrays(GL_LINES, 0, static_cast<int>(m_gizmoVertexCount));
+
+    m_functions->glBindVertexArray(0);
+    m_functions->glBindBuffer(GL_ARRAY_BUFFER, 0);
+    m_functions->glUseProgram(m_program);
+    m_currentProgram = m_program;
+    m_functions->glEnable(GL_DEPTH_TEST);
+    m_functions->glDepthFunc(GL_LESS);
 }

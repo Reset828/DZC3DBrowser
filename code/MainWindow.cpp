@@ -44,6 +44,7 @@
 #include <QBrush>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QFormLayout>
 #include <QComboBox>
 #include <QLineEdit>
@@ -59,6 +60,11 @@
 #include <QSignalBlocker>
 #include <QSettings>
 #include <QFile>
+#include <QShortcut>
+#include <QKeySequence>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QCoreApplication>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -129,7 +135,23 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_backendEngineCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onBackendEngineChanged);
 
+    // 任务 2.4：Gizmo 模式快捷键（W 平移 / E 旋转 / R 缩放）与撤销重做（Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z）。
+    QShortcut* shortcutTranslate = new QShortcut(QKeySequence(Qt::Key_W), this);
+    connect(shortcutTranslate, &QShortcut::activated, this, &MainWindow::onGizmoTranslate);
+    QShortcut* shortcutRotate = new QShortcut(QKeySequence(Qt::Key_E), this);
+    connect(shortcutRotate, &QShortcut::activated, this, &MainWindow::onGizmoRotate);
+    QShortcut* shortcutScale = new QShortcut(QKeySequence(Qt::Key_R), this);
+    connect(shortcutScale, &QShortcut::activated, this, &MainWindow::onGizmoScale);
+    QShortcut* shortcutUndo = new QShortcut(QKeySequence::Undo, this);
+    connect(shortcutUndo, &QShortcut::activated, this, &MainWindow::onUndoTransform);
+    QShortcut* shortcutRedo = new QShortcut(QKeySequence::Redo, this);
+    connect(shortcutRedo, &QShortcut::activated, this, &MainWindow::onRedoTransform);
+    QShortcut* shortcutRedoAlt = new QShortcut(
+        QKeySequence(Qt::CTRL + Qt::SHIFT + Qt::Key_Z), this);
+    connect(shortcutRedoAlt, &QShortcut::activated, this, &MainWindow::onRedoTransform);
+
     SetupStatusBar();
+    SyncGizmoUi();
 
     setStyleSheet(QStringLiteral(R"(
         QMainWindow { background-color: #1e1e1e; }
@@ -209,6 +231,11 @@ void MainWindow::SetupToolBar() {
     fileMenu->addMenu(m_recentMenu);
     LoadRecentFiles();
     RebuildRecentMenu();
+
+    // 帮助菜单：关于 + 快捷键。
+    QMenu* helpMenu = mb->addMenu(QStringLiteral("帮助"));
+    helpMenu->addAction(QStringLiteral("关于"), this, &MainWindow::onAbout);
+    helpMenu->addAction(QStringLiteral("快捷键"), this, &MainWindow::onShortcuts);
 
     QToolBar* toolbar = addToolBar(QStringLiteral("工具"));
     toolbar->setMovable(false);
@@ -751,6 +778,68 @@ void MainWindow::SetupVulkan() {
     connect(transformResetButton, &QPushButton::clicked, this,
             &MainWindow::ResetSelectedNodeTransform);
 
+    // 任务 2.4：Gizmo 模式选择器（平移 / 旋转 / 缩放）+ 坐标空间（默认局部）+ 吸附步长。
+    QLabel* gizmoModeLabel = new QLabel(QStringLiteral("Gizmo 模式"));
+    gizmoModeLabel->setStyleSheet(QStringLiteral("color: #d4d4d4; border: none;"));
+    transformLayout->addWidget(gizmoModeLabel);
+    m_gizmoModeCombo = new QComboBox();
+    m_gizmoModeCombo->addItems(QStringList()
+        << QStringLiteral("平移")
+        << QStringLiteral("旋转")
+        << QStringLiteral("缩放"));
+    m_gizmoModeCombo->setCurrentIndex(0);
+    transformLayout->addWidget(m_gizmoModeCombo);
+    connect(m_gizmoModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+        switch (index) {
+        case 1: m_gizmoMode = GizmoMode::Rotate; break;
+        case 2: m_gizmoMode = GizmoMode::Scale; break;
+        default: m_gizmoMode = GizmoMode::Translate; break;
+        }
+        // 切换模式后取消悬停高亮，避免残留错误状态。
+        m_gizmoHoverAxis = GizmoAxis::None;
+    });
+
+    m_gizmoWorldSpaceCheck = new QCheckBox(QStringLiteral("世界坐标模式"));
+    m_gizmoWorldSpaceCheck->setLayoutDirection(Qt::LeftToRight);
+    m_gizmoWorldSpaceCheck->setChecked(false);
+    m_gizmoWorldSpaceCheck->setStyleSheet(QStringLiteral("color: #d4d4d4; border: none;"));
+    transformLayout->addWidget(m_gizmoWorldSpaceCheck);
+    connect(m_gizmoWorldSpaceCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        m_gizmoWorldSpace = checked;
+        // 切换空间后取消悬停高亮，避免残留错误状态。
+        m_gizmoHoverAxis = GizmoAxis::None;
+    });
+
+    m_gizmoSnapCheck = new QCheckBox(QStringLiteral("吸附"));
+    m_gizmoSnapCheck->setLayoutDirection(Qt::LeftToRight);
+    m_gizmoSnapCheck->setChecked(false);
+    m_gizmoSnapCheck->setStyleSheet(QStringLiteral("color: #d4d4d4; border: none;"));
+    transformLayout->addWidget(m_gizmoSnapCheck);
+    connect(m_gizmoSnapCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        m_gizmoSnapEnabled = checked;
+    });
+
+    auto makeSnapRow = [&](const QString& title, QDoubleSpinBox*& spin,
+                           double minValue, double maxValue, double step, int decimals,
+                           double initial) {
+        QLabel* rowLabel = new QLabel(title);
+        rowLabel->setStyleSheet(QStringLiteral("color: #d4d4d4; border: none;"));
+        transformLayout->addWidget(rowLabel);
+        spin = new QDoubleSpinBox();
+        spin->setRange(minValue, maxValue);
+        spin->setSingleStep(step);
+        spin->setDecimals(decimals);
+        spin->setValue(initial);
+        transformLayout->addWidget(spin);
+    };
+    makeSnapRow(QStringLiteral("吸附步长：平移"), m_gizmoSnapTranslate,
+                0.001, 1.0e6, 0.5, 3, 1.0);
+    makeSnapRow(QStringLiteral("吸附步长：旋转(度)"), m_gizmoSnapRotate,
+                0.1, 360.0, 1.0, 2, 15.0);
+    makeSnapRow(QStringLiteral("吸附步长：缩放"), m_gizmoSnapScale,
+                0.001, 100.0, 0.05, 3, 0.1);
+
     auto onTransformSpinChanged = [this](double) { ApplyTransformPanelToSelection(); };
     for (QDoubleSpinBox* spin : { m_spinTransX, m_spinTransY, m_spinTransZ,
                                   m_spinRotX, m_spinRotY, m_spinRotZ,
@@ -984,6 +1073,10 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
         if (me->button() == Qt::LeftButton) btn = 0;
         else if (me->button() == Qt::RightButton) btn = 1;
         else if (me->button() == Qt::MiddleButton) btn = 2;
+        // 任务 2.4：左键优先尝试抓取 Gizmo 轴；命中则消费事件，不再转给相机。
+        if (btn == 0 && TryBeginGizmoDrag(nx, ny)) {
+            break;
+        }
         dispatchDown(nx, ny, btn);
         break;
     }
@@ -993,6 +1086,11 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
         if (me->button() == Qt::LeftButton) btn = 0;
         else if (me->button() == Qt::RightButton) btn = 1;
         else if (me->button() == Qt::MiddleButton) btn = 2;
+        // 任务 2.4：结束 Gizmo 拖拽（若有）。
+        if (btn == 0 && IsGizmoDragging()) {
+            EndGizmoDrag();
+            break;
+        }
         dispatchUp(btn);
         break;
     }
@@ -1000,6 +1098,12 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
         auto* me = static_cast<QMouseEvent*>(event);
         float nx = (float)me->x() / (float)window->width();
         float ny = (float)me->y() / (float)window->height();
+        // 任务 2.4：Gizmo 拖拽中则只更新 Gizmo，不转给相机。
+        if (TryUpdateGizmoDrag(nx, ny)) {
+            break;
+        }
+        // 非拖拽时更新 Gizmo 悬停高亮（不影响相机 / 回读）。
+        UpdateGizmoHover(nx, ny);
         dispatchMove(nx, ny);
         break;
     }
@@ -1042,6 +1146,10 @@ void MainWindow::StartRenderLoop() {
             m_scene->UpdateWorldTransforms(nullptr, false);
         }
 
+        // 任务 2.4：把当前 Gizmo 线段几何提交给活动渲染器（本帧叠加层绘制用）。
+        if (!paused) {
+            UpdateGizmoGeometry();
+        }
 
         if (openGL) {
             if (!paused) {
@@ -1601,6 +1709,13 @@ void MainWindow::RemoveLoadedModel(QTreeWidgetItem* treeItem) {
     }
     m_loadedModels.erase(it);
 
+    // 任务 2.4：模型索引已变化，撤销/重做记录里的 (model, node) 会失效，清空并复位 Gizmo 状态。
+    m_undoStack.clear();
+    m_redoStack.clear();
+    m_undoCoalescing = false;
+    EndGizmoDrag();
+    m_gizmoHoverAxis = GizmoAxis::None;
+
     if (m_loadedModels.empty()) {
         // 已无剩余模型：复位到默认取景与坐标显示。
         ResetSceneView();
@@ -1640,6 +1755,13 @@ void MainWindow::ClearLoadedModels() {
     m_loadedModels.clear();
     m_selectedModel = -1;
     m_selectedRuntimeNode = -1;
+
+    // 任务 2.4：清空场景后撤销/重做记录与 Gizmo 状态一并复位。
+    m_undoStack.clear();
+    m_redoStack.clear();
+    m_undoCoalescing = false;
+    EndGizmoDrag();
+    m_gizmoHoverAxis = GizmoAxis::None;
 
     ResetSceneView();
     UpdateShadowSceneBounds();
@@ -2321,6 +2443,10 @@ void MainWindow::OnProjectSelectionChanged() {
     SyncTransformPanelFromSelection();
     // 任务 2.3：项目树选中 -> 视口高亮同步。
     ApplySelectionHighlight();
+    // 任务 2.4：切换选择对象时清除 Gizmo 拖拽/悬停状态，避免残留错误状态。
+    EndGizmoDrag();
+    m_gizmoHoverAxis = GizmoAxis::None;
+    m_undoCoalescing = false;
     // 任务 2.3：在消息栏输出选中/取消提示（树选中无 SubMesh/三角形/坐标信息）。
     if (m_selectedModel >= 0 && m_selectedRuntimeNode >= 0) {
         ShowMessage(QStringLiteral("选中 [%1]")
@@ -2343,6 +2469,9 @@ void MainWindow::ClearSelectionByEmptyClick() {
     m_selectedRuntimeNode = -1;
     ApplySelectionHighlight();
     SyncTransformPanelFromSelection();
+    // 任务 2.4：取消选择时清除 Gizmo 拖拽/悬停状态。
+    EndGizmoDrag();
+    m_gizmoHoverAxis = GizmoAxis::None;
     if (hadSelection) {
         ShowMessage(QStringLiteral("已取消选择"), false);
     }
@@ -2395,6 +2524,13 @@ void MainWindow::ApplyTransformPanelToSelection() {
         m_selectedRuntimeNode >= static_cast<int>(model.nodes.size())) return;
 
     RuntimeNode& node = model.nodes[static_cast<size_t>(m_selectedRuntimeNode)];
+    // 任务 2.4：数值编辑也纳入撤销（连续编辑同一节点合并为一条记录）。
+    TransformSnapshot snapshot;
+    snapshot.model = m_selectedModel;
+    snapshot.node = m_selectedRuntimeNode;
+    snapshot.local = node.local;
+    PushUndoSnapshot(snapshot, true);
+
     node.local.translation = Vec3{
         static_cast<float>(m_spinTransX ? m_spinTransX->value() : 0.0),
         static_cast<float>(m_spinTransY ? m_spinTransY->value() : 0.0),
@@ -2420,6 +2556,12 @@ void MainWindow::ResetSelectedNodeTransform() {
     if (m_selectedRuntimeNode < 0 ||
         m_selectedRuntimeNode >= static_cast<int>(model.nodes.size())) return;
     RuntimeNode& node = model.nodes[static_cast<size_t>(m_selectedRuntimeNode)];
+    // 任务 2.4：重置也纳入撤销。
+    TransformSnapshot snapshot;
+    snapshot.model = m_selectedModel;
+    snapshot.node = m_selectedRuntimeNode;
+    snapshot.local = node.local;
+    PushUndoSnapshot(snapshot, false);
     node.local = node.defaultLocal;
     if (node.object) node.object->SetLocalTransform(node.local);
     SyncTransformPanelFromSelection();
@@ -2434,6 +2576,588 @@ void MainWindow::MarkSubtreeDeleted(LoadedModel& model, int runtimeNode) {
     for (int child : model.nodes[static_cast<size_t>(runtimeNode)].children) {
         MarkSubtreeDeleted(model, child);
     }
+}
+
+// ---------------- 任务 2.4：Transform Gizmo 与编辑闭环 ----------------
+
+// 把归一化场景空间向量换算到某运行时节点的父空间（Gizmo 轴 -> 局部平移用）。
+// 父空间 = 该节点 local.translation 所在的空间（父节点的“模型空间矩阵”）。
+Vec3 MainWindow::SceneVectorToParentSpace(const LoadedModel& model, int runtimeNode,
+                                          const Vec3& v) const {
+    const int parent = (runtimeNode >= 0 && runtimeNode < static_cast<int>(model.nodes.size()))
+        ? model.nodes[static_cast<size_t>(runtimeNode)].parent : -1;
+    const Mat4 parentModel = (parent >= 0)
+        ? ModelSpaceNodeMatrix(model, parent) : TransformIdentityMatrix();
+    const Mat4 parentNss = TransformMultiply(SceneNormalizationMatrix(), parentModel);
+    Mat4 inv{};
+    if (!TransformInvert(parentNss, inv)) return v;
+    return TransformVector(inv, v);
+}
+
+// 把归一化场景空间点换算到某运行时节点的父空间（Gizmo 枢轴 -> 局部平移用）。
+Vec3 MainWindow::ScenePointToParentSpace(const LoadedModel& model, int runtimeNode,
+                                         const Vec3& p) const {
+    const int parent = (runtimeNode >= 0 && runtimeNode < static_cast<int>(model.nodes.size()))
+        ? model.nodes[static_cast<size_t>(runtimeNode)].parent : -1;
+    const Mat4 parentModel = (parent >= 0)
+        ? ModelSpaceNodeMatrix(model, parent) : TransformIdentityMatrix();
+    const Mat4 parentNss = TransformMultiply(SceneNormalizationMatrix(), parentModel);
+    Mat4 inv{};
+    if (!TransformInvert(parentNss, inv)) return p;
+    return TransformPoint(inv, p);
+}
+
+// 某运行时节点（含整棵子树）在“归一化场景空间”的包围盒；无几何返回空盒。
+Aabb MainWindow::NodeSubtreeWorldBounds(const LoadedModel& model, int runtimeNode) const {
+    Aabb result = AabbEmpty();
+    if (runtimeNode < 0 || runtimeNode >= static_cast<int>(model.nodes.size())) return result;
+    const Mat4 norm = SceneNormalizationMatrix();
+    // 以该节点为根的子树（跳过已删除节点）。
+    std::vector<int> stack{ runtimeNode };
+    while (!stack.empty()) {
+        const int r = stack.back();
+        stack.pop_back();
+        if (r < 0 || r >= static_cast<int>(model.nodes.size())) continue;
+        if (r < static_cast<int>(model.nodeDeleted.size()) && model.nodeDeleted[r]) continue;
+        const Mat4 world = TransformMultiply(norm, ModelSpaceNodeMatrix(model, r));
+        for (const RuntimeMesh& mesh : model.nodes[static_cast<size_t>(r)].meshes) {
+            if (mesh.assetMeshIndex < 0 ||
+                mesh.assetMeshIndex >= static_cast<int>(model.asset.meshes.size())) {
+                continue;
+            }
+            const Aabb& box = model.asset.meshes[static_cast<size_t>(mesh.assetMeshIndex)].bounds;
+            result = AabbUnion(result, AabbTransform(box, world));
+        }
+        for (int child : model.nodes[static_cast<size_t>(r)].children) {
+            stack.push_back(child);
+        }
+    }
+    return result;
+}
+
+// 当前活动三维渲染器（Vulkan 或 OpenGL）。
+static Render* ActiveRender3D(Render* vulkan, Render* opengl, bool useOpenGL) {
+    return useOpenGL ? opengl : vulkan;
+}
+
+namespace {
+// Gizmo 枢轴补偿用的轻量向量工具（本文件内）。
+Vec3 GizmoVecSub(const Vec3& a, const Vec3& b) { return Vec3{ a.x - b.x, a.y - b.y, a.z - b.z }; }
+}  // namespace
+
+// 把 Gizmo 模式 / 坐标空间 / 吸附的选中态同步到 UI。
+void MainWindow::SyncGizmoUi() {
+    if (m_gizmoModeCombo) {
+        const QSignalBlocker blocker(m_gizmoModeCombo);
+        int index = 0;
+        if (m_gizmoMode == GizmoMode::Rotate) index = 1;
+        else if (m_gizmoMode == GizmoMode::Scale) index = 2;
+        m_gizmoModeCombo->setCurrentIndex(index);
+    }
+    if (m_gizmoWorldSpaceCheck) {
+        const QSignalBlocker blocker(m_gizmoWorldSpaceCheck);
+        m_gizmoWorldSpaceCheck->setChecked(m_gizmoWorldSpace);
+    }
+    if (m_gizmoSnapCheck) {
+        const QSignalBlocker blocker(m_gizmoSnapCheck);
+        m_gizmoSnapCheck->setChecked(m_gizmoSnapEnabled);
+    }
+}
+
+// 构建当前选中节点的 Gizmo 放置帧（归一化场景空间，固定屏幕尺寸）；无选中返回 false。
+bool MainWindow::BuildGizmoFrame(GizmoFrame& outFrame) const {
+    if (m_selectedModel < 0 || m_selectedModel >= static_cast<int>(m_loadedModels.size())) {
+        return false;
+    }
+    const LoadedModel& model = m_loadedModels[static_cast<size_t>(m_selectedModel)];
+    if (m_selectedRuntimeNode < 0 ||
+        m_selectedRuntimeNode >= static_cast<int>(model.nodes.size())) {
+        return false;
+    }
+    if (m_selectedRuntimeNode < static_cast<int>(model.nodeDeleted.size()) &&
+        model.nodeDeleted[static_cast<size_t>(m_selectedRuntimeNode)]) {
+        return false;
+    }
+
+    // 节点在归一化场景空间的世界矩阵（含场景归一化）。
+    const Mat4 world = TransformMultiply(
+        SceneNormalizationMatrix(),
+        ModelSpaceNodeMatrix(model, m_selectedRuntimeNode));
+
+    // 操作柄放在“选中节点子树”的包围盒中心（无几何时退回节点原点）。
+    // 局部/世界轴的方向不变（仍取自节点自身的朝向或世界轴）。
+    const Aabb subtreeBounds = NodeSubtreeWorldBounds(model, m_selectedRuntimeNode);
+    outFrame.origin = AabbIsEmpty(subtreeBounds)
+        ? Vec3{ world.m[3][0], world.m[3][1], world.m[3][2] }
+        : AabbCenter(subtreeBounds);
+
+    if (m_gizmoWorldSpace) {
+        outFrame.axisX = Vec3{ 1.0f, 0.0f, 0.0f };
+        outFrame.axisY = Vec3{ 0.0f, 1.0f, 0.0f };
+        outFrame.axisZ = Vec3{ 0.0f, 0.0f, 1.0f };
+    } else {
+        // 局部模式：取世界矩阵旋转部分的三列（归一化）。
+        auto column = [&world](int c) {
+            Vec3 v{ world.m[c][0], world.m[c][1], world.m[c][2] };
+            const float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            if (len > 1.0e-8f) { v.x /= len; v.y /= len; v.z /= len; }
+            return v;
+        };
+        outFrame.axisX = column(0);
+        outFrame.axisY = column(1);
+        outFrame.axisZ = column(2);
+    }
+
+    // 固定屏幕尺寸：轴长 = 屏幕像素 * 每像素世界长度。
+    Render* active = ActiveRender3D(m_renderer, m_openglRenderer, IsOpenGLBackend());
+    if (!active) return false;
+    const float worldPerPixel = active->GetSceneWorldPerPixel(outFrame.origin);
+    if (!(worldPerPixel > 0.0f) || !std::isfinite(worldPerPixel)) return false;
+    outFrame.worldPerPixel = worldPerPixel;
+    outFrame.axisLength = kGizmoPixelLength * worldPerPixel;
+    return true;
+}
+
+// 每帧把 Gizmo 线段几何提交给当前活动渲染器（无选中/无 Gizmo 时提交空）。
+void MainWindow::UpdateGizmoGeometry() {
+    Render* active = ActiveRender3D(m_renderer, m_openglRenderer, IsOpenGLBackend());
+    if (!active || !active->IsInitialized()) return;
+
+    GizmoFrame frame;
+    if (!BuildGizmoFrame(frame)) {
+        active->SetGizmoGeometry(nullptr, 0);
+        return;
+    }
+
+    // 拖拽中高亮拖拽轴，否则高亮悬停轴。
+    const GizmoAxis highlight = m_gizmoDragging ? m_gizmoDragAxis : m_gizmoHoverAxis;
+    std::vector<GizmoVertex> geometry;
+    BuildGizmoGeometry(frame, m_gizmoMode, highlight, geometry);
+    if (geometry.empty()) {
+        active->SetGizmoGeometry(nullptr, 0);
+        return;
+    }
+
+    // 打包为交错 float：pos.xyz + color.rgba（每顶点 7 float）。
+    std::vector<float> packed;
+    packed.reserve(geometry.size() * 7);
+    for (const GizmoVertex& v : geometry) {
+        packed.push_back(v.position[0]);
+        packed.push_back(v.position[1]);
+        packed.push_back(v.position[2]);
+        packed.push_back(v.color[0]);
+        packed.push_back(v.color[1]);
+        packed.push_back(v.color[2]);
+        packed.push_back(v.color[3]);
+    }
+    active->SetGizmoGeometry(packed.data(), static_cast<uint32_t>(geometry.size()));
+}
+
+// 视口鼠标按下：优先尝试抓取 Gizmo 轴；返回 true 表示事件已被 Gizmo 消费。
+bool MainWindow::TryBeginGizmoDrag(float nx, float ny) {
+    if (m_gizmoDragging) return false;
+    if (m_selectedModel < 0 || m_selectedRuntimeNode < 0) return false;
+
+    GizmoFrame frame;
+    if (!BuildGizmoFrame(frame)) return false;
+
+    Render* active = ActiveRender3D(m_renderer, m_openglRenderer, IsOpenGLBackend());
+    if (!active) return false;
+    Vec3 origin{}, direction{};
+    if (!active->GetSceneRay(nx, ny, origin, direction)) return false;
+    const Ray ray{ origin, direction };
+
+    const GizmoAxis axis = PickGizmoAxis(frame, m_gizmoMode, ray, kGizmoPickPixels);
+    if (axis == GizmoAxis::None) return false;
+
+    const LoadedModel& model = m_loadedModels[static_cast<size_t>(m_selectedModel)];
+    const RuntimeNode& node = model.nodes[static_cast<size_t>(m_selectedRuntimeNode)];
+
+    m_gizmoDragging = true;
+    m_gizmoDragAxis = axis;
+    m_gizmoDragFrame = frame;
+    // 枢轴 = 操作柄位置（子树包围盒中心），换算到节点父空间（旋转/缩放补偿用）。
+    m_gizmoDragPivotParent = ScenePointToParentSpace(model, m_selectedRuntimeNode, frame.origin);
+    m_gizmoDragStartTranslation = node.local.translation;
+    m_gizmoDragStartRotation = node.local.rotationDegrees;
+    m_gizmoDragStartScale = node.local.scale;
+    m_gizmoDragRecorded = false;
+
+    if (m_gizmoMode == GizmoMode::Rotate) {
+        float angle = 0.0f;
+        m_gizmoDragStartAngle = GizmoRotateAngle(frame, axis, ray, angle) ? angle : 0.0f;
+    } else {
+        m_gizmoDragStartParam = GizmoAxisParam(frame, axis, ray);
+    }
+    return true;
+}
+
+// 视口鼠标拖动：Gizmo 拖拽中则应用变换并返回 true。
+bool MainWindow::TryUpdateGizmoDrag(float nx, float ny) {
+    if (!m_gizmoDragging) return false;
+    if (m_selectedModel < 0 || m_selectedModel >= static_cast<int>(m_loadedModels.size())) {
+        return true;
+    }
+    LoadedModel& model = m_loadedModels[static_cast<size_t>(m_selectedModel)];
+    if (m_selectedRuntimeNode < 0 ||
+        m_selectedRuntimeNode >= static_cast<int>(model.nodes.size())) {
+        return true;
+    }
+    RuntimeNode& node = model.nodes[static_cast<size_t>(m_selectedRuntimeNode)];
+
+    Render* active = ActiveRender3D(m_renderer, m_openglRenderer, IsOpenGLBackend());
+    if (!active) return true;
+    Vec3 origin{}, direction{};
+    if (!active->GetSceneRay(nx, ny, origin, direction)) return true;
+    const Ray ray{ origin, direction };
+
+    const GizmoAxis axis = m_gizmoDragAxis;
+    const float axisLength = m_gizmoDragFrame.axisLength > 1.0e-6f
+        ? m_gizmoDragFrame.axisLength : 1.0f;
+    const int axisIndex = (axis == GizmoAxis::X) ? 0 : (axis == GizmoAxis::Y ? 1 : 2);
+
+    if (m_gizmoMode == GizmoMode::Translate) {
+        const float param = GizmoAxisParam(m_gizmoDragFrame, axis, ray);
+        float delta = param - m_gizmoDragStartParam;
+        if (m_gizmoSnapEnabled && m_gizmoSnapTranslate) {
+            const float step = static_cast<float>(m_gizmoSnapTranslate->value());
+            if (step > 1.0e-6f) delta = std::round(delta / step) * step;
+        }
+        const Vec3 axisDir = GizmoAxisDirection(m_gizmoDragFrame, axis);
+        const Vec3 deltaScene{ axisDir.x * delta, axisDir.y * delta, axisDir.z * delta };
+        const Vec3 deltaParent = SceneVectorToParentSpace(model, m_selectedRuntimeNode, deltaScene);
+        node.local.translation = Vec3{
+            m_gizmoDragStartTranslation.x + deltaParent.x,
+            m_gizmoDragStartTranslation.y + deltaParent.y,
+            m_gizmoDragStartTranslation.z + deltaParent.z };
+    } else if (m_gizmoMode == GizmoMode::Rotate) {
+        float angle = 0.0f;
+        if (!GizmoRotateAngle(m_gizmoDragFrame, axis, ray, angle)) return true;
+        float delta = angle - m_gizmoDragStartAngle;
+        while (delta > 180.0f) delta -= 360.0f;
+        while (delta < -180.0f) delta += 360.0f;
+        if (m_gizmoSnapEnabled && m_gizmoSnapRotate) {
+            const float step = static_cast<float>(m_gizmoSnapRotate->value());
+            if (step > 1.0e-6f) delta = std::round(delta / step) * step;
+        }
+        // 由起始局部旋转按“父世界旋转”组合得到新局部旋转（纯旋转，避免剪切）。
+        const int parent = node.parent;
+        const Mat4 parentModel = (parent >= 0)
+            ? ModelSpaceNodeMatrix(model, parent) : TransformIdentityMatrix();
+        const Transform parentRot = TransformFromMatrix(parentModel);
+        const Mat4 parentR = TransformMatrixFromTrs(
+            Vec3{ 0.0f, 0.0f, 0.0f }, parentRot.rotationDegrees, Vec3{ 1.0f, 1.0f, 1.0f });
+        const Mat4 localR = TransformMatrixFromTrs(
+            Vec3{ 0.0f, 0.0f, 0.0f }, m_gizmoDragStartRotation, Vec3{ 1.0f, 1.0f, 1.0f });
+
+        Mat4 localRNew;
+        if (m_gizmoWorldSpace) {
+            const Vec3 axisDir = GizmoAxisDirection(m_gizmoDragFrame, axis);
+            const Mat4 ra = TransformRotationAxisAngle(axisDir, delta);
+            Mat4 parentRInv{};
+            TransformInvert(parentR, parentRInv);
+            localRNew = TransformMultiply(
+                TransformMultiply(parentRInv, ra), TransformMultiply(parentR, localR));
+        } else {
+            // 局部模式：绕物体自身轴，右乘单位轴旋转。
+            const Vec3 localAxis = (axis == GizmoAxis::X) ? Vec3{ 1.0f, 0.0f, 0.0f }
+                : (axis == GizmoAxis::Y ? Vec3{ 0.0f, 1.0f, 0.0f } : Vec3{ 0.0f, 0.0f, 1.0f });
+            const Mat4 ra = TransformRotationAxisAngle(localAxis, delta);
+            localRNew = TransformMultiply(localR, ra);
+        }
+        const Transform decomposed = TransformFromMatrix(localRNew);
+
+        // 绕枢轴（子树包围盒中心）旋转：补偿平移，使枢轴保持不动。
+        Transform startLocal;
+        startLocal.translation = m_gizmoDragStartTranslation;
+        startLocal.rotationDegrees = m_gizmoDragStartRotation;
+        startLocal.scale = m_gizmoDragStartScale;
+        Mat4 startInv{};
+        TransformInvert(startLocal.ToMatrix(), startInv);
+        const Vec3 pivotLocal = TransformPoint(startInv, m_gizmoDragPivotParent);
+        const Mat4 rotScaleNew = TransformMatrixFromTrs(
+            Vec3{ 0.0f, 0.0f, 0.0f }, decomposed.rotationDegrees, m_gizmoDragStartScale);
+        const Vec3 pivotRotated = TransformVector(rotScaleNew, pivotLocal);
+        node.local.rotationDegrees = decomposed.rotationDegrees;
+        node.local.translation = GizmoVecSub(m_gizmoDragPivotParent, pivotRotated);
+    } else {
+        // 缩放：世界模式=等比（避免非轴对齐剪切），局部模式=单轴非等比。
+        const float param = GizmoAxisParam(m_gizmoDragFrame, axis, ray);
+        float ratio = 1.0f + (param - m_gizmoDragStartParam) / axisLength;
+        if (!std::isfinite(ratio) || ratio < 1.0e-4f) ratio = 1.0e-4f;
+        Vec3 scale = m_gizmoDragStartScale;
+        if (m_gizmoWorldSpace) {
+            if (m_gizmoSnapEnabled && m_gizmoSnapScale) {
+                const float step = static_cast<float>(m_gizmoSnapScale->value());
+                if (step > 1.0e-6f) {
+                    const float base = std::max(std::fabs(m_gizmoDragStartScale.x), 1.0e-4f);
+                    const float target = base * ratio;
+                    ratio = (std::round(target / step) * step) / base;
+                }
+            }
+            scale = Vec3{ m_gizmoDragStartScale.x * ratio,
+                          m_gizmoDragStartScale.y * ratio,
+                          m_gizmoDragStartScale.z * ratio };
+        } else {
+            // 局部模式：只改该轴分量（非等比缩放）。
+            float sx = m_gizmoDragStartScale.x;
+            float sy = m_gizmoDragStartScale.y;
+            float sz = m_gizmoDragStartScale.z;
+            float component = (axisIndex == 0 ? sx : (axisIndex == 1 ? sy : sz)) * ratio;
+            if (m_gizmoSnapEnabled && m_gizmoSnapScale) {
+                const float step = static_cast<float>(m_gizmoSnapScale->value());
+                if (step > 1.0e-6f) component = std::round(component / step) * step;
+            }
+            if (std::fabs(component) < 1.0e-4f) component = 1.0e-4f;
+            if (axisIndex == 0) sx = component;
+            else if (axisIndex == 1) sy = component;
+            else sz = component;
+            scale = Vec3{ sx, sy, sz };
+        }
+        // 绕枢轴（子树包围盒中心）缩放：补偿平移，使枢轴保持不动。
+        Transform startLocal;
+        startLocal.translation = m_gizmoDragStartTranslation;
+        startLocal.rotationDegrees = m_gizmoDragStartRotation;
+        startLocal.scale = m_gizmoDragStartScale;
+        Mat4 startInv{};
+        TransformInvert(startLocal.ToMatrix(), startInv);
+        const Vec3 pivotLocal = TransformPoint(startInv, m_gizmoDragPivotParent);
+        const Mat4 rotScaleNew = TransformMatrixFromTrs(
+            Vec3{ 0.0f, 0.0f, 0.0f }, m_gizmoDragStartRotation, scale);
+        const Vec3 pivotScaled = TransformVector(rotScaleNew, pivotLocal);
+        node.local.scale = scale;
+        node.local.translation = GizmoVecSub(m_gizmoDragPivotParent, pivotScaled);
+    }
+
+    // 首次实际改动时记录一条撤销（整段拖拽合并为一条）。
+    if (!m_gizmoDragRecorded) {
+        TransformSnapshot snapshot;
+        snapshot.model = m_selectedModel;
+        snapshot.node = m_selectedRuntimeNode;
+        snapshot.local.translation = m_gizmoDragStartTranslation;
+        snapshot.local.rotationDegrees = m_gizmoDragStartRotation;
+        snapshot.local.scale = m_gizmoDragStartScale;
+        PushUndoSnapshot(snapshot, false);
+        m_gizmoDragRecorded = true;
+    }
+
+    if (node.object) node.object->SetLocalTransform(node.local);
+    SyncTransformPanelFromSelection();
+    RefreshAfterTransformChange();
+    return true;
+}
+
+// 视口鼠标移动（非拖拽）：更新 Gizmo 悬停轴（用于高亮）。
+void MainWindow::UpdateGizmoHover(float nx, float ny) {
+    m_gizmoHoverAxis = GizmoAxis::None;
+    if (m_selectedModel < 0 || m_selectedRuntimeNode < 0) return;
+    GizmoFrame frame;
+    if (!BuildGizmoFrame(frame)) return;
+    Render* active = ActiveRender3D(m_renderer, m_openglRenderer, IsOpenGLBackend());
+    if (!active) return;
+    Vec3 origin{}, direction{};
+    if (!active->GetSceneRay(nx, ny, origin, direction)) return;
+    const Ray ray{ origin, direction };
+    m_gizmoHoverAxis = PickGizmoAxis(frame, m_gizmoMode, ray, kGizmoPickPixels);
+}
+
+// 视口鼠标松开：结束 Gizmo 拖拽（若有）。
+void MainWindow::EndGizmoDrag() {
+    if (!m_gizmoDragging) return;
+    m_gizmoDragging = false;
+    m_gizmoDragAxis = GizmoAxis::None;
+    m_gizmoDragRecorded = false;
+}
+
+// 记录一条撤销记录（清空重做栈）；coalesce 为 true 时连续编辑合并为一条。
+void MainWindow::PushUndoSnapshot(const TransformSnapshot& snapshot, bool coalesce) {
+    if (snapshot.model < 0 || snapshot.node < 0) return;
+    // 仅当上一笔记录与本次针对同一节点时，才把连续编辑合并为一条。
+    const bool sameNodeAsTop = !m_undoStack.empty() &&
+        m_undoStack.back().model == snapshot.model &&
+        m_undoStack.back().node == snapshot.node;
+    if (coalesce && m_undoCoalescing && sameNodeAsTop) {
+        // 连续编辑同一节点：保留最早的一条快照，不重复入栈。
+        m_redoStack.clear();
+        return;
+    }
+    m_undoStack.push_back(snapshot);
+    if (m_undoStack.size() > kMaxUndoSteps) {
+        m_undoStack.erase(m_undoStack.begin());
+    }
+    m_undoCoalescing = coalesce;
+    m_redoStack.clear();
+}
+
+// 把快照应用到场景并刷新面板 / 阴影。
+void MainWindow::ApplyTransformSnapshot(const TransformSnapshot& snapshot) {
+    if (snapshot.model < 0 || snapshot.model >= static_cast<int>(m_loadedModels.size())) return;
+    LoadedModel& model = m_loadedModels[static_cast<size_t>(snapshot.model)];
+    if (snapshot.node < 0 || snapshot.node >= static_cast<int>(model.nodes.size())) return;
+    RuntimeNode& node = model.nodes[static_cast<size_t>(snapshot.node)];
+    node.local = snapshot.local;
+    if (node.object) node.object->SetLocalTransform(node.local);
+    // 面板显示当前选中节点；若撤销的是当前节点则同步。
+    SyncTransformPanelFromSelection();
+    RefreshAfterTransformChange();
+}
+
+// 任务 2.4：切换 Gizmo 模式。
+void MainWindow::onGizmoTranslate() {
+    m_gizmoMode = GizmoMode::Translate;
+    m_gizmoHoverAxis = GizmoAxis::None;
+    // 保证变换面板可见（坐标空间 / 吸附控件在其中）。
+    if (m_transformPanel && !m_transformPanel->isVisible()) {
+        m_transformPanel->setVisible(true);
+        if (m_transformButton) {
+            m_transformButton->setStyleSheet(
+                QStringLiteral("background-color: #0078d4; color: #ffffff;"));
+        }
+        SyncTransformPanelFromSelection();
+    }
+    SyncGizmoUi();
+}
+
+void MainWindow::onGizmoRotate() {
+    m_gizmoMode = GizmoMode::Rotate;
+    m_gizmoHoverAxis = GizmoAxis::None;
+    if (m_transformPanel && !m_transformPanel->isVisible()) {
+        m_transformPanel->setVisible(true);
+        if (m_transformButton) {
+            m_transformButton->setStyleSheet(
+                QStringLiteral("background-color: #0078d4; color: #ffffff;"));
+        }
+        SyncTransformPanelFromSelection();
+    }
+    SyncGizmoUi();
+}
+
+void MainWindow::onGizmoScale() {
+    m_gizmoMode = GizmoMode::Scale;
+    m_gizmoHoverAxis = GizmoAxis::None;
+    if (m_transformPanel && !m_transformPanel->isVisible()) {
+        m_transformPanel->setVisible(true);
+        if (m_transformButton) {
+            m_transformButton->setStyleSheet(
+                QStringLiteral("background-color: #0078d4; color: #ffffff;"));
+        }
+        SyncTransformPanelFromSelection();
+    }
+    SyncGizmoUi();
+}
+
+// 任务 2.4：撤销上一次 Transform 修改。
+void MainWindow::onUndoTransform() {
+    if (m_undoStack.empty()) return;
+    const TransformSnapshot snapshot = m_undoStack.back();
+    m_undoStack.pop_back();
+    // 把当前状态压入重做栈。
+    if (snapshot.model >= 0 && snapshot.model < static_cast<int>(m_loadedModels.size())) {
+        LoadedModel& model = m_loadedModels[static_cast<size_t>(snapshot.model)];
+        if (snapshot.node >= 0 && snapshot.node < static_cast<int>(model.nodes.size())) {
+            TransformSnapshot current;
+            current.model = snapshot.model;
+            current.node = snapshot.node;
+            current.local = model.nodes[static_cast<size_t>(snapshot.node)].local;
+            m_redoStack.push_back(current);
+        }
+    }
+    ApplyTransformSnapshot(snapshot);
+    m_undoCoalescing = false;
+}
+
+// 任务 2.4：重做上一次被撤销的 Transform 修改。
+void MainWindow::onRedoTransform() {
+    if (m_redoStack.empty()) return;
+    const TransformSnapshot snapshot = m_redoStack.back();
+    m_redoStack.pop_back();
+    if (snapshot.model >= 0 && snapshot.model < static_cast<int>(m_loadedModels.size())) {
+        LoadedModel& model = m_loadedModels[static_cast<size_t>(snapshot.model)];
+        if (snapshot.node >= 0 && snapshot.node < static_cast<int>(model.nodes.size())) {
+            TransformSnapshot current;
+            current.model = snapshot.model;
+            current.node = snapshot.node;
+            current.local = model.nodes[static_cast<size_t>(snapshot.node)].local;
+            m_undoStack.push_back(current);
+        }
+    }
+    ApplyTransformSnapshot(snapshot);
+    m_undoCoalescing = false;
+}
+
+// ---------------- 帮助菜单：关于 / 快捷键 ----------------
+
+// 关于对话框：显示程序名称与版本号。
+void MainWindow::onAbout() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("关于"));
+    dialog.setModal(true);
+    QVBoxLayout* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(16, 14, 16, 12);
+    layout->setSpacing(10);
+
+    QLabel* title = new QLabel(QStringLiteral("DZC3DBrowser 1.0.0"));
+    title->setStyleSheet(QStringLiteral("color: #d4d4d4; font-size: 15px; font-weight: bold; border: none;"));
+    layout->addWidget(title);
+
+    QLabel* description = new QLabel(QStringLiteral(
+        "基于 Qt 5.12 + Vulkan 1.0 / OpenGL 4.2 的三维模型查看器。\n"
+        "支持 OBJ / glTF 2.0 导入、材质与 PBR、HDR、阴影、\n"
+        "对象变换 Gizmo 与场景树编辑。"));
+    description->setWordWrap(true);
+    description->setStyleSheet(QStringLiteral("color: #d4d4d4; border: none;"));
+    layout->addWidget(description);
+
+    QDialogButtonBox* buttons = new QDialogButtonBox(QDialogButtonBox::Ok);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    layout->addWidget(buttons);
+
+    dialog.exec();
+}
+
+// 快捷键对话框：列出当前程序已有的快捷键。
+void MainWindow::onShortcuts() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("快捷键"));
+    dialog.setModal(true);
+    QVBoxLayout* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(16, 14, 16, 12);
+    layout->setSpacing(8);
+
+    QLabel* title = new QLabel(QStringLiteral("快捷键"));
+    title->setStyleSheet(QStringLiteral("color: #d4d4d4; font-size: 15px; font-weight: bold; border: none;"));
+    layout->addWidget(title);
+
+    // 快捷键 -> 说明 列表（与代码中的 QShortcut 保持同步）。
+    const std::vector<std::pair<QString, QString>> entries = {
+        { QStringLiteral("W"),            QStringLiteral("切换到平移 Gizmo") },
+        { QStringLiteral("E"),            QStringLiteral("切换到旋转 Gizmo") },
+        { QStringLiteral("R"),            QStringLiteral("切换到缩放 Gizmo") },
+        { QStringLiteral("Ctrl+Z"),       QStringLiteral("撤销上一次变换") },
+        { QStringLiteral("Ctrl+Y"),       QStringLiteral("重做上一次变换") },
+        { QStringLiteral("Ctrl+Shift+Z"), QStringLiteral("重做上一次变换（备用）") },
+    };
+
+    QGridLayout* grid = new QGridLayout();
+    grid->setHorizontalSpacing(20);
+    grid->setVerticalSpacing(6);
+    int row = 0;
+    for (const auto& entry : entries) {
+        QLabel* key = new QLabel(entry.first);
+        key->setStyleSheet(QStringLiteral("color: #569cd6; font-weight: bold; border: none;"));
+        QLabel* desc = new QLabel(entry.second);
+        desc->setStyleSheet(QStringLiteral("color: #d4d4d4; border: none;"));
+        grid->addWidget(key, row, 0, Qt::AlignLeft);
+        grid->addWidget(desc, row, 1, Qt::AlignLeft);
+        ++row;
+    }
+    layout->addLayout(grid);
+
+    QDialogButtonBox* buttons = new QDialogButtonBox(QDialogButtonBox::Ok);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    layout->addWidget(buttons);
+
+    dialog.exec();
 }
 
 // ---------------- 任务 2.3：选中高亮（由项目树驱动） ----------------

@@ -176,6 +176,32 @@ bool TransformInvert(const Mat4& matrix, Mat4& out) {
     return true;
 }
 
+// 绕任意轴旋转的纯旋转矩阵（列主序，axis 不必单位化；角度为度）。任务 2.4 Gizmo 用。
+// 采用 Rodrigues 公式：R = I + sinθ [k]x + (1-cosθ)[k]x^2，k 为单位化旋转轴。
+Mat4 TransformRotationAxisAngle(const Vec3& axis, float angleDegrees) {
+    const float len = std::sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
+    if (len <= 1.0e-8f) return TransformIdentityMatrix();
+    const float kx = axis.x / len;
+    const float ky = axis.y / len;
+    const float kz = axis.z / len;
+    const float angle = ToRadians(angleDegrees);
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    const float t = 1.0f - c;
+
+    // 行主序元素（r[row][col]）。
+    const float r00 = t * kx * kx + c;
+    const float r01 = t * kx * ky - s * kz;
+    const float r02 = t * kx * kz + s * ky;
+    const float r10 = t * kx * ky + s * kz;
+    const float r11 = t * ky * ky + c;
+    const float r12 = t * ky * kz - s * kx;
+    const float r20 = t * kx * kz - s * ky;
+    const float r21 = t * ky * kz + s * kx;
+    const float r22 = t * kz * kz + c;
+    return MakeColumnMajor(r00, r01, r02, r10, r11, r12, r20, r21, r22);
+}
+
 // 从矩阵分解出 T / R / S（旋转用欧拉角度，顺序 X -> Y -> Z）。
 Transform TransformFromMatrix(const Mat4& matrix) {
     Transform out;

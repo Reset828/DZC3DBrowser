@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cstring>
+#include <cmath>
 #include <QRunnable>
 #include <QThreadPool>
 #include <QCoreApplication>
@@ -337,6 +338,10 @@ void VKRender::EndFrame() {
     }
 
     OnEndFrame();
+
+    // 任务 2.4：场景与后处理全部结束后绘制 Gizmo 叠加层（独立“仅颜色、LOAD”通道，
+    // 直接叠加在已写好的交换链图像上）。默认空实现（2D 无 Gizmo）。
+    OnOverlayPass();
 
     vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
 
@@ -1986,6 +1991,9 @@ bool VKRender3D::OnInitialize() {
 
 // 关闭前释放后端资源的钩子。
 void VKRender3D::OnShutdown() {
+    // 任务 2.4：先释放 Gizmo 叠加资源（管线布局引用 m_descriptorSetLayout，须在其之前销毁）。
+    DestroyGizmoResources();
+    DestroyGizmoSupport();
     DestroyHdrResources();
     DestroyHdrSupport();
     DestroyMsaaResources();
@@ -2059,6 +2067,8 @@ void VKRender3D::OnRecreateSwapchain() {
 void VKRender3D::OnBeforeCleanupSwapchain() {
     DestroyHdrResources();
     DestroyMsaaResources();
+    // 任务 2.4：Gizmo 叠加帧缓冲引用交换链图像视图，须随交换链一起释放。
+    DestroyGizmoResources();
 }
 
 // ---------------- HDR + 色调映射（1.6） ----------------
@@ -4398,6 +4408,12 @@ void VKRender3D::UpdateUniformBuffer(uint32_t currentImage) {
 
     m_frameInvViewProj[currentImage] = glm::inverse(proj * view);
     m_frameRenderToSource[currentImage] = m_normalizedToWorld * glm::inverse(model);
+    // 任务 2.4：缓存本帧矩阵供 Gizmo 射线拾取与固定屏幕尺寸换算使用。
+    // 与回读不同，这里保存的是“最近一帧”（不区分帧索引），供窗口层同步查询。
+    m_lastInvViewProj = m_frameInvViewProj[currentImage];
+    m_lastSceneFromRender = glm::inverse(model);
+    m_lastModelView = view * model;
+    m_lastProj = proj;
 
     UniformBufferObject3D ubo{};
     memcpy(ubo.model, glm::value_ptr(model), sizeof(float) * 16);
@@ -5563,7 +5579,8 @@ void VKRender3D::ProcessDepthReadback(uint32_t frameIndex) {
     memcpy(&depth, m_depthReadbackMapped[frameIndex], sizeof(float));
 
     float x_ndc = m_pendingNDCX[frameIndex] * 2.0f - 1.0f;
-    float y_ndc = 1.0f - m_pendingNDCY[frameIndex] * 2.0f;
+    // Vulkan proj 已翻转 Y，且窗口像素 Y 向下：屏幕顶部（ny=0）对应 NDC Y = -1。
+    float y_ndc = m_pendingNDCY[frameIndex] * 2.0f - 1.0f;
 
     glm::mat4 invViewProj = m_frameInvViewProj[frameIndex];
 
@@ -5615,3 +5632,402 @@ float VKRender3D::GetLastWorldX() const { return m_lastWorldCoord[0]; }
 float VKRender3D::GetLastWorldY() const { return m_lastWorldCoord[1]; }
 // 获取最近一次世界坐标的 Z 分量。
 float VKRender3D::GetLastWorldZ() const { return m_lastWorldCoord[2]; }
+
+// ---------------- 任务 2.4：Transform Gizmo 叠加层 ----------------
+
+// 提交本帧要绘制的 Gizmo 线段顶点（归一化场景空间；每顶点 7 float：pos.xyz + color.rgba）。
+void VKRender3D::SetGizmoGeometry(const float* interleavedPositionColor, uint32_t vertexCount) {
+    if (!interleavedPositionColor || vertexCount == 0) {
+        m_gizmoVertices.clear();
+        m_gizmoVertexCount = 0;
+        return;
+    }
+    const size_t floatCount = static_cast<size_t>(vertexCount) * 7;
+    m_gizmoVertices.assign(interleavedPositionColor, interleavedPositionColor + floatCount);
+    m_gizmoVertexCount = vertexCount;
+}
+
+// 屏幕归一化坐标（0..1，左上原点）-> 归一化场景空间射线。
+// 用最近一帧缓存的相机矩阵反投影：clip -> 显示世界 -> 归一化场景空间。
+bool VKRender3D::GetSceneRay(float nx, float ny, Vec3& origin, Vec3& direction) const {
+    // Vulkan 的 proj 做了 Y 翻转（proj[1][1] *= -1），且窗口像素 Y 向下（0=顶）。
+    // 屏幕顶部（ny=0）对应 NDC Y = -1，故 yNdc = 2*ny - 1；深度为 ZO（近=0，远=1）。
+    const float xNdc = nx * 2.0f - 1.0f;
+    const float yNdc = ny * 2.0f - 1.0f;
+
+    glm::vec4 nearRender = m_lastInvViewProj * glm::vec4(xNdc, yNdc, 0.0f, 1.0f);
+    glm::vec4 farRender = m_lastInvViewProj * glm::vec4(xNdc, yNdc, 1.0f, 1.0f);
+    if (std::fabs(nearRender.w) < 1.0e-8f || std::fabs(farRender.w) < 1.0e-8f) return false;
+    nearRender /= nearRender.w;
+    farRender /= farRender.w;
+
+    glm::vec4 nearScene = m_lastSceneFromRender * nearRender;
+    glm::vec4 farScene = m_lastSceneFromRender * farRender;
+    if (std::fabs(nearScene.w) < 1.0e-8f || std::fabs(farScene.w) < 1.0e-8f) return false;
+    nearScene /= nearScene.w;
+    farScene /= farScene.w;
+
+    const glm::vec3 dir = glm::vec3(farScene - nearScene);
+    if (glm::length(dir) < 1.0e-8f) return false;
+    origin = Vec3{ nearScene.x, nearScene.y, nearScene.z };
+    const glm::vec3 unit = glm::normalize(dir);
+    direction = Vec3{ unit.x, unit.y, unit.z };
+    return true;
+}
+
+// 某归一化场景空间点处“每屏幕像素对应的世界长度”（固定屏幕尺寸 Gizmo 用）。
+// 透视：worldPerPixel = 2 * |viewZ| / (|proj[1][1]| * height)；正交：|viewZ| 恒为 1。
+float VKRender3D::GetSceneWorldPerPixel(const Vec3& scenePoint) const {
+    if (m_framebufferHeight == 0) return 0.0f;
+    const float height = static_cast<float>(m_framebufferHeight);
+    const float projYY = std::fabs(m_lastProj[1][1]);
+    if (projYY <= 1.0e-8f) return 0.0f;
+
+    float depth = 1.0f;
+    if (!m_orthographicEnabled) {
+        const glm::vec4 viewPos = m_lastModelView *
+            glm::vec4(scenePoint.x, scenePoint.y, scenePoint.z, 1.0f);
+        depth = std::fabs(viewPos.z);
+        if (depth < 1.0e-4f) depth = 1.0e-4f;
+    }
+    return (2.0f * depth) / (projYY * height);
+}
+
+// 叠加层通道钩子：仅在存在 Gizmo 顶点时绘制。
+void VKRender3D::OnOverlayPass() {
+    if (m_gizmoVertexCount == 0 || m_gizmoVertices.empty()) return;
+    DrawGizmoOverlay();
+    // 消费后清空；窗口层每帧重新提交（无 Gizmo 时提交 0）。
+    m_gizmoVertices.clear();
+    m_gizmoVertexCount = 0;
+}
+
+// 创建 Gizmo 叠加渲染通道（仅颜色附件，loadOp=LOAD，finalLayout=PRESENT_SRC，无深度）。
+bool VKRender3D::CreateGizmoRenderPass() {
+    if (m_gizmoRenderPass != VK_NULL_HANDLE) return true;
+
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = m_swapchainImageFormat;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;   // 保留已渲染的场景
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    // 场景通道结束时交换链图像已是 PRESENT_SRC；叠加层读入并写回同一布局。
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = 1;
+    info.pAttachments = &colorAttachment;
+    info.subpassCount = 1;
+    info.pSubpasses = &subpass;
+    info.dependencyCount = 1;
+    info.pDependencies = &dependency;
+    if (vkCreateRenderPass(m_device, &info, nullptr, &m_gizmoRenderPass) != VK_SUCCESS) {
+        return Fail("3D: 创建 Gizmo 叠加 RenderPass 失败");
+    }
+    return true;
+}
+
+// 创建 Gizmo 线段管线（无深度测试，直接输出顶点色；布局仅用 set 0 UBO）。
+bool VKRender3D::CreateGizmoPipeline() {
+    if (m_gizmoPipeline != VK_NULL_HANDLE) return true;
+    if (!CreateGizmoRenderPass()) return false;
+
+    // 管线布局：仅 set 0（相机 UBO），复用 m_descriptorSetLayout。
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &m_descriptorSetLayout;
+    if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_gizmoPipelineLayout) != VK_SUCCESS) {
+        return Fail("3D: 创建 Gizmo 管线布局失败");
+    }
+
+    const std::string vertPath = AssetPath::ShaderFile("gizmo_vert.spv");
+    const std::string fragPath = AssetPath::ShaderFile("gizmo_frag.spv");
+    VkShaderModule vertModule = CreateShaderModuleHelper(ReadShaderFile(vertPath), vertPath);
+    VkShaderModule fragModule = CreateShaderModuleHelper(ReadShaderFile(fragPath), fragPath);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    // 顶点格式：pos vec3（location 0）+ color vec4（location 1），步长 28 字节。
+    VkVertexInputBindingDescription binding{};
+    binding.binding = 0;
+    binding.stride = sizeof(float) * 7;
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription attrs[2]{};
+    attrs[0].location = 0;
+    attrs[0].binding = 0;
+    attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrs[0].offset = 0;
+    attrs[1].location = 1;
+    attrs[1].binding = 0;
+    attrs[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attrs[1].offset = sizeof(float) * 3;
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &binding;
+    vertexInput.vertexAttributeDescriptionCount = 2;
+    vertexInput.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+
+    std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // 叠加层不做深度测试，Gizmo 始终可见（画在场景之上）。
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = m_gizmoPipelineLayout;
+    pipelineInfo.renderPass = m_gizmoRenderPass;
+    pipelineInfo.subpass = 0;
+
+    const VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                                      nullptr, &m_gizmoPipeline);
+    vkDestroyShaderModule(m_device, fragModule, nullptr);
+    vkDestroyShaderModule(m_device, vertModule, nullptr);
+    if (result != VK_SUCCESS) {
+        return Fail("3D: 创建 Gizmo 管线失败");
+    }
+    return true;
+}
+
+// 为每个交换链图像创建 Gizmo 叠加帧缓冲（尺寸相关）。
+bool VKRender3D::CreateGizmoFramebuffers() {
+    if (!m_gizmoFramebuffers.empty() &&
+        m_gizmoFramebuffers.size() == m_swapchainImageViews.size()) {
+        return true;
+    }
+    DestroyGizmoResources();
+    m_gizmoFramebuffers.resize(m_swapchainImageViews.size(), VK_NULL_HANDLE);
+    for (size_t i = 0; i < m_swapchainImageViews.size(); ++i) {
+        VkImageView attachment = m_swapchainImageViews[i];
+        VkFramebufferCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        info.renderPass = m_gizmoRenderPass;
+        info.attachmentCount = 1;
+        info.pAttachments = &attachment;
+        info.width = m_swapchainExtent.width;
+        info.height = m_swapchainExtent.height;
+        info.layers = 1;
+        if (vkCreateFramebuffer(m_device, &info, nullptr, &m_gizmoFramebuffers[i]) != VK_SUCCESS) {
+            DestroyGizmoResources();
+            return Fail("3D: 创建 Gizmo 帧缓冲失败");
+        }
+    }
+    return true;
+}
+
+// 确保 Gizmo 顶点缓冲可容纳 vertexCount 个顶点（host 可见，按需扩容）。
+bool VKRender3D::EnsureGizmoVertexBuffer(uint32_t vertexCount) {
+    const VkDeviceSize required = static_cast<VkDeviceSize>(vertexCount) * sizeof(float) * 7;
+    if (m_gizmoVertexBuffer != VK_NULL_HANDLE && m_gizmoVertexBufferSize >= required) {
+        return true;
+    }
+    // 释放旧缓冲（若存在），按需扩容。
+    if (m_gizmoVertexBuffer != VK_NULL_HANDLE) {
+        if (m_gizmoVertexMapped) {
+            UnmapBuffer(m_gizmoVertexBuffer);
+            m_gizmoVertexMapped = nullptr;
+        }
+        DestroyBuffer(m_gizmoVertexBuffer);
+        m_gizmoVertexBuffer = VK_NULL_HANDLE;
+        m_gizmoVertexBufferSize = 0;
+    }
+    try {
+        // 预留一定余量，减少每帧重分配。
+        const VkDeviceSize capacity = required + sizeof(float) * 7 * 1024;
+        m_gizmoVertexBuffer = CreateBuffer(capacity, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (m_gizmoVertexBuffer == VK_NULL_HANDLE) return false;
+        if (MapBuffer(m_gizmoVertexBuffer, &m_gizmoVertexMapped) != VK_SUCCESS) {
+            m_gizmoVertexMapped = nullptr;
+            return false;
+        }
+        m_gizmoVertexBufferSize = capacity;
+    } catch (const std::exception& e) {
+        SetLastError(e.what());
+        return false;
+    }
+    return m_gizmoVertexMapped != nullptr;
+}
+
+// 释放尺寸相关的 Gizmo 帧缓冲。
+void VKRender3D::DestroyGizmoResources() {
+    if (m_device == VK_NULL_HANDLE) {
+        m_gizmoFramebuffers.clear();
+        return;
+    }
+    for (VkFramebuffer framebuffer : m_gizmoFramebuffers) {
+        if (framebuffer != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+        }
+    }
+    m_gizmoFramebuffers.clear();
+}
+
+// 释放非尺寸相关的 Gizmo 资源（渲染通道 / 管线 / 布局 / 顶点缓冲）。
+void VKRender3D::DestroyGizmoSupport() {
+    if (m_device == VK_NULL_HANDLE) {
+        m_gizmoRenderPass = VK_NULL_HANDLE;
+        m_gizmoPipeline = VK_NULL_HANDLE;
+        m_gizmoPipelineLayout = VK_NULL_HANDLE;
+        m_gizmoVertexBuffer = VK_NULL_HANDLE;
+        m_gizmoVertexMapped = nullptr;
+        m_gizmoVertexBufferSize = 0;
+        return;
+    }
+    if (m_gizmoVertexMapped) {
+        UnmapBuffer(m_gizmoVertexBuffer);
+        m_gizmoVertexMapped = nullptr;
+    }
+    if (m_gizmoVertexBuffer != VK_NULL_HANDLE) {
+        DestroyBuffer(m_gizmoVertexBuffer);
+        m_gizmoVertexBuffer = VK_NULL_HANDLE;
+    }
+    m_gizmoVertexBufferSize = 0;
+    if (m_gizmoPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_device, m_gizmoPipeline, nullptr);
+        m_gizmoPipeline = VK_NULL_HANDLE;
+    }
+    if (m_gizmoPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_device, m_gizmoPipelineLayout, nullptr);
+        m_gizmoPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (m_gizmoRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(m_device, m_gizmoRenderPass, nullptr);
+        m_gizmoRenderPass = VK_NULL_HANDLE;
+    }
+}
+
+// 在当前命令缓冲内执行 Gizmo 叠加通道绘制。
+void VKRender3D::DrawGizmoOverlay() {
+    if (m_device == VK_NULL_HANDLE || !m_frameRecording) return;
+    if (m_gizmoVertexCount == 0) return;
+    // 延迟创建资源；着色器读取 / 模块创建可能抛异常，失败时本帧跳过叠加层，不影响主渲染。
+    try {
+        if (!CreateGizmoRenderPass() || !CreateGizmoPipeline() || !CreateGizmoFramebuffers()) {
+            return;
+        }
+    } catch (const std::exception& e) {
+        SetLastError(e.what());
+        return;
+    }
+    if (m_imageIndex >= m_gizmoFramebuffers.size()) return;
+    if (m_gizmoFramebuffers[m_imageIndex] == VK_NULL_HANDLE) return;
+    if (!EnsureGizmoVertexBuffer(m_gizmoVertexCount)) return;
+
+    const size_t floatCount = static_cast<size_t>(m_gizmoVertexCount) * 7;
+    memcpy(m_gizmoVertexMapped, m_gizmoVertices.data(), floatCount * sizeof(float));
+
+    VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+    VkRenderPassBeginInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    info.renderPass = m_gizmoRenderPass;
+    info.framebuffer = m_gizmoFramebuffers[m_imageIndex];
+    info.renderArea.offset = { 0, 0 };
+    info.renderArea.extent = m_swapchainExtent;
+    info.clearValueCount = 0;
+    info.pClearValues = nullptr;
+    vkCmdBeginRenderPass(cmd, &info, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(m_swapchainExtent.width);
+    viewport.height = static_cast<float>(m_swapchainExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = { 0, 0 };
+    scissor.extent = m_swapchainExtent;
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_gizmoPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_gizmoPipelineLayout,
+                            0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+    VkBuffer vb[] = { m_gizmoVertexBuffer };
+    VkDeviceSize offsets[] = { 0 };
+    vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
+    vkCmdDraw(cmd, m_gizmoVertexCount, 1, 0, 0);
+
+    vkCmdEndRenderPass(cmd);
+}

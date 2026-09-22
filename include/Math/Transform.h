@@ -38,5 +38,7 @@ Vec3 TransformVector(const Mat4& matrix, const Vec3& vector);
 bool TransformInvert(const Mat4& matrix, Mat4& out);
 // 从矩阵分解出 T / R / S（旋转用欧拉角度，顺序 X -> Y -> Z）。
 Transform TransformFromMatrix(const Mat4& matrix);
+// 绕任意轴旋转的纯旋转矩阵（列主序，axis 不必单位化；角度为度）。任务 2.4 Gizmo 用。
+Mat4 TransformRotationAxisAngle(const Vec3& axis, float angleDegrees);
 
 #endif //__TRANSFORM_H__

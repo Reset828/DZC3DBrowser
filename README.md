@@ -27,7 +27,8 @@ Do not put machine-local absolute paths in runtime loaders.
 | Vulkan shadow | `3d_shadow_vert.spv`, `3d_shadow_frag.spv` |
 | Vulkan HDR post | `post_vert.spv`, `post_frag.spv` |
 | Vulkan MSAA depth resolve | `depth_resolve_vert.spv`, `depth_resolve_frag.spv` |
-| OpenGL 3D | `3d.vert`, `3d.frag`, `3d_shadow.vert`, `3d_shadow.frag`, `post.vert`, `post.frag` |
+| Vulkan gizmo overlay | `gizmo_vert.spv`, `gizmo_frag.spv` |
+| OpenGL 3D | `3d.vert`, `3d.frag`, `3d_shadow.vert`, `3d_shadow.frag`, `post.vert`, `post.frag`, `gizmo.vert`, `gizmo.frag` |
 
 Missing files, invalid SPIR-V, or shader-module creation failures surface as a dialog with the resolved absolute path. Confirm that a `shaders/` directory with the files above sits next to (or above) the executable.
 
@@ -176,6 +177,19 @@ Select a node in the project tree; the corresponding object is highlighted in th
 - **Highlight**: the selected node's **whole subtree** is highlighted (orange, mixed into the final color in the fragment shader) in **all display modes** (default PBR / gray / dye / wireframe / debug views). Per-draw flag: Vulkan reuses the material push constant's last slot (`highlight`, formerly `pad0`), OpenGL uses a `uHighlight` uniform.
 - **Viewport picking was removed**: the earlier click-to-pick in the viewport (CPU ray picking: `PickAtScreenPoint` / `PickMeshTriangles` / `Render::ComputePickRay` / left short-press detection) has been deleted. The reusable math helpers it used — `RayIntersectsAabb` / `RayIntersectsTriangle` (`include/Math/Ray.*`) and `TransformInvert` (`include/Math/Transform.*`) — are kept for future work.
 - **Edge cases**: removing a model clears a now-stale selection. Selection state is not yet persisted in a project file (task 2.7).
+
+## Transform gizmo and edit loop (task 2.4)
+
+Select a node in the project tree, then manipulate it directly in the viewport with a **transform gizmo** (works on both the Vulkan and OpenGL 3D backends).
+
+- **Modes**: **平移 / 旋转 / 缩放**, switched by the **Gizmo 模式** combo in the 变换 panel or the **W / E / R** keyboard shortcuts. Translate shows three arrows, rotate three rings, scale three rods with cube handles.
+- **Space**: the 变换 panel's **世界坐标模式** checkbox switches between **局部** (default — axes follow the object's own rotation) and **世界** (axes aligned to the Z-up scene). In world mode, dragging a scale axis applies **uniform** scale (per-axis world scale would shear the object).
+- **Placement**: the gizmo is drawn at the **center of the selected node's subtree bounds** (normalized scene space), so it appears in the middle of the model; with several models only the current selection's gizmo is shown (single selection). Rotation and scale pivot around that center.
+- **Snapping**: an optional **吸附** checkbox plus per-operation step spinners (平移 1.0, 旋转 15°, 缩放 0.1), off by default.
+- **Undo / redo** (Transform changes only): **Ctrl+Z** / **Ctrl+Y** (and Ctrl+Shift+Z). Numeric edits, gizmo drags (a whole drag = one entry) and 重置变换 are recorded.
+- **Numeric parity**: the 变换 panel spin boxes and the gizmo edit the same node transform, so the two stay in sync; switching or clearing the selection resets any in-progress gizmo state.
+- **Help menu**: the menu bar's **帮助** menu has **关于** (shows the version) and **快捷键** (lists the current shortcuts).
+- **Implementation**: the reusable math lives in `include/Gizmo/` (`GizmoFrame`, `BuildGizmoGeometry`, `PickGizmoAxis`, `GizmoAxisParam`, `GizmoRotateAngle`) and reuses `RayIntersectsPlane` / `RayLineClosestParam` (`include/Math/Ray.*`) and `TransformRotationAxisAngle` (`include/Math/Transform.*`). The renderers expose `GetSceneRay` (screen → normalized-scene ray) and `GetSceneWorldPerPixel` (keeps the gizmo a fixed ~90 px). The gizmo is an unlit line overlay (`code/res/gizmo.{vert,frag}`) drawn after the scene/post pass via `Render::OnOverlayPass` + `Render::SetGizmoGeometry`.
 
 
 

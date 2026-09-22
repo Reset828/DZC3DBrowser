@@ -470,6 +470,14 @@ public:
     // 设置当前绘制对象的选中高亮标志（任务 2.3）。
     void SetObjectHighlight(bool highlighted) override;
 
+    // ---------------- 任务 2.4：Transform Gizmo 叠加层 ----------------
+    // 提交本帧要绘制的 Gizmo 线段顶点（归一化场景空间；每顶点 7 float：pos.xyz + color.rgba）。
+    void SetGizmoGeometry(const float* interleavedPositionColor, uint32_t vertexCount) override;
+    // 屏幕归一化坐标（0..1，左上原点）-> 归一化场景空间射线。
+    bool GetSceneRay(float nx, float ny, Vec3& origin, Vec3& direction) const override;
+    // 某归一化场景空间点处每屏幕像素对应的世界长度。
+    float GetSceneWorldPerPixel(const Vec3& scenePoint) const override;
+
 protected:
     // 后端初始化完成后的钩子。
     bool OnInitialize() override;
@@ -578,6 +586,24 @@ protected:
     void OnBeforeCleanupSwapchain() override;
     // 按当前 HDR 开关返回管线（HDR 管线渲染到 R16G16B16A16_SFLOAT 中间目标）。
     VkPipeline GetPipeline(DrawTopology topology) const override;
+
+    // ---------------- 任务 2.4：Gizmo 叠加层 ----------------
+    // 叠加层通道钩子：场景/后处理全部结束后，用独立“仅颜色、LOAD”通道把 Gizmo 叠加到交换链。
+    void OnOverlayPass() override;
+    // 创建 Gizmo 叠加渲染通道（颜色=交换链格式，loadOp=LOAD，finalLayout=PRESENT_SRC，无深度）。
+    bool CreateGizmoRenderPass();
+    // 创建 Gizmo 线段管线（无深度测试，直接输出顶点色；布局仅用 set 0 UBO）。
+    bool CreateGizmoPipeline();
+    // 为每个交换链图像创建 Gizmo 叠加帧缓冲（尺寸相关）。
+    bool CreateGizmoFramebuffers();
+    // 确保 Gizmo 顶点缓冲可容纳 vertexCount 个顶点（host 可见，按需扩容）。
+    bool EnsureGizmoVertexBuffer(uint32_t vertexCount);
+    // 释放尺寸相关的 Gizmo 帧缓冲。
+    void DestroyGizmoResources();
+    // 释放非尺寸相关的 Gizmo 资源（渲染通道 / 管线 / 布局 / 顶点缓冲）。
+    void DestroyGizmoSupport();
+    // 在当前命令缓冲内执行 Gizmo 叠加通道绘制。
+    void DrawGizmoOverlay();
 
     // 确保 HDR 中间目标与当前尺寸匹配；失败返回 false。
     bool EnsureHdrTarget();
@@ -697,6 +723,11 @@ protected:
     glm::mat4 m_frameInvViewProj[MAX_FRAMES_IN_FLIGHT] = {};
     glm::mat4 m_frameRenderToSource[MAX_FRAMES_IN_FLIGHT] = {};
     glm::mat4 m_normalizedToWorld = glm::mat4(1.0f);
+    // 任务 2.4：最近一帧相机矩阵副本（Gizmo 射线拾取 + 固定屏幕尺寸换算用）。
+    glm::mat4 m_lastInvViewProj = glm::mat4(1.0f);      // inverse(proj * view)
+    glm::mat4 m_lastSceneFromRender = glm::mat4(1.0f);  // inverse(ubo.model)
+    glm::mat4 m_lastModelView = glm::mat4(1.0f);        // view * model
+    glm::mat4 m_lastProj = glm::mat4(1.0f);             // proj（取 [1][1] 换算每像素世界长度）
 
 protected:
     VkImage m_depthImage = VK_NULL_HANDLE;
@@ -815,6 +846,21 @@ protected:
     VkDescriptorSet m_depthResolveSet = VK_NULL_HANDLE;
     VkSampler m_msaaDepthSampler = VK_NULL_HANDLE;
     VkFramebuffer m_depthResolveFramebuffer = VK_NULL_HANDLE;
+
+    // ---------------- 任务 2.4：Gizmo 叠加层 ----------------
+    // 叠加通道：仅颜色附件（交换链），loadOp=LOAD，finalLayout=PRESENT_SRC，无深度测试。
+    VkRenderPass m_gizmoRenderPass = VK_NULL_HANDLE;
+    VkPipeline m_gizmoPipeline = VK_NULL_HANDLE;
+    // 仅含 set 0（相机 UBO）的管线布局，供 Gizmo 着色器使用。
+    VkPipelineLayout m_gizmoPipelineLayout = VK_NULL_HANDLE;
+    std::vector<VkFramebuffer> m_gizmoFramebuffers;  // 每个交换链图像一个（尺寸相关）
+    // Gizmo 线段顶点缓冲（host 可见，按需扩容；每顶点 7 float：pos.xyz + color.rgba）。
+    VkBuffer m_gizmoVertexBuffer = VK_NULL_HANDLE;
+    void* m_gizmoVertexMapped = nullptr;
+    VkDeviceSize m_gizmoVertexBufferSize = 0;
+    // 本帧待绘制的 Gizmo 顶点（由 SetGizmoGeometry 写入，OnOverlayPass 消费）。
+    std::vector<float> m_gizmoVertices;
+    uint32_t m_gizmoVertexCount = 0;
 };
 
 #endif //__VK_RENDER_H__
